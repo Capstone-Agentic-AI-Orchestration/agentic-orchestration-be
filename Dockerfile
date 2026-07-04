@@ -1,38 +1,48 @@
-# syntax=docker/dockerfile:1.7
+# ─────────────────────────────────────────────
+# Stage 1: builder
+# Install all dependencies and compile TypeScript
+# ─────────────────────────────────────────────
 FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-COPY package*.json .npmrc ./
-RUN --mount=type=secret,id=GITHUB_TOKEN \
-  GITHUB_TOKEN="$(cat /run/secrets/GITHUB_TOKEN)" npm ci
+# Copy manifests first for layer-cache efficiency
+COPY package.json package-lock.json* ./
+RUN npm ci
 
-COPY tsconfig*.json nest-cli.json ./
-COPY apps ./apps
-COPY libs ./libs
+# Copy Prisma schema before generating client
+COPY prisma/ ./prisma/
+RUN npx prisma generate
 
-RUN npm run build:api
+# Copy source and compile
+COPY . .
+RUN npm run build
 
-FROM node:22-alpine AS runner
+# ─────────────────────────────────────────────
+# Stage 2: production
+# Minimal runtime — only compiled output and prod deps
+# ─────────────────────────────────────────────
+FROM node:22-alpine AS production
 
-ENV NODE_ENV=production
 WORKDIR /app
 
-COPY package*.json .npmrc ./
-RUN --mount=type=secret,id=GITHUB_TOKEN \
-  apk upgrade --no-cache zlib \
-  && GITHUB_TOKEN="$(cat /run/secrets/GITHUB_TOKEN)" npm ci --omit=dev \
-  && rm .npmrc package-lock.json \
-  && addgroup --system --gid 1001 nodejs \
-  && adduser --system --uid 1001 nestjs
+ENV NODE_ENV=production
 
-COPY --chown=nestjs:nodejs --from=builder /app/dist ./dist
+# Add non-root user before copying files
+RUN addgroup -S nestjs && adduser -S nestjs -G nestjs -u 1001
 
+# Copy only what runtime needs
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/package.json ./package.json
+
+# Switch to non-root user
 USER nestjs
 
-EXPOSE 3000
+EXPOSE 4000
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
-  CMD node -e "require('http').get('http://127.0.0.1:3000/api/v1/health', (res) => { if (res.statusCode !== 200) process.exit(1); }).on('error', () => process.exit(1));"
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD wget -qO- http://localhost:4000/health || exit 1
 
-CMD ["node", "dist/apps/api/main"]
+CMD ["node", "dist/main"]

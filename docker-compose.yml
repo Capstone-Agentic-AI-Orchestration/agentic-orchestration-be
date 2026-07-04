@@ -1,0 +1,35 @@
+services:
+  api:
+    build: .
+    ports:
+      - "4000:4000"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://devflow:devflow@db:5432/devflow
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - /app/node_modules
+
+  db:
+    # pgvector/pgvector:pg16 bundles the pgvector extension on top of Postgres 16.
+    # Drop-in replacement for postgres:16-alpine — no new container, same port.
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: devflow
+      POSTGRES_PASSWORD: devflow
+      POSTGRES_DB: devflow
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

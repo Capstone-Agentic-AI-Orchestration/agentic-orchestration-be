@@ -1,0 +1,1126 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema", "postgresqlExtensions"]
+}
+
+datasource db {
+  provider      = "postgresql"
+  url           = env("DATABASE_URL")
+  schemas       = ["admin", "collaboration", "identity", "intake", "integration", "memory", "notifications", "orchestration", "projects", "scheduling"]
+  extensions    = [pgvector(map: "vector")]
+  relationMode  = "prisma"
+}
+
+model Project {
+  id          String          @id @default(cuid())
+  companyName String
+  brief       String          @db.Text
+  stackKey    String
+  status      ProjectStatus   @default(PENDING)
+  runId       String?         @unique
+  repoUrl     String?
+  createdById String?         @db.Uuid
+  createdBy   Profile?        @relation("ProjectCreatedBy", fields: [createdById], references: [id])
+  version     Int             @default(1)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  gates       GateEvent[]
+  artifacts   Artifact[]
+  eventLogs   EventLog[]
+  runBudget   RunBudget?
+  members     ProjectMember[]
+  tasks       ProjectTask[]
+  timelineEvents ProjectTimelineEvent[]
+  workOrders  WorkOrder[]
+  conversations ProjectConversation[]
+  collaborationDocuments CollaborationDocument[]
+  clientInvites ClientInvite[]
+  kickoff     ProjectKickoff?
+  deliveryReview ProjectDeliveryReview?
+  orchestrationRuns OrchestrationRun[]
+  workOrderExecutions WorkOrderExecution[]
+  scheduleEvents ScheduleEvent[]
+
+  @@index([createdById])
+  @@index([id, version])
+  @@schema("projects")
+}
+
+enum InquiryStatus {
+  NEW
+  APPROVED
+  REJECTED
+
+  @@schema("intake")
+}
+
+model ClientInquiry {
+  id                String        @id @default(cuid())
+  companyName       String
+  contactName       String
+  email             String
+  phone             String?
+  role              String?
+  brief             String        @db.Text
+  stackKey          String        @default("nextjs-nestjs-supabase")
+  budgetRange       String?
+  timeline          String?
+  status            InquiryStatus @default(NEW)
+  reviewNote        String?       @db.Text
+  reviewedById      String?       @db.Uuid
+  reviewedBy        Profile?      @relation("InquiryReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt        DateTime?
+  approvedProjectId String?
+  clientInvite      ClientInvite?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  @@index([status, createdAt])
+  @@index([email])
+  @@index([reviewedById])
+  @@map("client_inquiries")
+  @@schema("intake")
+}
+
+enum ClientInviteStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+
+  @@schema("intake")
+}
+
+enum ProjectKickoffStatus {
+  DRAFT
+  READY
+  LOCKED
+
+  @@schema("projects")
+}
+
+model ClientInvite {
+  id           String             @id @default(cuid())
+  inquiryId    String             @unique
+  inquiry      ClientInquiry      @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  projectId    String             @unique
+  project      Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  email        String
+  contactName  String
+  companyName  String
+  status       ClientInviteStatus @default(PENDING)
+  createdById  String?            @db.Uuid
+  createdBy    Profile?           @relation("InviteCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  acceptedById String?            @db.Uuid
+  acceptedBy   Profile?           @relation("InviteAcceptor", fields: [acceptedById], references: [id], onDelete: SetNull)
+  acceptedAt   DateTime?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@index([email, status])
+  @@index([createdById])
+  @@index([acceptedById])
+  @@map("client_invites")
+  @@schema("intake")
+}
+
+model ProjectKickoff {
+  id                     String               @id @default(cuid())
+  projectId              String               @unique
+  project                Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scopeSummary           String?              @db.Text
+  milestones             String?              @db.Text
+  requiredDocuments      String?              @db.Text
+  techStackNotes         String?              @db.Text
+  deliveryRoles          String?              @db.Text
+  readinessNotes         String?              @db.Text
+  scopeConfirmed         Boolean              @default(false)
+  milestonesConfirmed    Boolean              @default(false)
+  documentsConfirmed     Boolean              @default(false)
+  techStackConfirmed     Boolean              @default(false)
+  rolesConfirmed         Boolean              @default(false)
+  clientAccessConfirmed  Boolean              @default(false)
+  initialTasksCreated    Boolean              @default(false)
+  initialWorkOrdersCreated Boolean            @default(false)
+  status                 ProjectKickoffStatus @default(DRAFT)
+  completedById          String?              @db.Uuid
+  completedBy            Profile?             @relation("KickoffCompleter", fields: [completedById], references: [id], onDelete: SetNull)
+  completedAt            DateTime?
+  updatedById            String?              @db.Uuid
+  updatedBy              Profile?             @relation("KickoffUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+
+  @@index([status])
+  @@index([completedById])
+  @@index([updatedById])
+  @@map("project_kickoffs")
+  @@schema("projects")
+}
+
+model GateEvent {
+  id        String       @id @default(cuid())
+  projectId String
+  project   Project      @relation(fields: [projectId], references: [id])
+  gateType  GateType
+  decision  GateDecision
+  notes     String?      @db.Text
+  decidedAt DateTime     @default(now())
+
+  @@index([projectId])
+  @@schema("projects")
+}
+
+model Artifact {
+  id            String               @id @default(cuid())
+  projectId     String
+  project       Project              @relation(fields: [projectId], references: [id])
+  agentType     String
+  filePath      String
+  content       String               @db.Text
+  clientVisible Boolean              @default(false)
+  displayName   String?
+  sharedAt      DateTime?
+  reviewStatus  ArtifactReviewStatus @default(PENDING)
+  reviewNote    String?              @db.Text
+  reviewedAt    DateTime?
+  reviewedById  String?              @db.Uuid
+  outputReviewStatus ArtifactOutputReviewStatus @default(PENDING)
+  outputReviewNote String?           @db.Text
+  outputReviewedAt DateTime?
+  outputReviewedById String?         @db.Uuid
+  validationStatus ArtifactValidationStatus @default(PENDING)
+  validationSummary String?           @db.Text
+  validationErrors Json               @default("[]")
+  publishedAt DateTime?
+  publishedById String?              @db.Uuid
+  revisionHandledAt DateTime?
+  revisionHandledById String?         @db.Uuid
+  revisionResolutionNote String?      @db.Text
+  source        String?              @default("llm")
+  createdAt     DateTime             @default(now())
+  tasks         ProjectTask[]
+  workOrders    WorkOrder[]
+  workOrderExecutions WorkOrderExecution[]
+
+  @@index([projectId])
+  @@index([projectId, clientVisible])
+  @@index([projectId, outputReviewStatus])
+  @@index([projectId, validationStatus])
+  @@schema("projects")
+}
+
+enum ArtifactReviewStatus {
+  PENDING
+  APPROVED
+  REVISION_REQUESTED
+
+  @@schema("projects")
+}
+
+enum ArtifactOutputReviewStatus {
+  PENDING
+  APPROVED
+  REWORK_REQUESTED
+  PUBLISHED
+
+  @@schema("projects")
+}
+
+enum ArtifactValidationStatus {
+  PENDING
+  PASSED
+  FAILED
+
+  @@schema("projects")
+}
+
+enum ProjectStatus {
+  PENDING
+  PARSING_REQUIREMENTS
+  NEGOTIATING_CONTRACT
+  AWAITING_GATE_1
+  GENERATING_CODE
+  AWAITING_GATE_2
+  COMMITTING
+  DELIVERED
+  FAILED
+
+  @@schema("projects")
+}
+
+enum GateType {
+  ARCHITECTURE_REVIEW
+  CODE_REVIEW
+
+  @@schema("projects")
+}
+
+enum GateDecision {
+  APPROVED
+  REJECTED
+
+  @@schema("projects")
+}
+
+enum UserRole {
+  CLIENT
+  PM
+  DEV
+  ADMIN
+
+  @@schema("identity")
+}
+
+enum ProfileStatus {
+  ACTIVE
+  SUSPENDED
+
+  @@schema("identity")
+}
+
+enum ScheduleEventType {
+  MILESTONE
+  MEETING
+  DUE_DATE
+  REMINDER
+  OTHER
+
+  @@schema("scheduling")
+}
+
+enum ScheduleVisibility {
+  PRIVATE
+  TEAM
+  CLIENT
+
+  @@schema("scheduling")
+}
+
+enum DeveloperAvailabilityStatus {
+  AVAILABLE
+  LIMITED
+  UNAVAILABLE
+
+  @@schema("identity")
+}
+
+enum ProjectTaskStatus {
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  DONE
+
+  @@schema("projects")
+}
+
+model Profile {
+  id              String          @id @db.Uuid
+  email           String?         @unique
+  fullName        String?
+  role            UserRole        @default(CLIENT)
+  status          ProfileStatus   @default(ACTIVE)
+  preferences     Json            @default("{}")
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  createdProjects Project[]       @relation("ProjectCreatedBy")
+  memberships     ProjectMember[]
+  assignedTasks    ProjectTask[]   @relation("TaskAssignee")
+  createdTasks     ProjectTask[]   @relation("TaskCreator")
+  createdWorkOrders WorkOrder[]     @relation("WorkOrderCreator")
+  taskActivities   ProjectTaskActivity[] @relation("TaskActivityActor")
+  notifications    Notification[]  @relation("NotificationRecipient")
+  sentNotifications Notification[] @relation("NotificationActor")
+  timelineEvents  ProjectTimelineEvent[] @relation("TimelineActor")
+  createdConversations ProjectConversation[] @relation("ConversationCreator")
+  messages        ProjectMessage[] @relation("MessageAuthor")
+  messageReads    ConversationRead[]
+  uploadedDocuments CollaborationDocument[] @relation("DocumentUploader")
+  reviewedDocuments CollaborationDocument[] @relation("DocumentReviewer")
+  reviewedInquiries ClientInquiry[] @relation("InquiryReviewer")
+  createdClientInvites ClientInvite[] @relation("InviteCreator")
+  acceptedClientInvites ClientInvite[] @relation("InviteAcceptor")
+  completedKickoffs ProjectKickoff[] @relation("KickoffCompleter")
+  updatedKickoffs ProjectKickoff[] @relation("KickoffUpdater")
+  acceptedDeliveries ProjectDeliveryReview[] @relation("DeliveryAcceptor")
+  requestedDeliveryRevisions ProjectDeliveryReview[] @relation("DeliveryRevisionRequester")
+  resolvedDeliveryRevisions ProjectDeliveryReview[] @relation("DeliveryRevisionResolver")
+  scheduleEvents ScheduleEvent[] @relation("ScheduleOwner")
+  developerProfile DeveloperProfile?
+  adminAuditLogs AdminAuditLog[] @relation("AdminAuditActor")
+
+  @@index([role])
+  @@index([status])
+  @@map("profiles")
+  @@schema("identity")
+}
+
+model ScheduleEvent {
+  id          String             @id @default(cuid())
+  title       String
+  description String?            @db.Text
+  startsAt    DateTime
+  endsAt      DateTime?
+  type        ScheduleEventType  @default(MEETING)
+  visibility  ScheduleVisibility @default(TEAM)
+  projectId   String?
+  project     Project?           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  ownerId     String             @db.Uuid
+  owner       Profile            @relation("ScheduleOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([ownerId, startsAt])
+  @@index([projectId, startsAt])
+  @@index([visibility, startsAt])
+  @@map("schedule_events")
+  @@schema("scheduling")
+}
+
+model DeveloperProfile {
+  userId              String                      @id @db.Uuid
+  user                Profile                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  skills              Json                        @default("[]")
+  weeklyCapacityHours Int                         @default(40)
+  availabilityStatus  DeveloperAvailabilityStatus @default(AVAILABLE)
+  notes               String?                     @db.Text
+  createdAt           DateTime                    @default(now())
+  updatedAt           DateTime                    @updatedAt
+
+  @@index([availabilityStatus])
+  @@map("developer_profiles")
+  @@schema("identity")
+}
+
+model ProjectMember {
+  id        String   @id @default(cuid())
+  projectId String
+  userId    String   @db.Uuid
+  role      UserRole
+  createdAt DateTime @default(now())
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      Profile  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+  @@index([projectId, role])
+  @@map("project_members")
+  @@schema("projects")
+}
+
+model ProjectTask {
+  id           String            @id @default(cuid())
+  projectId    String
+  project      Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  artifactId   String?
+  artifact     Artifact?         @relation(fields: [artifactId], references: [id], onDelete: SetNull)
+  title        String
+  description  String?           @db.Text
+  status       ProjectTaskStatus @default(TODO)
+  assignedToId String?           @db.Uuid
+  assignedTo   Profile?          @relation("TaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdById  String?           @db.Uuid
+  createdBy    Profile?          @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  version      Int               @default(1)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  activities   ProjectTaskActivity[]
+  workOrders   WorkOrder[]
+
+  @@index([projectId, status])
+  @@index([assignedToId, status])
+  @@index([artifactId])
+  @@index([id, version])
+  @@map("project_tasks")
+  @@schema("projects")
+}
+
+enum ProjectTaskActivityType {
+  TASK_CREATED
+  STATUS_CHANGED
+  ASSIGNEE_CHANGED
+  ARTIFACT_CHANGED
+  COMMENT
+
+  @@schema("projects")
+}
+
+model ProjectTaskActivity {
+  id        String                  @id @default(cuid())
+  projectId String
+  taskId    String
+  task      ProjectTask             @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actorId   String?                 @db.Uuid
+  actor     Profile?                @relation("TaskActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+  type      ProjectTaskActivityType
+  message   String?                 @db.Text
+  metadata  Json                    @default("{}")
+  createdAt DateTime                @default(now())
+
+  @@index([projectId, taskId, createdAt])
+  @@index([actorId])
+  @@map("project_task_activities")
+  @@schema("projects")
+}
+
+enum NotificationType {
+  INQUIRY_SUBMITTED
+  INQUIRY_APPROVED
+  INQUIRY_REJECTED
+  CLIENT_INVITE_ACCEPTED
+  ARTIFACT_REVIEWED
+  REVISION_HANDLED
+  ARTIFACT_PUBLISHED
+  ARTIFACT_REWORK_REQUESTED
+  DELIVERY_ACCEPTED
+  DELIVERY_REVISION_REQUESTED
+  DELIVERY_REVISION_RESOLVED
+  TASK_ASSIGNED
+  TASK_STATUS_CHANGED
+  TASK_COMMENTED
+  WORK_ORDER_CREATED
+  WORK_ORDER_DISPATCHED
+  WORK_ORDER_STATUS_CHANGED
+  COLLAB_MESSAGE_SENT
+  COLLAB_DOCUMENT_UPLOADED
+  COLLAB_DOCUMENT_REVIEWED
+
+  @@schema("notifications")
+}
+
+enum ProjectTimelineEventType {
+  PROJECT_CREATED
+  PROJECT_UPDATED
+  CLIENT_INVITE_ACCEPTED
+  MEMBER_ADDED
+  MEMBER_REMOVED
+  ARTIFACT_SHARED
+  ARTIFACT_UNSHARED
+  ARTIFACT_REVIEWED
+  REVISION_HANDLED
+  ARTIFACT_OUTPUT_REVIEWED
+  ARTIFACT_PUBLISHED
+  ARTIFACT_REWORK_REQUESTED
+  DELIVERY_ACCEPTED
+  DELIVERY_REVISION_REQUESTED
+  DELIVERY_REVISION_RESOLVED
+  TASK_CREATED
+  TASK_ASSIGNED
+  TASK_STATUS_CHANGED
+  TASK_COMMENTED
+  NOTIFICATION_SENT
+  WORK_ORDER_CREATED
+  WORK_ORDER_DISPATCHED
+  WORK_ORDER_STATUS_CHANGED
+  COLLAB_CONVERSATION_CREATED
+  COLLAB_MESSAGE_SENT
+  COLLAB_DOCUMENT_UPLOADED
+  COLLAB_DOCUMENT_REVIEWED
+
+  @@schema("projects")
+}
+
+enum ProjectDeliveryReviewStatus {
+  PENDING
+  ACCEPTED
+  REVISION_REQUESTED
+  REVISION_RESOLVED
+
+  @@schema("projects")
+}
+
+model ProjectDeliveryReview {
+  id                    String                      @id @default(cuid())
+  projectId             String                      @unique
+  project               Project                     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  status                ProjectDeliveryReviewStatus @default(PENDING)
+  acceptanceNote        String?                     @db.Text
+  acceptedById          String?                     @db.Uuid
+  acceptedBy            Profile?                    @relation("DeliveryAcceptor", fields: [acceptedById], references: [id], onDelete: SetNull)
+  acceptedAt            DateTime?
+  revisionNote          String?                     @db.Text
+  revisionRequestedById String?                     @db.Uuid
+  revisionRequestedBy   Profile?                    @relation("DeliveryRevisionRequester", fields: [revisionRequestedById], references: [id], onDelete: SetNull)
+  revisionRequestedAt   DateTime?
+  revisionResolvedById  String?                     @db.Uuid
+  revisionResolvedBy    Profile?                    @relation("DeliveryRevisionResolver", fields: [revisionResolvedById], references: [id], onDelete: SetNull)
+  revisionResolvedAt    DateTime?
+  resolutionNote        String?                     @db.Text
+  version               Int                         @default(1)
+  createdAt             DateTime                    @default(now())
+  updatedAt             DateTime                    @updatedAt
+
+  @@index([projectId, version])
+  @@index([status])
+  @@index([acceptedById])
+  @@index([revisionRequestedById])
+  @@index([revisionResolvedById])
+  @@map("project_delivery_reviews")
+  @@schema("projects")
+}
+
+enum CollaborationVisibility {
+  TEAM
+  CLIENT
+
+  @@schema("collaboration")
+}
+
+enum ConversationCategory {
+  GENERAL
+  DELIVERY
+  CONTRACT
+  SUPPORT
+
+  @@schema("collaboration")
+}
+
+model ProjectConversation {
+  id            String                  @id @default(cuid())
+  projectId     String
+  project       Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title         String
+  category      ConversationCategory    @default(GENERAL)
+  visibility    CollaborationVisibility @default(TEAM)
+  createdById   String?                 @db.Uuid
+  createdBy     Profile?                @relation("ConversationCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  lastMessageAt DateTime?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+  messages      ProjectMessage[]
+  reads         ConversationRead[]
+
+  @@index([projectId, visibility, lastMessageAt])
+  @@index([createdById])
+  @@map("project_conversations")
+  @@schema("collaboration")
+}
+
+model ProjectMessage {
+  id             String              @id @default(cuid())
+  projectId      String
+  conversationId String
+  conversation   ProjectConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  authorId       String?             @db.Uuid
+  author         Profile?            @relation("MessageAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  body           String              @db.Text
+  createdAt      DateTime            @default(now())
+
+  @@index([projectId, createdAt])
+  @@index([conversationId, createdAt])
+  @@index([authorId])
+  @@map("project_messages")
+  @@schema("collaboration")
+}
+
+model ConversationRead {
+  id             String              @id @default(cuid())
+  conversationId String
+  conversation   ProjectConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId         String              @db.Uuid
+  user           Profile             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadAt     DateTime            @default(now())
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+  @@map("conversation_reads")
+  @@schema("collaboration")
+}
+
+enum CollaborationDocumentKind {
+  REQUIREMENT
+  CONTRACT
+  DELIVERABLE
+  GENERAL
+
+  @@schema("collaboration")
+}
+
+enum CollaborationDocumentStatus {
+  DRAFT
+  UPLOADED
+  APPROVAL_REQUESTED
+  APPROVED
+  REVISION_REQUESTED
+  ARCHIVED
+
+  @@schema("collaboration")
+}
+
+model CollaborationDocument {
+  id             String                      @id @default(cuid())
+  projectId      String
+  project        Project                     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  artifactId     String?
+  title          String
+  description    String?                     @db.Text
+  fileName       String?
+  externalUrl    String?
+  kind           CollaborationDocumentKind   @default(GENERAL)
+  status         CollaborationDocumentStatus @default(UPLOADED)
+  clientVisible  Boolean                     @default(false)
+  uploadedById   String?                     @db.Uuid
+  uploadedBy     Profile?                    @relation("DocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  reviewedById   String?                     @db.Uuid
+  reviewedBy     Profile?                    @relation("DocumentReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewNote     String?                     @db.Text
+  reviewedAt     DateTime?
+  version        Int                         @default(1)
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @updatedAt
+
+  @@index([projectId, clientVisible, status])
+  @@index([id, version])
+  @@index([uploadedById])
+  @@index([reviewedById])
+  @@map("collaboration_documents")
+  @@schema("collaboration")
+}
+
+enum WorkOrderAgentType {
+  FRONTEND
+  BACKEND
+  DATABASE
+  ARCHITECTURE
+  CONTRACT
+
+  @@schema("orchestration")
+}
+
+enum WorkOrderStatus {
+  DRAFT
+  READY
+  DISPATCHED
+  COMPLETED
+  FAILED
+  CANCELLED
+
+  @@schema("orchestration")
+}
+
+enum WorkOrderPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+
+  @@schema("orchestration")
+}
+
+enum OrchestrationRunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+
+  @@schema("orchestration")
+}
+
+enum OrchestrationRunTrigger {
+  START
+  RERUN_READY_WORK_ORDERS
+  WORK_ORDER_DISPATCH
+  RETRY_FAILED_WORK_ORDER
+
+  @@schema("orchestration")
+}
+
+enum WorkOrderExecutionStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+
+  @@schema("orchestration")
+}
+
+model WorkOrder {
+  id          String             @id @default(cuid())
+  projectId   String
+  project     Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  taskId      String?
+  task        ProjectTask?       @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  artifactId  String?
+  artifact    Artifact?          @relation(fields: [artifactId], references: [id], onDelete: SetNull)
+  title       String
+  instructions String?           @db.Text
+  agentType   WorkOrderAgentType
+  status      WorkOrderStatus    @default(DRAFT)
+  priority    WorkOrderPriority  @default(NORMAL)
+  createdById String?            @db.Uuid
+  createdBy   Profile?           @relation("WorkOrderCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  executionRunId String?
+  executionAttempt Int           @default(0)
+  executionStartedAt DateTime?
+  executionCompletedAt DateTime?
+  executionError String?         @db.Text
+  lastEventAt DateTime?
+  dispatchedAt DateTime?
+  completedAt  DateTime?
+  failedAt     DateTime?
+  version      Int               @default(1)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  executions   WorkOrderExecution[]
+
+  @@index([projectId, status])
+  @@index([taskId])
+  @@index([artifactId])
+  @@index([createdById])
+  @@index([executionRunId])
+  @@index([status, lastEventAt])
+  @@index([id, version])
+  @@map("work_orders")
+  @@schema("orchestration")
+}
+
+model OrchestrationRun {
+  id              String                  @id @default(cuid())
+  projectId       String
+  project         Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  runId           String                  @unique
+  providerMode    String                  @default("mock")
+  trigger         OrchestrationRunTrigger @default(START)
+  status          OrchestrationRunStatus  @default(RUNNING)
+  currentNode     String?
+  // Eve migration (Hybrid) — see docs/architecture/EVE_MIGRATION.md §6.4.
+  // Serialized DevFlowState snapshot for the OrchestrationSequencer to persist run state and
+  // resume after a gate pause, replacing the LangGraph PostgresSaver checkpointer. Null while
+  // the legacy LangGraph engine (ORCHESTRATION_ENGINE=graph) owns durability.
+  checkpointState Json?
+  error           String?                 @db.Text
+  actorId         String?                 @db.Uuid
+  readyWorkOrders Int                     @default(0)
+  completedWorkOrders Int                 @default(0)
+  failedWorkOrders Int                    @default(0)
+  completedArtifacts Int                  @default(0)
+  startedAt       DateTime                @default(now())
+  completedAt     DateTime?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+  executions      WorkOrderExecution[]
+
+  @@index([projectId, createdAt])
+  @@index([projectId, status])
+  @@index([actorId])
+  @@map("orchestration_runs")
+  @@schema("orchestration")
+}
+
+model WorkOrderExecution {
+  id                 String                   @id @default(cuid())
+  projectId          String
+  project            Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  orchestrationRunId String?
+  orchestrationRun   OrchestrationRun?        @relation(fields: [orchestrationRunId], references: [id], onDelete: SetNull)
+  workOrderId        String
+  workOrder          WorkOrder                @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  artifactId         String?
+  artifact           Artifact?                @relation(fields: [artifactId], references: [id], onDelete: SetNull)
+  executionRunId     String                   @unique
+  attempt            Int
+  agentType          WorkOrderAgentType
+  status             WorkOrderExecutionStatus @default(RUNNING)
+  error              String?                  @db.Text
+  startedAt          DateTime                 @default(now())
+  completedAt        DateTime?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+  metadata           Json                     @default("{}")
+
+  @@index([projectId, startedAt])
+  @@index([orchestrationRunId])
+  @@index([workOrderId])
+  @@index([artifactId])
+  @@map("work_order_executions")
+  @@schema("orchestration")
+}
+
+enum ProjectTimelineVisibility {
+  INTERNAL
+  TEAM
+  CLIENT
+
+  @@schema("projects")
+}
+
+model ProjectTimelineEvent {
+  id         String                    @id @default(cuid())
+  projectId  String
+  project    Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  actorId    String?                   @db.Uuid
+  actor      Profile?                  @relation("TimelineActor", fields: [actorId], references: [id], onDelete: SetNull)
+  taskId     String?
+  artifactId String?
+  type       ProjectTimelineEventType
+  visibility ProjectTimelineVisibility @default(TEAM)
+  title      String
+  body       String?                   @db.Text
+  metadata   Json                      @default("{}")
+  createdAt  DateTime                  @default(now())
+
+  @@index([projectId, visibility, createdAt])
+  @@index([actorId])
+  @@index([taskId])
+  @@index([artifactId])
+  @@map("project_timeline_events")
+  @@schema("projects")
+}
+
+model Notification {
+  id          String           @id @default(cuid())
+  recipientId String           @db.Uuid
+  recipient   Profile          @relation("NotificationRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  actorId     String?          @db.Uuid
+  actor       Profile?         @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+  projectId   String?
+  taskId      String?
+  artifactId  String?
+  type        NotificationType
+  title       String
+  body        String?          @db.Text
+  metadata    Json             @default("{}")
+  readAt      DateTime?
+  createdAt   DateTime         @default(now())
+
+  @@index([recipientId, readAt, createdAt])
+  @@index([projectId])
+  @@index([taskId])
+  @@index([artifactId])
+  @@map("notifications")
+  @@schema("notifications")
+}
+
+// ─── Phase 2A: Agent Memory ────────────────────────────────────────────────────
+
+model AgentMemory {
+  id         String                      @id @default(cuid())
+  /// Which agent produced this memory: frontend | backend | database | architecture | contract
+  agentType  String
+  /// Optional profile for future named agents; current runtime still keys by agentType.
+  agentProfileId String?
+  agentProfile AgentProfile?            @relation(fields: [agentProfileId], references: [id], onDelete: SetNull)
+  /// Controls whether a memory is private to an agent, shared by one project, or globally reusable.
+  scope      AgentMemoryScope            @default(AGENT_PRIVATE)
+  /// Partition key for similarity search scoping
+  memoryType AgentMemoryType
+  /// The raw text that was embedded (artifact content or summary)
+  content    String                      @db.Text
+  /// 1536-dim vector from text-embedding-3-small
+  embedding  Unsupported("vector(1536)")
+  /// Flexible metadata: stackKey, projectType, complexity, contractId, etc.
+  metadata   Json                        @default("{}")
+  /// Source project — nullable so global patterns survive project deletion
+  projectId  String?
+  sourceType String?
+  importance Float                       @default(0.5)
+  lastUsedAt DateTime?
+  usageCount Int                         @default(0)
+  expiresAt  DateTime?
+  approvedAt DateTime?
+  approvalSource String?
+  createdAt  DateTime                    @default(now())
+
+  @@index([agentType, memoryType])
+  @@index([projectId])
+  @@index([scope, projectId])
+  @@index([agentType, scope, memoryType])
+  @@index([agentType, projectId, scope])
+  @@index([agentProfileId])
+  @@index([approvedAt])
+  @@map("agent_memories")
+  @@schema("memory")
+}
+
+model AgentProfile {
+  id          String        @id @default(cuid())
+  slug        String        @unique
+  displayName String
+  role        String
+  agentType   String
+  modelHint   String?
+  active      Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  memories    AgentMemory[]
+
+  @@index([agentType, active])
+  @@map("agent_profiles")
+  @@schema("memory")
+}
+
+enum AgentMemoryScope {
+  AGENT_PRIVATE
+  PROJECT_CORE
+  PROJECT_AGENT
+  GLOBAL_PATTERN
+
+  @@schema("memory")
+}
+
+enum AgentMemoryType {
+  SKILL // successful agent prompt+output pairs that passed gate review
+  PATTERN // fileManifest + contract that resulted in DELIVERED status
+  MISTAKE // rejected artifacts with rejection notes
+
+  @@schema("memory")
+}
+
+// ─── Phase 2B: Run Supervisor ──────────────────────────────────────────────────
+
+model EventLog {
+  id         String   @id @default(cuid())
+  projectId  String
+  project    Project  @relation(fields: [projectId], references: [id])
+  /// Node name as defined in NODE constant (e.g. "backend_agent")
+  nodeName   String
+  /// Lifecycle transition: STARTED | COMPLETED | FAILED | RETRIED | STUCK | ESCALATED
+  eventType  String
+  /// Token counts: { inputTokens: number, outputTokens: number, model: string }
+  costMeta   Json     @default("{}")
+  /// Cumulative run-level token spend at the time of this event
+  runTokens  Int      @default(0)
+  occurredAt DateTime @default(now())
+
+  @@index([projectId, occurredAt])
+  @@map("event_logs")
+  @@schema("orchestration")
+}
+
+model RunBudget {
+  id             String   @id @default(cuid())
+  projectId      String   @unique
+  project        Project  @relation(fields: [projectId], references: [id])
+  /// Hard token ceiling for this run (default: 200_000)
+  tokenBudget    Int      @default(200000)
+  /// Tokens consumed so far (charged by RunSupervisor on each node completion)
+  tokensConsumed Int      @default(0)
+  /// Number of automatic retries already executed
+  retryCount     Int      @default(0)
+  /// Max auto-retries before escalating to human
+  maxRetries     Int      @default(2)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("run_budgets")
+  @@schema("orchestration")
+}
+
+enum AdminDomainStatus {
+  PLANNED
+  PENDING_VERIFICATION
+  VERIFIED
+  FAILED
+  DISABLED
+
+  @@schema("admin")
+}
+
+enum IntegrationOutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+
+  @@schema("integration")
+}
+
+enum IdempotencyRecordStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+
+  @@schema("integration")
+}
+
+model AdminDomain {
+  id          String            @id @default(cuid())
+  name        String            @unique
+  type        String
+  owner       String?
+  target      String?
+  environment String            @default("production")
+  status      AdminDomainStatus @default(PLANNED)
+  verifiedAt  DateTime?
+  createdById String?           @db.Uuid
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([status])
+  @@index([environment])
+  @@map("admin_domains")
+  @@schema("admin")
+}
+
+model AdminAuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?  @db.Uuid
+  actor     Profile? @relation("AdminAuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  action    String
+  targetType String
+  targetId  String?
+  summary   String
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([actorId, createdAt])
+  @@index([targetType, targetId])
+  @@index([action, createdAt])
+  @@map("admin_audit_logs")
+  @@schema("admin")
+}
+
+model PlatformSetting {
+  key         String   @id
+  value       Json     @default("{}")
+  updatedById String?  @db.Uuid
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+
+  @@map("platform_settings")
+  @@schema("admin")
+}
+
+model IntegrationOutbox {
+  id            String                  @id @default(cuid())
+  eventType     String
+  aggregateType String
+  aggregateId   String
+  producer      String
+  payload       Json
+  metadata      Json                    @default("{}")
+  status        IntegrationOutboxStatus @default(PENDING)
+  attempts      Int                     @default(0)
+  lockId        String?
+  lockedAt      DateTime?
+  lockedUntil   DateTime?
+  lastAttemptAt DateTime?
+  nextAttemptAt DateTime?
+  publishedAt   DateTime?
+  error         String?                 @db.Text
+  createdAt     DateTime                @default(now())
+
+  @@index([status, lockedUntil, nextAttemptAt, createdAt])
+  @@index([aggregateType, aggregateId, createdAt])
+  @@index([eventType, createdAt])
+  @@map("integration_outbox")
+  @@schema("integration")
+}
+
+model IdempotencyRecord {
+  id             String                  @id @default(cuid())
+  key            String
+  scope          String
+  requestHash    String
+  status         IdempotencyRecordStatus @default(PROCESSING)
+  responseStatus Int?
+  responseBody   Json?
+  error          String?                 @db.Text
+  lockedUntil    DateTime?
+  expiresAt      DateTime
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  @@unique([key, scope])
+  @@index([scope, expiresAt])
+  @@index([status, lockedUntil])
+  @@map("idempotency_records")
+  @@schema("integration")
+}

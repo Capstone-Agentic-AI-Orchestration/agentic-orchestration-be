@@ -1,0 +1,162 @@
+// ─── DevFlow run state ────────────────────────────────────────────────────────
+//
+// Eve migration: this module previously defined the LangGraph `Annotation.Root` state
+// schema. LangGraph has been removed; the state is now a plain object and the per-field
+// "reducers" are applied explicitly by the OrchestrationSequencer via {@link applyDevFlowPartial}.
+// The domain types and the artifact-merge reducer are unchanged, so node implementations and
+// the output-validation layer need no changes.
+
+// ─── Domain Types ─────────────────────────────────────────────────────────────
+
+export interface TechStack {
+  frontend: string;
+  backend: string;
+  database: string;
+  styling: string;
+}
+
+export interface RequirementsDocument {
+  projectType: string;
+  features: string[];
+  techStack: TechStack;
+  complexity: 'simple' | 'medium' | 'complex';
+  estimatedFiles: number;
+}
+
+export interface ProjectContract {
+  projectId: string;
+  projectName: string;
+  description: string;
+  requirements: RequirementsDocument;
+  fileManifest: string[];
+  acceptanceCriteria: string[];
+  lockedAt: string;
+}
+
+export type ArtifactSource = 'llm' | 'scaffold' | 'skip' | 'mock';
+
+/**
+ * A single agent's retry instruction emitted by the validator: which code agent
+ * to re-run and the validation feedback scoped to that agent's own failures.
+ */
+export interface RetryDirective {
+  agentType: 'frontend' | 'backend' | 'database' | 'architecture';
+  feedback: string;
+}
+
+export interface GeneratedArtifact {
+  agentType: 'frontend' | 'backend' | 'database' | 'architecture';
+  filePath: string;
+  content: string;
+  language: string;
+  source?: ArtifactSource;
+}
+
+export function mergeArtifactsByPath(
+  existing: GeneratedArtifact[],
+  next: GeneratedArtifact[],
+): GeneratedArtifact[] {
+  const order: string[] = [];
+  const artifactsByPath = new Map<string, GeneratedArtifact>();
+
+  for (const artifact of [...existing, ...next]) {
+    if (!artifactsByPath.has(artifact.filePath)) {
+      order.push(artifact.filePath);
+    }
+    artifactsByPath.set(artifact.filePath, artifact);
+  }
+
+  return order
+    .map((filePath) => artifactsByPath.get(filePath))
+    .filter((artifact): artifact is GeneratedArtifact => Boolean(artifact));
+}
+
+// ─── Run state ────────────────────────────────────────────────────────────────
+
+export interface DevFlowStateType {
+  projectId: string;
+  runId: string;
+  brief: string;
+  stackKey: string;
+  companyName: string;
+  requirements: RequirementsDocument | null;
+  contract: ProjectContract | null;
+  artifacts: GeneratedArtifact[];
+  gate1Approved: boolean;
+  gate2Approved: boolean;
+  gate1Notes: string;
+  gate2Notes: string;
+  retryCount: number;
+  repoUrl: string | null;
+  /**
+   * Top-level complexity derived from the parsed requirements. Drives the conditional
+   * code-generation fan-out: 'complex' → parallel; 'simple' | 'medium' → sequential.
+   */
+  complexity: 'simple' | 'medium' | 'complex' | null;
+  error: string | null;
+  validationFeedback: string | null;
+  /**
+   * Agents the validator wants to re-run, each with feedback scoped to its own failures.
+   * A non-empty plan drives a retry fan-out from validate_outputs; empty means validation
+   * passed or exhausted its retry budget.
+   */
+  retryPlan: RetryDirective[];
+  /**
+   * Cross-agent contract summary extracted from backend/database artifacts, injected into
+   * frontend/architecture agents.
+   */
+  contractSummary: string;
+  /** Self-critique feedback from the review node, addressed before formal validation. */
+  selfCritique: string;
+}
+
+/** Field defaults — the explicit equivalent of the old Annotation `default` factories. */
+export function createInitialDevFlowState(
+  seed: Partial<DevFlowStateType> & Pick<DevFlowStateType, 'projectId' | 'runId'>,
+): DevFlowStateType {
+  return {
+    projectId: seed.projectId,
+    runId: seed.runId,
+    brief: seed.brief ?? '',
+    stackKey: seed.stackKey ?? '',
+    companyName: seed.companyName ?? '',
+    requirements: seed.requirements ?? null,
+    contract: seed.contract ?? null,
+    artifacts: seed.artifacts ?? [],
+    gate1Approved: seed.gate1Approved ?? false,
+    gate2Approved: seed.gate2Approved ?? false,
+    gate1Notes: seed.gate1Notes ?? '',
+    gate2Notes: seed.gate2Notes ?? '',
+    retryCount: seed.retryCount ?? 0,
+    repoUrl: seed.repoUrl ?? null,
+    complexity: seed.complexity ?? null,
+    error: seed.error ?? null,
+    validationFeedback: seed.validationFeedback ?? null,
+    retryPlan: seed.retryPlan ?? [],
+    contractSummary: seed.contractSummary ?? '',
+    selfCritique: seed.selfCritique ?? '',
+  };
+}
+
+/**
+ * Applies a node's partial result onto the running state — the explicit equivalent of the old
+ * Annotation reducers. Every channel is last-write-wins EXCEPT `artifacts`, which accumulates
+ * via {@link mergeArtifactsByPath} (matching the old append reducer that joined the parallel
+ * code-agent fan-out).
+ */
+export function applyDevFlowPartial(
+  state: DevFlowStateType,
+  partial: Partial<DevFlowStateType> | null | undefined,
+): DevFlowStateType {
+  if (!partial) return state;
+  const next: DevFlowStateType = { ...state };
+  for (const [key, value] of Object.entries(partial) as [keyof DevFlowStateType, unknown][]) {
+    if (value === undefined) continue;
+    if (key === 'artifacts') {
+      next.artifacts = mergeArtifactsByPath(state.artifacts, value as GeneratedArtifact[]);
+    } else {
+      (next as unknown as Record<string, unknown>)[key] = value;
+    }
+  }
+  return next;
+}
