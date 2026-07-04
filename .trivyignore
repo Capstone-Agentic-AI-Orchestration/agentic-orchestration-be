@@ -1,0 +1,5 @@
+# CVE-2026-33671 — picomatch ReDoS (HIGH) in npm's own bundled node_modules
+# Location: usr/local/lib/node_modules/npm/node_modules/picomatch
+# Reason: npm is not invoked at runtime in this production image (CMD runs node dist/main).
+#         The ReDoS vector requires passing malicious glob patterns to npm, which never happens.
+CVE-2026-33671

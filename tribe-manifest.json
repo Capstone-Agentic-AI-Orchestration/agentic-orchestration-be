@@ -1,0 +1,12 @@
+{
+  "serviceId": "template-tribe",
+  "name": "Template Tribe Backend",
+  "serviceType": "tribe",
+  "baseUrl": "http://localhost:3001",
+  "requiredScopes": ["tribe:template:read", "tribe:template:write"],
+  "exposes": ["/api/v1/health", "/api/v1/location/resolve"],
+  "consumes": ["payment", "email"],
+  "healthCheck": "/api/v1/health",
+  "version": "1.0.0",
+  "description": "Tribe backend service built from template"
+}

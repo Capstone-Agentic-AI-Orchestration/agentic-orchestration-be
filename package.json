@@ -1,0 +1,172 @@
+{
+  "name": "template-repo-be-monorepo",
+  "version": "0.0.1",
+  "description": "",
+  "author": "",
+  "private": true,
+  "license": "UNLICENSED",
+  "scripts": {
+    "build": "nest build --all",
+    "build:api": "nest build api",
+    "build:location-service": "nest build location-service",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write \"apps/**/*.ts\" \"libs/**/*.ts\" \"tests/**/*.ts\"",
+    "start": "nest start api",
+    "start:dev": "nest start api --watch",
+    "start:debug": "nest start api --debug --watch",
+    "start:api": "nest start api",
+    "start:api:dev": "nest start api --watch",
+    "start:location-service": "nest start location-service",
+    "start:location-service:dev": "nest start location-service --watch",
+    "start:prod:api": "node dist/apps/api/main",
+    "start:prod:location-service": "node dist/apps/location-service/main",
+    "lint": "eslint \"{apps,libs,tests}/**/*.ts\"",
+    "lint:fix": "eslint \"{apps,libs,tests}/**/*.ts\" --fix",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:cov": "jest --coverage",
+    "test:api": "jest --selectProjects api",
+    "test:location-service": "jest --selectProjects location-service",
+    "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
+    "test:e2e": "jest --config ./tests/e2e/jest-e2e.json",
+    "dummy:show": "node ./scripts/show-dummy-account.cjs"
+  },
+  "dependencies": {
+    "@implementsprint/sdk": "^1.1.2",
+    "@nestjs/common": "^11.0.1",
+    "@nestjs/config": "^4.0.3",
+    "@nestjs/core": "^11.0.1",
+    "@nestjs/microservices": "^11.1.21",
+    "@nestjs/platform-express": "^11.0.1",
+    "@nestjs/swagger": "^11.2.6",
+    "@supabase/supabase-js": "^2.100.1",
+    "axios": "^1.15.2",
+    "class-transformer": "0.5.1",
+    "class-validator": "0.14.1",
+    "helmet": "^8.1.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.2.0",
+    "@eslint/js": "^9.18.0",
+    "@nestjs/cli": "^11.0.0",
+    "@nestjs/schematics": "^11.0.0",
+    "@nestjs/testing": "^11.0.1",
+    "@types/express": "^5.0.0",
+    "@types/helmet": "^0.0.48",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^22.10.7",
+    "@types/supertest": "^6.0.2",
+    "eslint": "^10.1.0",
+    "eslint-config-prettier": "^10.0.1",
+    "eslint-plugin-prettier": "^5.2.2",
+    "globals": "^16.0.0",
+    "jest": "^29.7.0",
+    "jest-junit": "^16.0.0",
+    "prettier": "^3.4.2",
+    "source-map-support": "^0.5.21",
+    "supertest": "^7.0.0",
+    "ts-jest": "^29.2.0",
+    "ts-loader": "^9.5.2",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.20.0"
+  },
+  "overrides": {
+    "lodash": "4.18.1",
+    "picomatch": "^4.0.4",
+    "path-to-regexp": "^8.4.0"
+  },
+  "jest": {
+    "projects": [
+      {
+        "displayName": "api",
+        "moduleFileExtensions": [
+          "js",
+          "json",
+          "ts"
+        ],
+        "rootDir": ".",
+        "testRegex": "(apps/api|libs)/(.*)\\.spec\\.ts$",
+        "transform": {
+          "^.+\\.(t|j)s$": "ts-jest"
+        },
+        "moduleNameMapper": {
+          "^@app/common$": "<rootDir>/libs/common/src",
+          "^@app/common/(.*)$": "<rootDir>/libs/common/src/$1",
+          "^@app/api-center$": "<rootDir>/libs/api-center/src",
+          "^@app/api-center/(.*)$": "<rootDir>/libs/api-center/src/$1",
+          "^@app/supabase$": "<rootDir>/libs/supabase/src",
+          "^@app/supabase/(.*)$": "<rootDir>/libs/supabase/src/$1",
+          "^@app/contracts$": "<rootDir>/libs/contracts/src",
+          "^@app/contracts/(.*)$": "<rootDir>/libs/contracts/src/$1",
+          "^(\\.{1,2}/.*)\\.js$": "$1"
+        },
+        "collectCoverageFrom": [
+          "apps/api/src/**/*.ts",
+          "libs/**/*.ts"
+        ],
+        "coveragePathIgnorePatterns": [
+          "/node_modules/",
+          "apps/api/src/main.ts",
+          "\\.module\\.ts$",
+          "index\\.ts$"
+        ],
+        "testEnvironment": "node"
+      },
+      {
+        "displayName": "location-service",
+        "moduleFileExtensions": [
+          "js",
+          "json",
+          "ts"
+        ],
+        "rootDir": ".",
+        "testRegex": "(apps/location-service|libs)/(.*)\\.spec\\.ts$",
+        "transform": {
+          "^.+\\.(t|j)s$": "ts-jest"
+        },
+        "moduleNameMapper": {
+          "^@app/common$": "<rootDir>/libs/common/src",
+          "^@app/common/(.*)$": "<rootDir>/libs/common/src/$1",
+          "^@app/api-center$": "<rootDir>/libs/api-center/src",
+          "^@app/api-center/(.*)$": "<rootDir>/libs/api-center/src/$1",
+          "^@app/supabase$": "<rootDir>/libs/supabase/src",
+          "^@app/supabase/(.*)$": "<rootDir>/libs/supabase/src/$1",
+          "^@app/contracts$": "<rootDir>/libs/contracts/src",
+          "^@app/contracts/(.*)$": "<rootDir>/libs/contracts/src/$1",
+          "^(\\.{1,2}/.*)\\.js$": "$1"
+        },
+        "collectCoverageFrom": [
+          "apps/location-service/src/**/*.ts",
+          "libs/**/*.ts"
+        ],
+        "coveragePathIgnorePatterns": [
+          "/node_modules/",
+          "apps/location-service/src/main.ts",
+          "\\.module\\.ts$",
+          "index\\.ts$"
+        ],
+        "testEnvironment": "node"
+      }
+    ],
+    "coverageDirectory": "coverage",
+    "coverageReporters": [
+      "json-summary",
+      "text",
+      "lcov"
+    ],
+    "reporters": [
+      "default",
+      [
+        "jest-junit",
+        {
+          "outputDirectory": "test-results",
+          "outputName": "junit.xml"
+        }
+      ]
+    ]
+  }
+}

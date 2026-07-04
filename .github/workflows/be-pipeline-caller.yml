@@ -1,0 +1,90 @@
+name: "BE Pipeline Caller"
+
+on:
+  push:
+    branches: [test, uat, main]
+  workflow_dispatch:
+    inputs:
+      pipeline_mode:
+        description: "Pipeline mode (auto|single|multi)"
+        type: choice
+        options: [auto, single, multi]
+        default: auto
+      enable_security_scan:
+        description: "Run backend security scans"
+        type: boolean
+        default: true
+      enable_sonar:
+        description: "Run SonarCloud analysis"
+        type: boolean
+        default: true
+      enable_k6:
+        description: "Run Grafana k6 performance tests"
+        type: boolean
+        default: true
+      k6_script_path:
+        description: "k6 performance test path"
+        type: string
+        default: "tests/performance"
+      k6_base_url:
+        description: "Optional override base URL for k6"
+        type: string
+        default: ""
+      k6_run_only_on_branch:
+        description: "Allowed branches for k6"
+        type: string
+        default: "test,main"
+      run_deploy:
+        description: "Enable central deploy lanes (staging + Render lanes)"
+        type: boolean
+        default: false
+      run_promotion:
+        description: "Enable PR promotions"
+        type: boolean
+        default: true
+      dry_run:
+        description: "Preview, skip deploy/tag push"
+        type: boolean
+        default: false
+
+# Minimum permissions required by the central pipeline's reusable jobs.
+# GitHub enforces the caller's permissions as a hard ceiling — called workflows
+# cannot exceed what the caller grants, even if they declare higher scopes internally.
+#   contents: write        — version-test creates git version tags
+#   packages: write        — docker-build-main pushes Docker image to GHCR
+#   security-events: write — docker-build-main uploads Trivy results to GitHub Security
+#   pull-requests: write   — pr-to-uat and pr-to-main jobs create promotion PRs
+#   id-token: write        — required if any job uses OIDC-based cloud authantication
+permissions:
+  contents: write
+  packages: write
+  security-events: write
+  pull-requests: write
+  id-token: write
+
+# Queue runs per branch/event so each push executes fully (no auto-cancel)
+concurrency:
+  group: backend-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  call-backend-orchestrator:
+    # TODO: Switch @main to @v1 (or the appropriate release tag) once a stable tag is published
+    #       in ImplementSprint/central-workflow to avoid unintentional breaking changes on main.
+    uses: ImplementSprint/central-workflow/.github/workflows/master-pipeline-be.yml@main
+    with:
+      pipeline_mode: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.pipeline_mode || 'auto' }}
+      enable_security_scan: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.enable_security_scan || 'true') || github.event_name != 'workflow_dispatch' }}
+      enable_sonar: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.enable_sonar || 'true') || github.event_name != 'workflow_dispatch' }}
+      enable_k6: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.enable_k6 || 'true') || github.event_name != 'workflow_dispatch' }}
+      k6_script_path: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.k6_script_path || 'tests/performance' }}
+      k6_base_url: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.k6_base_url || '' }}
+      k6_run_only_on_branch: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.k6_run_only_on_branch || 'test,main' }}
+      # Default push behavior:
+      # - push (test/uat/main): keep central deploy lanes visible
+      # - Render lane execution is centralized in master-pipeline-be.yml
+      # - workflow_dispatch keeps manual run_deploy toggle
+      run_deploy: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.run_deploy || 'false') || github.event_name == 'push' }}
+      run_promotion: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.run_promotion || 'true') || github.event_name == 'push' }}
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.dry_run || 'false') || false }}
+    secrets: inherit

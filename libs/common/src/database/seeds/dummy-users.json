@@ -1,0 +1,19 @@
+{
+  "note": "Safe non-production dummy users for manual testing only.",
+  "users": [
+    {
+      "email": "dummy.qa1@example.test",
+      "password": "DummyPass!12345",
+      "firstName": "Dummy",
+      "lastName": "UserOne",
+      "role": "tester"
+    },
+    {
+      "email": "dummy.qa2@example.test",
+      "password": "DummyPass!12345",
+      "firstName": "Dummy",
+      "lastName": "UserTwo",
+      "role": "tester"
+    }
+  ]
+}
