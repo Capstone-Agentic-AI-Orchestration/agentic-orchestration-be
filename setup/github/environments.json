@@ -1,0 +1,22 @@
+{
+  "org": "Capstone-Agentic-AI-Orchestration",
+  "_comment": "Fill in the real URLs for each environment. frontendUrl = Vercel deploy URL (becomes the App/OAuth homepage). apiUrl = Render service URL (becomes the GitHub App webhook host). supabaseRef = the Supabase project ref for that environment (the xxxx in https://xxxx.supabase.co) — the OAuth callback is https://<supabaseRef>.supabase.co/auth/v1/callback.",
+  "localCallbackPort": 8790,
+  "environments": {
+    "test": {
+      "frontendUrl": "https://REPLACE-test-frontend.vercel.app",
+      "apiUrl": "https://REPLACE-test-api.onrender.com",
+      "supabaseRef": "REPLACE_TEST_SUPABASE_REF"
+    },
+    "uat": {
+      "frontendUrl": "https://REPLACE-uat-frontend.vercel.app",
+      "apiUrl": "https://REPLACE-uat-api.onrender.com",
+      "supabaseRef": "REPLACE_UAT_SUPABASE_REF"
+    },
+    "main": {
+      "frontendUrl": "https://REPLACE-main-frontend.vercel.app",
+      "apiUrl": "https://REPLACE-main-api.onrender.com",
+      "supabaseRef": "REPLACE_MAIN_SUPABASE_REF"
+    }
+  }
+}
