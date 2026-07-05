@@ -1,8 +1,8 @@
-# DevFlow Backend
+# Agentic Orchestration Backend
 
-`devflow-be` is the NestJS API for the migrated DevFlow product. It serves the PM, DEV, CLIENT, and ADMIN workspaces used by `devlow-frontend`.
+`agentic-orchestration-be` is the NestJS API for the migrated Agentic Orchestration product. It serves the PM, DEV, CLIENT, and ADMIN workspaces used by `agentic-orchestration-fe`.
 
-The current production-ready surface is the project delivery lifecycle around intake, client invites, kickoff, tasks, work orders, artifacts, collaboration, timeline, notifications, delivery review, and OpenRouter-backed orchestration. DevFlow's full-project path uses LangGraph to coordinate custom agents and can hand approved generated artifacts to GitHub delivery when GitHub App credentials are configured.
+The current production-ready surface is the project delivery lifecycle around intake, client invites, kickoff, tasks, work orders, artifacts, collaboration, timeline, notifications, delivery review, and async orchestration. `agentic-orchestration-be` is the control plane: it owns auth, run state, gates, validation, persistence, streaming, and GitHub delivery. Agent execution is delegated through the provider layer, with Eve in `agentic-orchestration-ag` as the target execution plane.
 
 ## Prerequisites
 
@@ -50,6 +50,10 @@ Common optional values:
 
 ```env
 AGENT_PROVIDER="mock"
+ORCHESTRATION_LLM_ENGINE="eve"
+ORCHESTRATION_DISPATCHER_MODE="in-process"
+EVE_SERVICE_URL=""
+EVE_SERVICE_TOKEN=""
 LLM_PROVIDER="openrouter"
 LLM_REQUEST_TIMEOUT_MS=120000
 LLM_CONCURRENCY_LIMIT=4
@@ -76,11 +80,11 @@ GEMINI_FALLBACK_MODEL=""
 GEMINI_API_KEY=""
 PORT=4000
 NODE_ENV="development"
-CORS_ORIGIN="http://localhost:3000"
+CORS_ORIGIN="http://localhost:3001"
 SUPABASE_SERVICE_ROLE_KEY=""
 SUPABASE_ANON_KEY=""
 AUTH_ALLOWED_PROVIDERS="github"
-# Alternate provider keys. The LangGraph and work-order agents use OpenRouter by default.
+# Alternate provider keys. The graph fallback and work-order agents use OpenRouter by default.
 GITHUB_APP_ID=""
 GITHUB_PRIVATE_KEY=""
 GITHUB_INSTALLATION_ID=""
@@ -95,17 +99,19 @@ OUTBOX_RELAY_LOCK_MS=60000
 OUTBOX_RELAY_MAX_ATTEMPTS=5
 ```
 
-`SUPABASE_SERVICE_ROLE_KEY` is server-side only. Never expose it to `devlow-frontend`.
+`SUPABASE_SERVICE_ROLE_KEY` is server-side only. Never expose it to `agentic-orchestration-fe`.
 
 DevFlow login uses Supabase Auth. For the current GitHub OAuth-only rollout, configure GitHub as a Supabase Auth provider and keep `AUTH_ALLOWED_PROVIDERS="github"` on Render. When Google is enabled later, set `AUTH_ALLOWED_PROVIDERS="github,google"`. See `docs/setup/github-oauth-render-vercel.md` for the full Supabase, Render, and Vercel setup.
 
-`AGENT_PROVIDER=mock` runs the deterministic local orchestration provider and does not require LLM or GitHub credentials. Use `AGENT_PROVIDER=llm` with `LLM_PROVIDER=openrouter` and `OPENROUTER_API_KEY` to run real LangGraph and work-order artifact generation through OpenRouter. If OpenRouter is throttled, `LLM_PROVIDER=opencode` with `OPENCODE_API_KEY`, `LLM_PROVIDER=openai` with `OPENAI_API_KEY`, `LLM_PROVIDER=anthropic` with `ANTHROPIC_API_KEY`, or `LLM_PROVIDER=gemini` with `GEMINI_API_KEY` uses an alternate provider instead. The default OpenRouter model is `deepseek/deepseek-v4-flash:free`; the default OpenCode model is `deepseek-v4-flash`; the default OpenAI model is `gpt-4.1-mini`; the default Anthropic model is `claude-3-5-haiku-20241022`; the default Gemini model is `gemini-3.5-flash`. `LLM_REQUEST_TIMEOUT_MS` and `LLM_CONCURRENCY_LIMIT` apply across graph and work-order model calls.
+`AGENT_PROVIDER=mock` runs the deterministic local orchestration provider and does not require LLM or GitHub credentials. Use `AGENT_PROVIDER=llm` with `ORCHESTRATION_LLM_ENGINE=eve` and `EVE_SERVICE_URL` to delegate generation turns to `agentic-orchestration-ag`. If Eve is not configured, the router falls back to the in-process graph provider and uses `LLM_PROVIDER` credentials. If OpenRouter is throttled, `LLM_PROVIDER=opencode` with `OPENCODE_API_KEY`, `LLM_PROVIDER=openai` with `OPENAI_API_KEY`, `LLM_PROVIDER=anthropic` with `ANTHROPIC_API_KEY`, or `LLM_PROVIDER=gemini` with `GEMINI_API_KEY` uses an alternate fallback provider instead. The default OpenRouter model is `deepseek/deepseek-v4-flash:free`; the default OpenCode model is `deepseek-v4-flash`; the default OpenAI model is `gpt-4.1-mini`; the default Anthropic model is `claude-3-5-haiku-20241022`; the default Gemini model is `gemini-3.5-flash`. `LLM_REQUEST_TIMEOUT_MS` and `LLM_CONCURRENCY_LIMIT` apply across Eve calls and graph fallback/work-order model calls.
 
-The LangGraph path defines DevFlow's own agents: requirements parser, contract negotiator, frontend, backend, database, architecture, validator, and GitHub commit. LangGraph controls ordering, parallel fan-out, retries, and human approval gates. OpenRouter, OpenCode, OpenAI, Anthropic, or Gemini only supply the model calls inside those custom agents. LLM generation can start before GitHub App delivery is configured; after Gate 2 approval, the GitHub commit node requires GitHub readiness, creates a private repository through the configured GitHub App, commits generated artifacts, injects CI, and stores `repoUrl` on the project.
+The orchestration path defines DevFlow's own agents: requirements parser, contract negotiator, frontend, backend, database, architecture, validator, and GitHub commit. NestJS controls ordering, parallel fan-out, retries, human approval gates, and durable run state. Eve, OpenRouter, OpenCode, OpenAI, Anthropic, or Gemini only supply model execution inside those custom agents. LLM generation can start before GitHub App delivery is configured; after Gate 2 approval, the GitHub commit node requires GitHub readiness, creates a private repository through the configured GitHub App, commits generated artifacts, injects CI, and stores `repoUrl` on the project.
 
-GitHub delivery requires `GITHUB_APP_ID`, a valid PEM `GITHUB_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, and `GITHUB_ORG`. `GITHUB_PRIVATE_KEY` can be base64-encoded PEM, raw PEM, or escaped-newline PEM; the app normalizes it before validating it. The orchestration provider endpoint includes `githubDelivery` readiness details so the app can show missing setup before Gate 2 delivery fails. The project orchestration API also exposes non-destructive live checks for the selected graph LLM provider and GitHub App delivery credentials, and the PM project view surfaces both checks before a real LangGraph-to-GitHub run. `npm run smoke:github` performs the same GitHub App installation owner and repository access verification before it allows a real smoke repository create.
+`ORCHESTRATION_DISPATCHER_MODE=in-process` means the API writes run state, returns `accepted/runId`, and dispatches the long-running graph in the same Node process. This is the current deployment mode. The dispatcher boundary exists so a durable queue such as BullMQ/Redis or Supabase Queues can replace the implementation later without changing FE contracts.
 
-`npm run smoke:orchestration-readiness` is non-destructive and verifies the selected graph LLM provider plus GitHub App delivery credentials without creating a project or repository. It exits successfully while reporting blockers by default; set `ORCHESTRATION_READINESS_STRICT=true` when you want CI to fail on incomplete readiness. `npm run smoke:langgraph-github` is safe by default and skips before creating a repository. Set `LANGGRAPH_GITHUB_SMOKE_CREATE=true` only when you intentionally want a real end-to-end smoke repository created through the full LangGraph Gate 1 -> Gate 2 -> GitHub delivery flow. The destructive live smoke preflights OpenRouter, OpenCode, OpenAI, Anthropic, and Gemini and uses the first configured provider that accepts a real request; set `LANGGRAPH_GITHUB_SMOKE_PROVIDER_AUTO=false` to test only the configured `LLM_PROVIDER`.
+GitHub delivery requires `GITHUB_APP_ID`, a valid PEM `GITHUB_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, and `GITHUB_ORG`. `GITHUB_PRIVATE_KEY` can be base64-encoded PEM, raw PEM, or escaped-newline PEM; the app normalizes it before validating it. The orchestration provider endpoint includes `githubDelivery` readiness details so the app can show missing setup before Gate 2 delivery fails. The project orchestration API also exposes non-destructive live checks for the selected LLM provider and GitHub App delivery credentials, and the PM project view surfaces both checks before a real orchestration-to-GitHub run. `npm run smoke:github` performs the same GitHub App installation owner and repository access verification before it allows a real smoke repository create.
+
+`npm run smoke:orchestration-readiness` is non-destructive and verifies the selected LLM provider plus GitHub App delivery credentials without creating a project or repository. It exits successfully while reporting blockers by default; set `ORCHESTRATION_READINESS_STRICT=true` when you want CI to fail on incomplete readiness. `npm run smoke:langgraph-github` is safe by default and skips before creating a repository. Set `LANGGRAPH_GITHUB_SMOKE_CREATE=true` only when you intentionally want a real end-to-end smoke repository created through the full Gate 1 -> Gate 2 -> GitHub delivery flow. The destructive live smoke preflights OpenRouter, OpenCode, OpenAI, Anthropic, and Gemini and uses the first configured provider that accepts a real request; set `LANGGRAPH_GITHUB_SMOKE_PROVIDER_AUTO=false` to test only the configured `LLM_PROVIDER`.
 
 `OUTBOX_RELAY_ENABLED=false` keeps integration events durable in Postgres without publishing them. Enable it only for local contract testing until `OUTBOX_PUBLISHER` is replaced with a durable broker-backed publisher.
 
@@ -206,10 +212,10 @@ See `docs/architecture/production-readiness.md` for the role matrix, lifecycle r
 
 ## Frontend Pairing
 
-Run the frontend separately from `../devlow-frontend`:
+Run the frontend separately from `../agentic-orchestration-fe`:
 
 ```powershell
-cd ..\devlow-frontend
+cd ..\agentic-orchestration-fe
 Copy-Item .env.example .env.local
 npm install
 npm run dev
@@ -227,7 +233,7 @@ npm run seed:demo:check
 npm run seed:demo:smoke
 npm run smoke:openrouter  # skips when OPENROUTER_API_KEY is absent
 
-cd ..\devlow-frontend
+cd ..\agentic-orchestration-fe
 npm run typecheck
 npm run build
 ```

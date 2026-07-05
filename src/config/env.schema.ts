@@ -11,6 +11,7 @@ export const envSchema = z.object({
   // 'eve' is the default; AgentLlmRouter automatically falls back to 'graph' when EVE_SERVICE_URL
   // is unset/unreachable, so this is safe before the Eve service is deployed.
   ORCHESTRATION_LLM_ENGINE: z.enum(['graph', 'eve']).optional().default('eve'),
+  ORCHESTRATION_DISPATCHER_MODE: z.enum(['in-process']).optional().default('in-process'),
   EVE_SERVICE_URL: z.string().url().optional(),
   EVE_SERVICE_TOKEN: z.string().optional().default(''),
   LLM_PROVIDER: z.enum(['openrouter', 'openai', 'anthropic', 'opencode', 'gemini']).optional().default('openrouter'),

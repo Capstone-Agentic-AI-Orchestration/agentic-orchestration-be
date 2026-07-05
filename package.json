@@ -1,7 +1,7 @@
 {
-  "name": "devflow-backend",
+  "name": "agentic-orchestration-be",
   "version": "0.1.0",
-  "description": "DevFlow AI orchestration backend",
+  "description": "Agentic Orchestration backend",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {

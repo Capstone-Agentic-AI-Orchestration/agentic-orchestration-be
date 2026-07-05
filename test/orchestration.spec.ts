@@ -13,6 +13,10 @@ import { ValidatorNode } from '../src/orchestration/nodes/validator.node';
 import { GithubCommitNode } from '../src/orchestration/nodes/github-commit.node';
 import { SelfCritiqueNode } from '../src/orchestration/nodes/self-critique.node';
 import { OrchestrationSequencer } from '../src/orchestration/graph/orchestration-sequencer';
+import {
+  OrchestrationRunDispatcher,
+  type OrchestrationDispatchOptions,
+} from '../src/orchestration/run-dispatcher.service';
 import { AgentProviderRegistry } from '../src/orchestration/providers/agent-provider.registry';
 import { ArtifactContractValidator } from '../src/orchestration/providers/artifact-contract.validator';
 import { LlmAgentProvider } from '../src/orchestration/providers/llm-agent.provider';
@@ -167,6 +171,7 @@ describe('OrchestrationService', () => {
   let githubCommit: { execute: ReturnType<typeof vi.fn> };
   let selfCritique: { execute: ReturnType<typeof vi.fn> };
   let sequencerStub: { run: ReturnType<typeof vi.fn> };
+  let runDispatcher: { dispatch: ReturnType<typeof vi.fn> };
   let memory: ReturnType<typeof makeMemoryMock>;
   let mockAgentProvider: MockAgentProvider;
   let agentProviderRegistry: AgentProviderRegistry;
@@ -254,6 +259,14 @@ describe('OrchestrationService', () => {
     // Eve migration: stub the sequencer so fire-and-forget driveRun completes without executing
     // real nodes; resume tests assert it was (or was not) invoked.
     sequencerStub = { run: vi.fn().mockResolvedValue({ kind: 'paused', gate: 'gate_1', state: {} }) };
+    runDispatcher = {
+      dispatch: vi.fn(({ label, task, onError }: OrchestrationDispatchOptions) => {
+        if (!String(label).startsWith('resume_')) return;
+        void task().catch((error: unknown) => {
+          void onError?.(error);
+        });
+      }),
+    };
 
     service = new OrchestrationService(
       prisma as unknown as PrismaService,
@@ -276,6 +289,7 @@ describe('OrchestrationService', () => {
       null, // graphLlmProvider
       null, // gateway
       null, // emitter
+      runDispatcher as unknown as OrchestrationRunDispatcher,
     );
 
     // Mock checkpointer so onModuleInit doesn't need a real DB

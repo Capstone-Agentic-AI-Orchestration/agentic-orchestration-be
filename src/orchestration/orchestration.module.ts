@@ -26,6 +26,7 @@ import { LlmAgentProvider } from './providers/llm-agent.provider';
 import { MockAgentProvider } from './providers/mock-agent.provider';
 import { StreamEmitter } from './streaming/stream-emitter.service';
 import { OrchestrationEmitter } from './streaming/orchestration-emitter.service';
+import { OrchestrationRunDispatcher } from './run-dispatcher.service';
 import { ProjectScaffolderService } from './scaffolding/project-scaffolder.service';
 import { OutputValidationService } from './output-validation/output-validation.service';
 
@@ -62,6 +63,7 @@ import { OutputValidationService } from './output-validation/output-validation.s
     MockAgentProvider,
     StreamEmitter,
     OrchestrationEmitter,
+    OrchestrationRunDispatcher,
     ProjectScaffolderService,
     OutputValidationService,
   ],

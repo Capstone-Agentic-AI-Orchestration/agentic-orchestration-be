@@ -44,6 +44,7 @@ import {
   GraphLlmProviderVerification,
 } from './providers/graph-llm.provider';
 import { OrchestrationEmitter } from './streaming/orchestration-emitter.service';
+import { OrchestrationRunDispatcher } from './run-dispatcher.service';
 import { AgentProviderMode, AgentProviderStatus } from './providers/agent-provider.types';
 import {
   agentArtifactContractFor,
@@ -198,6 +199,8 @@ export class OrchestrationService implements OnModuleInit {
     // Optional: WebSocket gateway may not be present in all environments
     @Optional() private readonly gateway: DevFlowGateway | null,
     @Optional() private readonly emitter: OrchestrationEmitter | null,
+    @Optional()
+    private readonly runDispatcher: OrchestrationRunDispatcher = new OrchestrationRunDispatcher(),
   ) {}
 
   getProviderStatus(): OrchestrationProviderStatus {
@@ -483,21 +486,27 @@ Rough idea: ${input.brief}`;
     }).catch(() => undefined);
 
     if (this.agentProviderMode() === 'mock') {
-      void this.runMockWorkOrders({
+      this.runDispatcher.dispatch({
+        label: 'mock_work_orders',
         projectId,
         runId,
-        trigger,
-        actorId: actorId ?? null,
-        readyWorkOrderIds: [],
-        completedArtifactIds: [],
-        failedWorkOrderIds: [],
-        error: null,
-      }).catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        this.logger.error(
-          `Mock orchestration run ${runId} for project ${projectId} failed: ${message}`,
-        );
-        void this.markRunFailed(runId, MOCK_NODE.FINALIZE, message);
+        task: () => this.runMockWorkOrders({
+          projectId,
+          runId,
+          trigger,
+          actorId: actorId ?? null,
+          readyWorkOrderIds: [],
+          completedArtifactIds: [],
+          failedWorkOrderIds: [],
+          error: null,
+        }),
+        onError: (err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          this.logger.error(
+            `Mock orchestration run ${runId} for project ${projectId} failed: ${message}`,
+          );
+          return this.markRunFailed(runId, MOCK_NODE.FINALIZE, message);
+        },
       });
 
       this.gateway?.emitStatusUpdate(
@@ -522,7 +531,7 @@ Rough idea: ${input.brief}`;
         gate1Approved: true,
         gate2Approved: true,
       });
-      void this.driveRun(projectId, runId, simulationState, 'A', this.simulationImpls);
+      this.dispatchDriveRun(projectId, runId, simulationState, 'A', this.simulationImpls, 'simulation_run');
       this.gateway?.emitStatusUpdate(projectId, 'PARSING_REQUIREMENTS', 'parse_requirements');
       this.emitter?.runStatus(
         projectId,
@@ -541,9 +550,9 @@ Rough idea: ${input.brief}`;
       companyName,
     });
 
-    // Drive the pipeline via the sequencer. Errors are handled inside driveRun
-    // (run.error + markRunFailed); fire-and-forget here.
-    void this.driveRun(projectId, runId, initialState, 'A', this.liveImpls);
+    // Drive the pipeline via the dispatcher. Errors are handled inside driveRun
+    // (run.error + markRunFailed); the dispatcher is a final safety net.
+    this.dispatchDriveRun(projectId, runId, initialState, 'A', this.liveImpls, 'live_run');
 
     // Notify subscribers that the graph has started and is parsing requirements.
     // Legacy event kept for back-compat; runGraph also emits typed run.status.
@@ -662,7 +671,7 @@ Rough idea: ${input.brief}`;
     this.emitter?.runStatus(projectId, runId, ProjectStatus.GENERATING_CODE, 'gate_1_check');
 
     // Resume at phase B (code generation) with gate 1 now approved.
-    void this.driveRun(projectId, runId, resumedState, 'B', this.liveImpls);
+    this.dispatchDriveRun(projectId, runId, resumedState, 'B', this.liveImpls, 'resume_gate_1');
   }
 
   /**
@@ -814,7 +823,27 @@ Rough idea: ${input.brief}`;
     this.emitter?.runStatus(projectId, runId, ProjectStatus.COMMITTING, 'gate_2_check');
 
     // Resume at phase C (commit → delivered) with gate 2 now approved.
-    void this.driveRun(projectId, runId, resumedState, 'C', this.liveImpls);
+    this.dispatchDriveRun(projectId, runId, resumedState, 'C', this.liveImpls, 'resume_gate_2');
+  }
+
+  private dispatchDriveRun(
+    projectId: string,
+    runId: string,
+    state: DevFlowStateType,
+    fromPhase: RunPhase,
+    impls: DevFlowNodeImpls,
+    label: string,
+  ): void {
+    this.runDispatcher.dispatch({
+      label,
+      projectId,
+      runId,
+      task: () => this.driveRun(projectId, runId, state, fromPhase, impls),
+      onError: (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        return this.markRunFailed(runId, label, message);
+      },
+    });
   }
 
   /**
