@@ -41,7 +41,7 @@ function makeService() {
   };
 
   // Positional constructor args: prisma(1), 15 unused node/service deps (2-16), sequencer(17),
-  // graphLlmProvider(18=null), gateway(19=null), emitter(20).
+  // graphLlmProvider(18=null), gateway(19=null), emitter(20), streamEmitter(21=null).
   const u = undefined as unknown as never;
   const service = new OrchestrationService(
     prisma as never,
@@ -49,7 +49,9 @@ function makeService() {
     sequencer as never,
     null as never,
     null as never,
+    null as never,
     emitter as never,
+    null as never,
   );
 
   return { service, prisma, sequencer, emitter };

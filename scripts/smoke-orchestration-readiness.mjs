@@ -43,13 +43,20 @@ function summarizeGithub(result) {
   };
 }
 
+function summarizeEngine(status) {
+  return {
+    requestedEngine: status.requestedEngine ?? status.llmEngine?.requestedEngine ?? '',
+    activeEngine: status.activeEngine ?? status.llmEngine?.activeEngine ?? '',
+    eveServiceConfigured: status.eveServiceConfigured ?? status.llmEngine?.eveServiceConfigured ?? false,
+    model: status.engineModel ?? status.llmEngine?.model ?? status.model ?? '',
+    fallbackReason: status.fallbackReason ?? status.llmEngine?.fallbackReason ?? '',
+  };
+}
+
 loadEnvFile();
 
 process.env.AGENT_PROVIDER = 'llm';
 process.env.LLM_PROVIDER = process.env.LLM_PROVIDER || 'openrouter';
-if (process.env.LANGGRAPH_GITHUB_SMOKE_TRACE !== 'true') {
-  process.env.LANGCHAIN_TRACING_V2 = 'false';
-}
 
 const [{ NestFactory }, { AppModule }, { OrchestrationService }, { GithubService }] =
   await Promise.all([
@@ -65,6 +72,7 @@ try {
   const orchestration = app.get(OrchestrationService);
   const github = app.get(GithubService);
 
+  const providerStatus = orchestration.getProviderStatus();
   const llmVerification = await orchestration.verifyLlmProviderAccess();
   const githubStatus = github.getDeliveryStatus();
   const githubVerification = githubStatus.available
@@ -79,16 +87,17 @@ try {
         reason: githubStatus.reason,
       };
 
-  console.log('LangGraph GitHub readiness checks');
+  console.log('Eve GitHub readiness checks');
+  console.table([summarizeEngine(providerStatus)]);
   console.table([summarizeLlm(llmVerification)]);
   console.table([summarizeGithub(githubVerification)]);
 
   if (llmVerification.ok && githubVerification.ok) {
-    console.log('LangGraph GitHub readiness passed. Set LANGGRAPH_GITHUB_SMOKE_CREATE=true and run npm run smoke:langgraph-github for the destructive E2E flow.');
+    console.log('Eve GitHub readiness passed. Set EVE_GITHUB_SMOKE_CREATE=true and run npm run smoke:eve-github for the destructive E2E flow.');
     process.exit(0);
   }
 
-  console.log('LangGraph GitHub readiness incomplete. Fix the reported provider or GitHub delivery issue before running the destructive E2E flow.');
+  console.log('Eve GitHub readiness incomplete. Fix the reported provider or GitHub delivery issue before running the destructive E2E flow.');
   if (process.env.ORCHESTRATION_READINESS_STRICT === 'true') {
     process.exit(1);
   }

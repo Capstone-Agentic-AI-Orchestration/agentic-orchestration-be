@@ -42,6 +42,30 @@ function streamOf(chunks: string[]): ReadableStream<Uint8Array> {
   });
 }
 
+function controlledTextStream(): {
+  stream: ReadableStream<Uint8Array>;
+  enqueue: (chunk: string) => void;
+  close: () => void;
+} {
+  const encoder = new TextEncoder();
+  let controllerRef: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controllerRef = controller;
+    },
+  });
+
+  return {
+    stream,
+    enqueue: (chunk) => controllerRef?.enqueue(encoder.encode(chunk)),
+    close: () => controllerRef?.close(),
+  };
+}
+
+function flushMicrotasks(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function parseJson<T>(content: string): T {
   return JSON.parse(content) as T;
 }
@@ -134,6 +158,35 @@ describe('BaseLlmProvider streaming', () => {
     expect(tokens).toEqual(['{"ok"', ':true}']);
     expect(result.value).toEqual({ ok: true });
     expect(result.usage).toEqual({ inputTokens: 5, outputTokens: 3 });
+  });
+
+  it('emits OpenAI-style token deltas before the response stream closes', async () => {
+    const controlled = controlledTextStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: controlled.stream,
+    }));
+
+    const tokens: string[] = [];
+    const resultPromise = new TestProvider('openrouter').generate<{ live: boolean }>(
+      { ...baseOptions, onToken: (d) => tokens.push(d) },
+      parseJson,
+    );
+
+    await flushMicrotasks();
+    controlled.enqueue('data: {"choices":[{"delta":{"content":"{\\"live\\""');
+    controlled.enqueue('}}]}\n');
+    await flushMicrotasks();
+
+    expect(tokens).toEqual(['{"live"']);
+
+    controlled.enqueue('data: {"choices":[{"delta":{"content":":true}"}}]}\n');
+    controlled.enqueue('data: [DONE]\n');
+    controlled.close();
+
+    await expect(resultPromise).resolves.toMatchObject({
+      value: { live: true },
+    });
   });
 
   it('streams Anthropic text_delta events and splits usage across events', async () => {

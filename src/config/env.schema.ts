@@ -4,7 +4,7 @@ export const envSchema = z.object({
   DATABASE_URL: z.string().url('DATABASE_URL must be a valid URL'),
   SUPABASE_URL: z.string().url().optional(),
   AUTH_ALLOWED_PROVIDERS: z.string().optional().default('github'),
-  AGENT_PROVIDER: z.enum(['mock', 'llm']).optional().default('mock'),
+  AGENT_PROVIDER: z.enum(['mock', 'llm', 'simulation']).optional().default('mock'),
   // Eve migration — see docs/architecture/EVE_MIGRATION.md.
   // ORCHESTRATION_LLM_ENGINE selects how agent nodes generate: delegation to the Eve agent
   // service ('eve', canonical) or the in-process raw-fetch provider ('graph', fallback).
@@ -12,8 +12,12 @@ export const envSchema = z.object({
   // is unset/unreachable, so this is safe before the Eve service is deployed.
   ORCHESTRATION_LLM_ENGINE: z.enum(['graph', 'eve']).optional().default('eve'),
   ORCHESTRATION_DISPATCHER_MODE: z.enum(['in-process']).optional().default('in-process'),
-  EVE_SERVICE_URL: z.string().url().optional(),
+  EVE_SERVICE_URL: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.string().url().optional(),
+  ),
   EVE_SERVICE_TOKEN: z.string().optional().default(''),
+  EVE_MODEL: z.string().optional().default('openai/gpt-5.4-mini'),
   LLM_PROVIDER: z.enum(['openrouter', 'openai', 'anthropic', 'opencode', 'gemini']).optional().default('openrouter'),
   LLM_REQUEST_TIMEOUT_MS: z
     .string()

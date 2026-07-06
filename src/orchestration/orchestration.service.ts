@@ -43,9 +43,15 @@ import {
   GraphLlmProvider,
   GraphLlmProviderVerification,
 } from './providers/graph-llm.provider';
+import { AgentLlmRouter } from './providers/agent-llm.router';
 import { OrchestrationEmitter } from './streaming/orchestration-emitter.service';
+import { StreamEmitter } from './streaming/stream-emitter.service';
 import { OrchestrationRunDispatcher } from './run-dispatcher.service';
-import { AgentProviderMode, AgentProviderStatus } from './providers/agent-provider.types';
+import {
+  AgentLlmEngineStatus,
+  AgentProviderMode,
+  AgentProviderStatus,
+} from './providers/agent-provider.types';
 import {
   agentArtifactContractFor,
   ORCHESTRATION_CONTRACT_VERSION,
@@ -124,8 +130,25 @@ export interface SupervisorRecoveryResult {
   error: string | null;
 }
 
+export interface EveLlmProviderVerification {
+  ok: boolean;
+  provider: 'eve';
+  model: string;
+  fallbackModel: null;
+  baseUrl: string;
+  reason: string | null;
+  usage: null;
+  engineStatus: AgentLlmEngineStatus;
+}
+
 export type OrchestrationProviderStatus = AgentProviderStatus & {
   githubDelivery: GithubDeliveryStatus;
+  llmEngine: AgentLlmEngineStatus;
+  requestedEngine: AgentLlmEngineStatus['requestedEngine'];
+  activeEngine: AgentLlmEngineStatus['activeEngine'];
+  fallbackReason: string | null;
+  eveServiceConfigured: boolean;
+  engineModel: string;
 };
 
 const MOCK_NODE = {
@@ -194,18 +217,34 @@ export class OrchestrationService implements OnModuleInit {
     private readonly notifications: NotificationsService,
     private readonly github: GithubService,
     private readonly sequencer: OrchestrationSequencer,
+    @Optional() private readonly agentLlmRouter: AgentLlmRouter | null,
     @Optional() @Inject(GraphLlmProvider)
     private readonly graphLlmProvider: GraphLlmProvider | null,
     // Optional: WebSocket gateway may not be present in all environments
     @Optional() private readonly gateway: DevFlowGateway | null,
     @Optional() private readonly emitter: OrchestrationEmitter | null,
+    @Optional() private readonly streamEmitter: StreamEmitter | null,
     @Optional()
     private readonly runDispatcher: OrchestrationRunDispatcher = new OrchestrationRunDispatcher(),
   ) {}
 
   getProviderStatus(): OrchestrationProviderStatus {
+    const llmEngine = this.agentLlmRouter?.getStatus() ?? {
+      requestedEngine: process.env.ORCHESTRATION_LLM_ENGINE === 'graph' ? 'graph' : 'eve',
+      activeEngine: 'graph',
+      fallbackReason: 'Agent LLM router is not available; using graph-provider status only.',
+      eveServiceConfigured: false,
+      model: this.graphLlmProvider?.model() ?? 'unknown',
+    } satisfies AgentLlmEngineStatus;
+
     return {
       ...this.agentProviderRegistry.getStatus(),
+      llmEngine,
+      requestedEngine: llmEngine.requestedEngine,
+      activeEngine: llmEngine.activeEngine,
+      fallbackReason: llmEngine.fallbackReason,
+      eveServiceConfigured: llmEngine.eveServiceConfigured,
+      engineModel: llmEngine.model,
       githubDelivery: this.github.getDeliveryStatus(),
     };
   }
@@ -214,7 +253,21 @@ export class OrchestrationService implements OnModuleInit {
     return this.github.verifyDeliveryAccess();
   }
 
-  verifyLlmProviderAccess(): Promise<GraphLlmProviderVerification> {
+  async verifyLlmProviderAccess(): Promise<GraphLlmProviderVerification | EveLlmProviderVerification> {
+    const engineStatus = this.agentLlmRouter?.getStatus();
+    if (engineStatus?.activeEngine === 'eve') {
+      return {
+        ok: true,
+        provider: 'eve',
+        model: engineStatus.model,
+        fallbackModel: null,
+        baseUrl: process.env.EVE_SERVICE_URL ?? '',
+        reason: null,
+        usage: null,
+        engineStatus,
+      };
+    }
+
     if (!this.graphLlmProvider) {
       throw new Error('Graph LLM provider is not available in this runtime.');
     }
@@ -1034,9 +1087,35 @@ Rough idea: ${input.brief}`;
     });
 
     this.gateway?.emitStatusUpdate(projectId, 'GENERATING_CODE', nodeName);
+    this.streamEmitter?.progress(projectId, nodeName, executionRunId, 12, 'Preparing work-order prompt');
+    this.streamEmitter?.emit(
+      projectId,
+      nodeName,
+      executionRunId,
+      'decision',
+      `Dispatching ${workOrder.agentType.toLowerCase()} agent for ${workOrder.title}.`,
+      { workOrderId, attempt, agentType: workOrder.agentType },
+    );
 
     try {
       const completedAt = new Date();
+      let streamedTokens = 0;
+      const onToken = this.streamEmitter
+        ? (delta: string) => {
+            streamedTokens += 1;
+            if (streamedTokens === 1) {
+              this.streamEmitter?.progress(projectId, nodeName, executionRunId, 35, 'Streaming model output');
+            }
+            this.streamEmitter?.emit(
+              projectId,
+              nodeName,
+              executionRunId,
+              'token',
+              delta,
+              { workOrderId, agentType: workOrder.agentType },
+            );
+          }
+        : undefined;
       const agentContext = {
         project: workOrder.project,
         workOrder: {
@@ -1049,8 +1128,19 @@ Rough idea: ${input.brief}`;
         task: workOrder.task,
         sourceArtifact: workOrder.artifact,
         executionRunId,
+        ...(onToken ? { onToken } : {}),
       };
       const output = await provider.generateWorkOrderOutput(agentContext);
+      this.streamEmitter?.flushAll(projectId);
+      this.streamEmitter?.progress(projectId, nodeName, executionRunId, 76, 'Validating generated artifact');
+      this.streamEmitter?.emit(
+        projectId,
+        nodeName,
+        executionRunId,
+        'decision',
+        `Generated ${output.displayName}; validating contract and required signals.`,
+        { workOrderId, filePath: output.filePath, language: output.language },
+      );
       const validation = this.outputValidation.validate(output, agentContext);
 
       if (!validation.valid) {
@@ -1193,11 +1283,30 @@ Rough idea: ${input.brief}`;
         ]);
       }
 
+      this.streamEmitter?.progress(projectId, nodeName, executionRunId, 100, 'Artifact ready for review');
+      this.streamEmitter?.emit(
+        projectId,
+        nodeName,
+        executionRunId,
+        'decision',
+        `Artifact saved: ${artifact.filePath}.`,
+        { workOrderId, artifactId: artifact.id },
+      );
+      this.streamEmitter?.flushAll(projectId);
       this.gateway?.emitStatusUpdate(projectId, 'AWAITING_GATE_2', nodeName);
       return { executionRunId, artifactId: artifact.id };
     } catch (error) {
       const failedAt = new Date();
       const message = error instanceof Error ? error.message : String(error);
+      this.streamEmitter?.emit(
+        projectId,
+        nodeName,
+        executionRunId,
+        'error',
+        message,
+        { workOrderId, attempt, agentType: workOrder.agentType },
+      );
+      this.streamEmitter?.flushAll(projectId);
       await this.prisma.workOrder.update({
         where: { id: workOrderId },
         data: {

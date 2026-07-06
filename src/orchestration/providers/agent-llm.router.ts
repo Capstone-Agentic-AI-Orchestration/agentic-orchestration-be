@@ -1,6 +1,7 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
 import { GraphLlmProvider, type GraphLlmJsonOptions, type GraphLlmJsonResult } from './graph-llm.provider';
 import { EveLlmProvider } from './eve-llm.provider';
+import type { AgentLlmEngine, AgentLlmEngineStatus } from './agent-provider.types';
 
 /**
  * Eve migration — the LLM access point every agent node injects.
@@ -24,9 +25,33 @@ export class AgentLlmRouter {
     @Optional() private readonly eve: EveLlmProvider | null,
   ) {}
 
+  requestedEngine(): AgentLlmEngine {
+    return process.env.ORCHESTRATION_LLM_ENGINE === 'graph' ? 'graph' : 'eve';
+  }
+
+  getStatus(): AgentLlmEngineStatus {
+    const requestedEngine = this.requestedEngine();
+    const eveServiceConfigured = Boolean(this.eve?.isConfigured());
+    const fallbackReason =
+      requestedEngine === 'eve' && !eveServiceConfigured
+        ? 'EVE_SERVICE_URL is not configured; using the in-process graph provider.'
+        : null;
+
+    return {
+      requestedEngine,
+      activeEngine: requestedEngine === 'eve' && eveServiceConfigured ? 'eve' : 'graph',
+      fallbackReason,
+      eveServiceConfigured,
+      model:
+        requestedEngine === 'eve' && eveServiceConfigured
+          ? `eve:${process.env.EVE_MODEL ?? 'ai-gateway'}`
+          : this.graph.model(),
+    };
+  }
+
   /** Whether this turn should be delegated to the Eve service. */
   private useEve(): boolean {
-    if (process.env.ORCHESTRATION_LLM_ENGINE !== 'eve') return false;
+    if (this.requestedEngine() !== 'eve') return false;
     if (!this.eve?.isConfigured()) {
       this.logger.warn(
         'ORCHESTRATION_LLM_ENGINE=eve but EVE_SERVICE_URL is not set — falling back to the in-process graph provider.',
@@ -38,7 +63,7 @@ export class AgentLlmRouter {
 
   /** Label of the active backend/model, used for log lines. */
   model(): string {
-    return this.useEve() ? `eve:${process.env.EVE_MODEL ?? 'ai-gateway'}` : this.graph.model();
+    return this.getStatus().model;
   }
 
   /** Delegates JSON generation to the selected engine. Identical signature on both providers. */

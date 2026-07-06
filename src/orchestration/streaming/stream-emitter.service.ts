@@ -25,8 +25,8 @@ export class StreamEmitter {
   private readonly BATCH_WINDOW_MS = 50;
 
   constructor(
-    @Optional() private readonly gateway: DevFlowGateway | null,
-    @Optional() private readonly emitter: OrchestrationEmitter | null,
+    @Optional() private readonly gateway: DevFlowGateway | null = null,
+    @Optional() private readonly emitter: OrchestrationEmitter | null = null,
   ) {}
 
   /**

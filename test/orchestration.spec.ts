@@ -286,9 +286,11 @@ describe('OrchestrationService', () => {
       notifications as unknown as NotificationsService,
       github as unknown as GithubService,
       sequencerStub as unknown as OrchestrationSequencer,
+      null, // agentLlmRouter
       null, // graphLlmProvider
       null, // gateway
       null, // emitter
+      null, // streamEmitter
       runDispatcher as unknown as OrchestrationRunDispatcher,
     );
 

@@ -109,6 +109,7 @@ export class LlmAgentProvider extends BaseLlmProvider implements WorkOrderAgentP
         systemPrompt,
         userPrompt,
         expectedShape: 'object',
+        onToken: context.onToken,
       },
       (content) => this.parseOutputToObject(content),
     );
