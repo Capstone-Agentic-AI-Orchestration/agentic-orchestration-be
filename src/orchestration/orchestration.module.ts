@@ -21,6 +21,7 @@ import { DirectLlmProvider } from './providers/direct-llm.provider';
 // that replaced the LangGraph runtime. See docs/architecture/EVE_MIGRATION.md.
 import { EveLlmProvider } from './providers/eve-llm.provider';
 import { AgentLlmRouter } from './providers/agent-llm.router';
+import { ProviderInvocationService } from './providers/provider-invocation.service';
 import { OrchestrationSequencer } from './graph/orchestration-sequencer';
 import { LlmAgentProvider } from './providers/llm-agent.provider';
 import { MockAgentProvider } from './providers/mock-agent.provider';
@@ -58,6 +59,7 @@ import { OutputValidationService } from './output-validation/output-validation.s
     DirectLlmProvider,
     EveLlmProvider,
     AgentLlmRouter,
+    ProviderInvocationService,
     OrchestrationSequencer,
     LlmAgentProvider,
     MockAgentProvider,

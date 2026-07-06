@@ -38,6 +38,8 @@ model Project {
   kickoff     ProjectKickoff?
   deliveryReview ProjectDeliveryReview?
   orchestrationRuns OrchestrationRun[]
+  orchestrationJobs OrchestrationJob[]
+  providerInvocations ProviderInvocation[]
   workOrderExecutions WorkOrderExecution[]
   scheduleEvents ScheduleEvent[]
 
@@ -708,9 +710,39 @@ enum WorkOrderPriority {
 
 enum OrchestrationRunStatus {
   RUNNING
+  PAUSED
   SUCCEEDED
   FAILED
   CANCELLED
+
+  @@schema("orchestration")
+}
+
+enum OrchestrationJobKind {
+  START_RUN
+  RESUME_GATE_1
+  RESUME_GATE_2
+  CONTROL
+  SUPERVISOR_RECOVERY
+  MOCK_WORK_ORDERS
+
+  @@schema("orchestration")
+}
+
+enum OrchestrationJobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+
+  @@schema("orchestration")
+}
+
+enum ProviderInvocationStatus {
+  STARTED
+  SUCCEEDED
+  FAILED
 
   @@schema("orchestration")
 }
@@ -792,6 +824,7 @@ model OrchestrationRun {
   leaseOwner      String?
   leaseAcquiredAt DateTime?
   leaseExpiresAt  DateTime?
+  lastHeartbeatAt DateTime?
   readyWorkOrders Int                     @default(0)
   completedWorkOrders Int                 @default(0)
   failedWorkOrders Int                    @default(0)
@@ -801,13 +834,79 @@ model OrchestrationRun {
   createdAt       DateTime                @default(now())
   updatedAt       DateTime                @updatedAt
   executions      WorkOrderExecution[]
+  jobs            OrchestrationJob[]
+  providerInvocations ProviderInvocation[]
 
   @@index([projectId, createdAt])
   @@index([projectId, status])
   @@index([actorId])
   @@index([status, dispatchQueuedAt])
   @@index([leaseExpiresAt])
+  @@index([lastHeartbeatAt])
   @@map("orchestration_runs")
+  @@schema("orchestration")
+}
+
+model OrchestrationJob {
+  id                 String                 @id @default(cuid())
+  projectId          String
+  project            Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  orchestrationRunId String?
+  orchestrationRun   OrchestrationRun?      @relation(fields: [orchestrationRunId], references: [id], onDelete: SetNull)
+  runId              String
+  kind               OrchestrationJobKind
+  status             OrchestrationJobStatus @default(PENDING)
+  payload            Json                   @default("{}")
+  attempt            Int                    @default(0)
+  maxAttempts        Int                    @default(3)
+  availableAt        DateTime               @default(now())
+  lockedBy           String?
+  lockedUntil        DateTime?
+  lastError          String?                @db.Text
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+
+  @@index([projectId, createdAt])
+  @@index([runId])
+  @@index([status, availableAt])
+  @@index([lockedUntil])
+  @@map("orchestration_jobs")
+  @@schema("orchestration")
+}
+
+model ProviderInvocation {
+  id                 String                   @id @default(cuid())
+  projectId          String?
+  project            Project?                 @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  orchestrationRunId String?
+  orchestrationRun   OrchestrationRun?        @relation(fields: [orchestrationRunId], references: [id], onDelete: SetNull)
+  runId              String?
+  workOrderId        String?
+  nodeId             String?
+  agent              String
+  attempt            Int?
+  engine             String
+  provider           String?
+  model              String?
+  requestId          String                   @unique
+  eveSessionId       String?
+  continuationToken  String?
+  status             ProviderInvocationStatus @default(STARTED)
+  error              String?                  @db.Text
+  inputTokens        Int?
+  outputTokens       Int?
+  startedAt          DateTime                 @default(now())
+  completedAt        DateTime?
+  durationMs         Int?
+  metadata           Json                     @default("{}")
+
+  @@index([projectId, startedAt])
+  @@index([runId])
+  @@index([agent, startedAt])
+  @@index([engine, status])
+  @@map("provider_invocations")
   @@schema("orchestration")
 }
 

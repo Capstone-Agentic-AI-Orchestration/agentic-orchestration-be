@@ -168,6 +168,12 @@ export class FrontendAgentNode {
       }>>({
         agentName: resolveModelForNode('frontend_agent', 'frontend_agent'),
         subagent: 'frontend',
+        correlation: {
+          projectId,
+          runId,
+          nodeId: 'frontend_agent',
+          agent: 'frontend',
+        },
         onToken: (delta) => this.streamEmitter.emit(projectId, 'frontend_agent', runId ?? '', 'token', delta),
         systemPrompt,
         userPrompt: `Generate frontend files for this project:

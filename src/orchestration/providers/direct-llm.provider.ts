@@ -22,14 +22,32 @@ export interface DirectLlmJsonOptions {
    * NODE_PROVIDER_OVERRIDES).
    */
   subagent?: string;
+  correlation?: DirectLlmCorrelation;
   /** Forwarded to the provider: receives each token delta in streaming mode. */
   onToken?: (delta: string) => void;
+}
+
+export interface DirectLlmCorrelation {
+  projectId?: string;
+  runId?: string;
+  workOrderId?: string;
+  nodeId?: string;
+  agent?: string;
+  attempt?: number;
+  requestId?: string;
 }
 
 export interface DirectLlmJsonResult<T> {
   value: T;
   model: string;
   usage: LlmUsage;
+  providerMetadata?: DirectLlmProviderMetadata;
+}
+
+export interface DirectLlmProviderMetadata {
+  requestId?: string;
+  eveSessionId?: string;
+  continuationToken?: string;
 }
 
 export interface DirectLlmProviderVerification {

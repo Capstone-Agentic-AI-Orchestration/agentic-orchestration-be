@@ -9,10 +9,10 @@ export const envSchema = z.object({
   // ORCHESTRATION_LLM_ENGINE selects how agent nodes generate: delegation to the Eve agent
   // service ('eve', canonical) or the in-process raw-fetch provider ('direct').
   // 'graph' remains a deprecated alias for 'direct' for one compatibility window.
-  // 'eve' is the default; AgentLlmRouter automatically falls back to 'direct' when
-  // EVE_SERVICE_URL is unset/unreachable, so this is safe before the Eve service is deployed.
+  // 'eve' is the default; AgentLlmRouter falls back to 'direct' only when Eve is not configured
+  // or has failed readiness before a run starts.
   ORCHESTRATION_LLM_ENGINE: z.enum(['direct', 'graph', 'eve']).optional().default('eve'),
-  ORCHESTRATION_DISPATCHER_MODE: z.enum(['in-process']).optional().default('in-process'),
+  ORCHESTRATION_DISPATCHER_MODE: z.enum(['db-lease', 'in-process']).optional().default('db-lease'),
   EVE_SERVICE_URL: z.preprocess(
     (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
     z.string().url().optional(),
@@ -111,6 +111,41 @@ export const envSchema = z.object({
     .default('5')
     .transform((v) => parseInt(v, 10))
     .pipe(z.number().int().positive()),
+}).superRefine((env, ctx) => {
+  if (env.NODE_ENV !== 'production') return;
+
+  if (!env.SUPABASE_URL) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['SUPABASE_URL'],
+      message: 'SUPABASE_URL is required in production.',
+    });
+  }
+
+  if (!env.CORS_ORIGIN || env.CORS_ORIGIN.trim() === '*') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['CORS_ORIGIN'],
+      message: 'CORS_ORIGIN must be explicit in production.',
+    });
+  }
+
+  if (env.ORCHESTRATION_LLM_ENGINE === 'eve') {
+    if (!env.EVE_SERVICE_URL) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['EVE_SERVICE_URL'],
+        message: 'EVE_SERVICE_URL is required in production when ORCHESTRATION_LLM_ENGINE=eve.',
+      });
+    }
+    if (!env.EVE_SERVICE_TOKEN?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['EVE_SERVICE_TOKEN'],
+        message: 'EVE_SERVICE_TOKEN is required in production when ORCHESTRATION_LLM_ENGINE=eve.',
+      });
+    }
+  }
 });
 
 export type EnvSchema = z.infer<typeof envSchema>;

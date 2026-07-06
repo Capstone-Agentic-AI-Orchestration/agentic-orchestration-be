@@ -58,6 +58,9 @@ import {
 } from './providers/agent-contracts';
 import {
   ArtifactValidationStatus,
+  OrchestrationJob,
+  OrchestrationJobKind,
+  OrchestrationJobStatus,
   NotificationType,
   OrchestrationRunStatus,
   OrchestrationRunTrigger,
@@ -409,7 +412,46 @@ Rough idea: ${input.brief}`;
       this.githubCommit,
     );
     this.simulationImpls = buildSimulationNodeImpls(this.emitter);
+    this.runDispatcher.registerExecutor((job) => this.executeOrchestrationJob(job));
+    this.runDispatcher.drainDueJobs();
     this.logger.log('Orchestration pipeline initialized');
+  }
+
+  private async executeOrchestrationJob(job: OrchestrationJob): Promise<void> {
+    const payload = this.jobPayload(job);
+    if (job.kind === OrchestrationJobKind.MOCK_WORK_ORDERS) {
+      await this.runMockWorkOrders(payload.state as MockWorkOrderState);
+      return;
+    }
+
+    if (
+      job.kind === OrchestrationJobKind.START_RUN ||
+      job.kind === OrchestrationJobKind.RESUME_GATE_1 ||
+      job.kind === OrchestrationJobKind.RESUME_GATE_2 ||
+      job.kind === OrchestrationJobKind.CONTROL ||
+      job.kind === OrchestrationJobKind.SUPERVISOR_RECOVERY
+    ) {
+      const state = payload.state as DevFlowStateType | undefined;
+      if (!state) {
+        throw new Error(`Orchestration job ${job.id} has no rehydratable state payload.`);
+      }
+      const fromPhase = this.safeRunPhase(payload.fromPhase);
+      const impls = payload.impls === 'simulation' ? this.simulationImpls : this.liveImpls;
+      await this.driveRun(job.projectId, job.runId, state, fromPhase, impls);
+      return;
+    }
+
+    throw new Error(`Unsupported orchestration job kind: ${job.kind}`);
+  }
+
+  private jobPayload(job: OrchestrationJob): Record<string, unknown> {
+    return job.payload && typeof job.payload === 'object' && !Array.isArray(job.payload)
+      ? job.payload as Record<string, unknown>
+      : {};
+  }
+
+  private safeRunPhase(value: unknown): RunPhase {
+    return value === 'B' || value === 'C' ? value : 'A';
   }
 
   /**
@@ -432,6 +474,10 @@ Rough idea: ${input.brief}`;
     this.activeRuns.set(runId, controller);
 
     try {
+      await this.prisma.orchestrationRun.updateMany({
+        where: { runId, status: { in: [OrchestrationRunStatus.RUNNING, OrchestrationRunStatus.PAUSED] } },
+        data: { status: OrchestrationRunStatus.RUNNING, lastHeartbeatAt: new Date() },
+      });
       const outcome = await this.sequencer.run({
         impls,
         projectId,
@@ -445,7 +491,7 @@ Rough idea: ${input.brief}`;
         await this.prisma.orchestrationRun
           .updateMany({
             where: { runId, status: OrchestrationRunStatus.RUNNING },
-            data: { status: OrchestrationRunStatus.SUCCEEDED, completedAt: new Date() },
+            data: { status: OrchestrationRunStatus.SUCCEEDED, completedAt: new Date(), lastHeartbeatAt: new Date() },
           })
           .catch(() => undefined);
       }
@@ -542,6 +588,19 @@ Rough idea: ${input.brief}`;
         label: 'mock_work_orders',
         projectId,
         runId,
+        kind: OrchestrationJobKind.MOCK_WORK_ORDERS,
+        payload: {
+          state: {
+            projectId,
+            runId,
+            trigger,
+            actorId: actorId ?? null,
+            readyWorkOrderIds: [],
+            completedArtifactIds: [],
+            failedWorkOrderIds: [],
+            error: null,
+          },
+        } as unknown as Prisma.InputJsonValue,
         task: () => this.runMockWorkOrders({
           projectId,
           runId,
@@ -583,7 +642,7 @@ Rough idea: ${input.brief}`;
         gate1Approved: true,
         gate2Approved: true,
       });
-      this.dispatchDriveRun(projectId, runId, simulationState, 'A', this.simulationImpls, 'simulation_run');
+      this.dispatchDriveRun(projectId, runId, simulationState, 'A', 'simulation', OrchestrationJobKind.START_RUN, 'simulation_run');
       this.gateway?.emitStatusUpdate(projectId, 'PARSING_REQUIREMENTS', 'parse_requirements');
       this.emitter?.runStatus(
         projectId,
@@ -604,7 +663,7 @@ Rough idea: ${input.brief}`;
 
     // Drive the pipeline via the dispatcher. Errors are handled inside driveRun
     // (run.error + markRunFailed); the dispatcher is a final safety net.
-    this.dispatchDriveRun(projectId, runId, initialState, 'A', this.liveImpls, 'live_run');
+    this.dispatchDriveRun(projectId, runId, initialState, 'A', 'live', OrchestrationJobKind.START_RUN, 'live_run');
 
     // Notify subscribers that the graph has started and is parsing requirements.
     // Legacy event kept for back-compat; runGraph also emits typed run.status.
@@ -723,7 +782,7 @@ Rough idea: ${input.brief}`;
     this.emitter?.runStatus(projectId, runId, ProjectStatus.GENERATING_CODE, 'gate_1_check');
 
     // Resume at phase B (code generation) with gate 1 now approved.
-    this.dispatchDriveRun(projectId, runId, resumedState, 'B', this.liveImpls, 'resume_gate_1');
+    this.dispatchDriveRun(projectId, runId, resumedState, 'B', 'live', OrchestrationJobKind.RESUME_GATE_1, 'resume_gate_1');
   }
 
   /**
@@ -875,7 +934,7 @@ Rough idea: ${input.brief}`;
     this.emitter?.runStatus(projectId, runId, ProjectStatus.COMMITTING, 'gate_2_check');
 
     // Resume at phase C (commit → delivered) with gate 2 now approved.
-    this.dispatchDriveRun(projectId, runId, resumedState, 'C', this.liveImpls, 'resume_gate_2');
+    this.dispatchDriveRun(projectId, runId, resumedState, 'C', 'live', OrchestrationJobKind.RESUME_GATE_2, 'resume_gate_2');
   }
 
   private dispatchDriveRun(
@@ -883,14 +942,23 @@ Rough idea: ${input.brief}`;
     runId: string,
     state: DevFlowStateType,
     fromPhase: RunPhase,
-    impls: DevFlowNodeImpls,
+    impls: 'live' | 'simulation',
+    kind: OrchestrationJobKind,
     label: string,
   ): void {
     this.runDispatcher.dispatch({
       label,
       projectId,
       runId,
-      task: () => this.driveRun(projectId, runId, state, fromPhase, impls),
+      kind,
+      payload: { state, fromPhase, impls } as unknown as Prisma.InputJsonValue,
+      task: () => this.driveRun(
+        projectId,
+        runId,
+        state,
+        fromPhase,
+        impls === 'simulation' ? this.simulationImpls : this.liveImpls,
+      ),
       onError: (error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         return this.markRunFailed(runId, label, message);
@@ -1888,6 +1956,10 @@ Rough idea: ${input.brief}`;
         where: { projectId, status: WorkOrderStatus.DISPATCHED },
         data: { status: WorkOrderStatus.CANCELLED, executionCompletedAt: now, lastEventAt: now },
       }),
+      this.prisma.orchestrationJob.updateMany({
+        where: { runId, status: { in: [OrchestrationJobStatus.PENDING, OrchestrationJobStatus.RUNNING] } },
+        data: { status: OrchestrationJobStatus.CANCELLED, completedAt: now, lockedBy: null, lockedUntil: null },
+      }),
     ]);
 
     this.emitter?.runStatus(projectId, runId, 'CANCELLED', 'cancelled');
@@ -1910,6 +1982,17 @@ Rough idea: ${input.brief}`;
     // re-enters from the persisted checkpoint. driveRun treats the abort as non-fatal.
     this.activeRuns.get(runId)?.abort();
     this.activeRuns.delete(runId);
+
+    await Promise.allSettled([
+      this.prisma.orchestrationRun.updateMany({
+        where: { runId, status: OrchestrationRunStatus.RUNNING },
+        data: { status: OrchestrationRunStatus.PAUSED, currentNode: 'paused', lastHeartbeatAt: new Date() },
+      }),
+      this.prisma.orchestrationJob.updateMany({
+        where: { runId, status: OrchestrationJobStatus.PENDING },
+        data: { availableAt: new Date(Date.now() + 60_000), lastError: 'Paused by operator' },
+      }),
+    ]);
 
     this.emitter?.runStatus(projectId, runId, 'PAUSED', 'paused');
     return { accepted: true, action: 'pause', status: 'PAUSED' };
@@ -1934,7 +2017,19 @@ Rough idea: ${input.brief}`;
 
     this.pausedRuns.delete(projectId);
     this.emitter?.runStatus(projectId, runId, ProjectStatus.GENERATING_CODE, 'resumed');
-    void this.driveRun(projectId, runId, state, OrchestrationSequencer.phaseFromState(state), this.liveImpls);
+    await this.prisma.orchestrationRun.updateMany({
+      where: { runId, status: OrchestrationRunStatus.PAUSED },
+      data: { status: OrchestrationRunStatus.RUNNING, error: null, completedAt: null },
+    });
+    this.dispatchDriveRun(
+      projectId,
+      runId,
+      state,
+      OrchestrationSequencer.phaseFromState(state),
+      'live',
+      OrchestrationJobKind.CONTROL,
+      'control_resume',
+    );
     return { accepted: true, action: 'resume', status: 'RUNNING' };
   }
 
@@ -1963,7 +2058,15 @@ Rough idea: ${input.brief}`;
       ProjectStatus.GENERATING_CODE,
       nodeId ?? 'retry',
     );
-    void this.driveRun(projectId, runId, resumed, OrchestrationSequencer.phaseFromState(resumed), this.liveImpls);
+    this.dispatchDriveRun(
+      projectId,
+      runId,
+      resumed,
+      OrchestrationSequencer.phaseFromState(resumed),
+      'live',
+      OrchestrationJobKind.CONTROL,
+      'control_retry_node',
+    );
     return { accepted: true, action: 'retry_node', status: 'RUNNING' };
   }
 
@@ -1986,7 +2089,15 @@ Rough idea: ${input.brief}`;
     this.pausedRuns.delete(projectId);
     this.emitter?.nodeLifecycle(projectId, runId, nodeId, 'skipped');
     this.emitter?.runStatus(projectId, runId, ProjectStatus.GENERATING_CODE, nodeId);
-    void this.driveRun(projectId, runId, resumed, OrchestrationSequencer.phaseFromState(resumed), this.liveImpls);
+    this.dispatchDriveRun(
+      projectId,
+      runId,
+      resumed,
+      OrchestrationSequencer.phaseFromState(resumed),
+      'live',
+      OrchestrationJobKind.CONTROL,
+      'control_skip_node',
+    );
     return { accepted: true, action: 'skip_node', status: 'RUNNING' };
   }
 

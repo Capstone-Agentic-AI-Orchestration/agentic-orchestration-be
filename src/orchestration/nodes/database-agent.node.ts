@@ -165,6 +165,12 @@ export class DatabaseAgentNode {
       }>>({
         agentName: resolveModelForNode('database_agent', 'database_agent'),
         subagent: 'database',
+        correlation: {
+          projectId,
+          runId,
+          nodeId: 'database_agent',
+          agent: 'database',
+        },
         onToken: (delta) => this.streamEmitter.emit(projectId, 'database_agent', runId ?? '', 'token', delta),
         systemPrompt,
         userPrompt: `Generate database files for this project:

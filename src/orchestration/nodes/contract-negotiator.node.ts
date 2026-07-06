@@ -136,6 +136,12 @@ export class ContractNegotiatorNode {
       const result = await this.llm.generateJson<Record<string, unknown>>({
         agentName: resolveModelForNode('negotiate_contract', 'contract_negotiator'),
         subagent: 'contract-negotiator',
+        correlation: {
+          projectId,
+          runId,
+          nodeId: NODE.NEGOTIATE_CONTRACT,
+          agent: 'contract-negotiator',
+        },
         onToken: (delta) => this.streamEmitter.emit(projectId, NODE.NEGOTIATE_CONTRACT, runId ?? '', 'token', delta),
         systemPrompt,
         userPrompt: `Create a complete project contract for the following:

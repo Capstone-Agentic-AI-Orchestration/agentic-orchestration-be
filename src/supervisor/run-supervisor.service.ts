@@ -181,7 +181,10 @@ export class RunSupervisorService {
         rb."retryCount",
         rb."maxRetries",
         rb."tokensConsumed",
-        rb."tokenBudget"
+        rb."tokenBudget",
+        latest_run."runId",
+        latest_run."lastHeartbeatAt",
+        latest_run."leaseExpiresAt"
       FROM projects."Project" p
       INNER JOIN orchestration.run_budgets rb ON rb."projectId" = p.id
       LEFT JOIN LATERAL (
@@ -189,6 +192,13 @@ export class RunSupervisorService {
         FROM orchestration.event_logs el
         WHERE el."projectId" = p.id
       ) last_event ON true
+      LEFT JOIN LATERAL (
+        SELECT r."runId", r."lastHeartbeatAt", r."leaseExpiresAt", r.status
+        FROM orchestration.orchestration_runs r
+        WHERE r."projectId" = p.id
+        ORDER BY r."createdAt" DESC
+        LIMIT 1
+      ) latest_run ON true
       WHERE p.status IN (
         CAST(${SUPERVISED_STATUSES[0]} AS projects."ProjectStatus"),
         CAST(${SUPERVISED_STATUSES[1]} AS projects."ProjectStatus"),
@@ -196,8 +206,22 @@ export class RunSupervisorService {
         CAST(${SUPERVISED_STATUSES[3]} AS projects."ProjectStatus")
       )
         AND (
-          last_event."lastEventAt" IS NULL
-          OR last_event."lastEventAt" < ${threshold}
+          latest_run.status IS NULL
+          OR latest_run.status <> CAST('PAUSED' AS orchestration."OrchestrationRunStatus")
+        )
+        AND (
+          (
+            latest_run."lastHeartbeatAt" IS NULL
+            OR latest_run."lastHeartbeatAt" < ${threshold}
+          )
+          AND (
+            last_event."lastEventAt" IS NULL
+            OR last_event."lastEventAt" < ${threshold}
+          )
+          AND (
+            latest_run."leaseExpiresAt" IS NULL
+            OR latest_run."leaseExpiresAt" < NOW()
+          )
         )
     `;
 
@@ -208,6 +232,9 @@ export class RunSupervisorService {
       maxRetries: Number(row.maxRetries),
       tokensConsumed: Number(row.tokensConsumed),
       tokenBudget: Number(row.tokenBudget),
+      runId: row.runId,
+      lastHeartbeatAt: row.lastHeartbeatAt,
+      leaseExpiresAt: row.leaseExpiresAt,
     }));
   }
 
@@ -385,6 +412,9 @@ interface StuckProjectRow {
   maxRetries: bigint | number;
   tokensConsumed: bigint | number;
   tokenBudget: bigint | number;
+  runId: string | null;
+  lastHeartbeatAt: Date | null;
+  leaseExpiresAt: Date | null;
 }
 
 interface StuckProject {
@@ -394,4 +424,7 @@ interface StuckProject {
   maxRetries: number;
   tokensConsumed: number;
   tokenBudget: number;
+  runId: string | null;
+  lastHeartbeatAt: Date | null;
+  leaseExpiresAt: Date | null;
 }

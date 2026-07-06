@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { withLlmRequest } from './llm-runtime';
 import type { JsonShape, LlmUsage } from './base-llm.provider';
 import type { DirectLlmJsonOptions, DirectLlmJsonResult } from './direct-llm.provider';
+import type { DirectLlmCorrelation } from './direct-llm.provider';
 
 /**
  * Eve delegation provider (Hybrid migration — see docs/architecture/EVE_MIGRATION.md §6.2).
@@ -30,10 +31,17 @@ export class EveLlmProvider {
     return (process.env.EVE_SERVICE_URL ?? '').replace(/\/$/, '');
   }
 
-  private headers(): Record<string, string> {
+  private headers(correlation?: DirectLlmCorrelation): Record<string, string> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     const token = process.env.EVE_SERVICE_TOKEN?.trim();
     if (token) headers['Authorization'] = `Bearer ${token}`;
+    const metadata = this.correlationMetadata(correlation);
+    if (metadata.requestId) headers['X-DevFlow-Request-Id'] = String(metadata.requestId);
+    if (metadata.projectId) headers['X-DevFlow-Project-Id'] = String(metadata.projectId);
+    if (metadata.runId) headers['X-DevFlow-Run-Id'] = String(metadata.runId);
+    if (metadata.workOrderId) headers['X-DevFlow-Work-Order-Id'] = String(metadata.workOrderId);
+    if (metadata.agent) headers['X-DevFlow-Agent'] = String(metadata.agent);
+    if (typeof metadata.attempt === 'number') headers['X-DevFlow-Attempt'] = String(metadata.attempt);
     return headers;
   }
 
@@ -55,7 +63,8 @@ export class EveLlmProvider {
     const subagent = this.subagentFor(options);
     const message = [options.systemPrompt, '', options.userPrompt].join('\n');
 
-    const content = await withLlmRequest((signal) => this.streamSession(subagent, message, options, signal));
+    const session = await withLlmRequest((signal) => this.streamSession(subagent, message, options, signal));
+    const content = session.content;
     if (!content?.trim()) {
       throw new Error(`Eve subagent '${subagent}' returned an empty response.`);
     }
@@ -67,6 +76,11 @@ export class EveLlmProvider {
       // Eve reports usage via its Agent Runs dashboard; per-turn token usage is not exposed on
       // the session stream, so we report zeros here. Telemetry lives in the Vercel dashboard.
       usage: { inputTokens: 0, outputTokens: 0 } satisfies LlmUsage,
+      providerMetadata: {
+        requestId: options.correlation?.requestId,
+        eveSessionId: session.sessionId,
+        continuationToken: session.continuationToken,
+      },
     };
   }
 
@@ -79,21 +93,27 @@ export class EveLlmProvider {
     message: string,
     options: DirectLlmJsonOptions,
     signal: AbortSignal,
-  ): Promise<string> {
-    const session = await this.createSession(subagent, message, signal);
-    return this.readSessionStream(subagent, session.sessionId, options, signal);
+  ): Promise<{ content: string; sessionId: string; continuationToken?: string }> {
+    const session = await this.createSession(subagent, message, options, signal);
+    const content = await this.readSessionStream(subagent, session.sessionId, options, signal);
+    return { content, sessionId: session.sessionId, continuationToken: session.continuationToken };
   }
 
   private async createSession(
     subagent: string,
     message: string,
+    options: DirectLlmJsonOptions,
     signal: AbortSignal,
   ): Promise<{ sessionId: string; continuationToken?: string }> {
     const response = await fetch(`${this.baseUrl()}/eve/v1/session`, {
       method: 'POST',
-      headers: this.headers(),
+      headers: this.headers(options.correlation),
       signal,
-      body: JSON.stringify({ agent: subagent, message }),
+      body: JSON.stringify({
+        agent: subagent,
+        message,
+        metadata: this.correlationMetadata({ ...options.correlation, agent: options.correlation?.agent ?? subagent }),
+      }),
     });
 
     if (!response.ok) {
@@ -122,7 +142,7 @@ export class EveLlmProvider {
   ): Promise<string> {
     const response = await fetch(`${this.baseUrl()}/eve/v1/session/${encodeURIComponent(sessionId)}/stream`, {
       method: 'GET',
-      headers: this.headers(),
+      headers: this.headers(options.correlation),
       signal,
     });
 
@@ -245,6 +265,31 @@ export class EveLlmProvider {
     return event.data && typeof event.data === 'object' && !Array.isArray(event.data)
       ? (event.data as Record<string, unknown>)
       : {};
+  }
+
+  private correlationMetadata(correlation?: DirectLlmCorrelation): Record<string, string | number> {
+    const metadata: Record<string, string | number> = {};
+    const requestId = this.safeHeaderValue(correlation?.requestId);
+    const projectId = this.safeHeaderValue(correlation?.projectId);
+    const runId = this.safeHeaderValue(correlation?.runId);
+    const workOrderId = this.safeHeaderValue(correlation?.workOrderId);
+    const agent = this.safeHeaderValue(correlation?.agent);
+    if (requestId) metadata.requestId = requestId;
+    if (projectId) metadata.projectId = projectId;
+    if (runId) metadata.runId = runId;
+    if (workOrderId) metadata.workOrderId = workOrderId;
+    if (agent) metadata.agent = agent;
+    if (typeof correlation?.attempt === 'number' && Number.isInteger(correlation.attempt) && correlation.attempt >= 0) {
+      metadata.attempt = correlation.attempt;
+    }
+    return metadata;
+  }
+
+  private safeHeaderValue(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    return trimmed.replace(/[^\w:./@-]/g, '_').slice(0, 128);
   }
 
   private parseJson<T>(content: string, expectedShape: JsonShape): T {

@@ -27,6 +27,7 @@ function makeService() {
       findUnique: vi.fn().mockResolvedValue({ status: 'RUNNING', checkpointState }),
     },
     workOrder: { updateMany: vi.fn().mockResolvedValue({}) },
+    orchestrationJob: { updateMany: vi.fn().mockResolvedValue({}) },
     runBudget: { update: vi.fn().mockResolvedValue({}) },
   };
 
@@ -38,6 +39,12 @@ function makeService() {
     runError: vi.fn(),
     nodeLifecycle: vi.fn(),
     nodeTelemetry: vi.fn(),
+  };
+
+  const runDispatcher = {
+    dispatch: vi.fn((options: { task?: () => Promise<unknown> }) => {
+      void options.task?.();
+    }),
   };
 
   // Positional constructor args: prisma(1), 15 unused node/service deps (2-16), sequencer(17),
@@ -52,9 +59,10 @@ function makeService() {
     null as never,
     emitter as never,
     null as never,
+    runDispatcher as never,
   );
 
-  return { service, prisma, sequencer, emitter };
+  return { service, prisma, sequencer, emitter, runDispatcher };
 }
 
 describe('OrchestrationService.control', () => {
@@ -75,6 +83,9 @@ describe('OrchestrationService.control', () => {
     expect(ctx.prisma.workOrder.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'CANCELLED' }) }),
     );
+    expect(ctx.prisma.orchestrationJob.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: 'CANCELLED' }) }),
+    );
     expect(ctx.emitter.runStatus).toHaveBeenCalled();
     expect(ctx.emitter.runError).toHaveBeenCalled();
   });
@@ -85,6 +96,7 @@ describe('OrchestrationService.control', () => {
 
     await ctx.service.control('proj-1', 'resume', {});
     expect(ctx.service.isManuallyHalted('proj-1')).toBe(false);
+    expect(ctx.runDispatcher.dispatch).toHaveBeenCalledWith(expect.objectContaining({ label: 'control_resume' }));
     expect(ctx.sequencer.run).toHaveBeenCalled();
   });
 
@@ -116,6 +128,7 @@ describe('OrchestrationService.control', () => {
     expect(ctx.emitter.nodeLifecycle).toHaveBeenCalledWith(
       'proj-1', 'run-1', 'database_agent', 'skipped',
     );
+    expect(ctx.runDispatcher.dispatch).toHaveBeenCalledWith(expect.objectContaining({ label: 'control_skip_node' }));
     expect(ctx.sequencer.run).toHaveBeenCalled();
   });
 });

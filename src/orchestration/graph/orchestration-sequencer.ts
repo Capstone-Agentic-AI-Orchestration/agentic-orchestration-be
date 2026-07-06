@@ -233,19 +233,18 @@ export class OrchestrationSequencer {
 
   /** Persists the run-state snapshot + current node, replacing the LangGraph checkpointer. */
   private async persist(runId: string, state: DevFlowStateType, currentNode: string): Promise<void> {
-    await this.prisma.orchestrationRun
-      .update({
-        where: { runId },
-        data: {
-          currentNode,
-          checkpointState: state as unknown as object,
-        },
-      })
-      .catch(() => undefined);
+    await this.prisma.orchestrationRun.update({
+      where: { runId },
+      data: {
+        currentNode,
+        checkpointState: state as unknown as object,
+        lastHeartbeatAt: new Date(),
+      },
+    });
   }
 
   private async setProjectStatus(projectId: string, status: ProjectStatus): Promise<void> {
-    await this.prisma.project.update({ where: { id: projectId }, data: { status } }).catch(() => undefined);
+    await this.prisma.project.update({ where: { id: projectId }, data: { status } });
   }
 
   private aborted(ctx: SequencerContext): boolean {
@@ -256,17 +255,16 @@ export class OrchestrationSequencer {
   private async markFailed(ctx: SequencerContext, reason: string): Promise<SequencerOutcome> {
     this.logger.warn(`[${ctx.projectId}] Marking run failed: ${reason}`);
     await this.setProjectStatus(ctx.projectId, ProjectStatus.FAILED);
-    await this.prisma.orchestrationRun
-      .updateMany({
-        where: { runId: ctx.runId },
-        data: {
-          status: OrchestrationRunStatus.FAILED,
-          currentNode: NODE.MARK_FAILED,
-          error: reason,
-          completedAt: new Date(),
-        },
-      })
-      .catch(() => undefined);
+    await this.prisma.orchestrationRun.updateMany({
+      where: { runId: ctx.runId },
+      data: {
+        status: OrchestrationRunStatus.FAILED,
+        currentNode: NODE.MARK_FAILED,
+        error: reason,
+        completedAt: new Date(),
+        lastHeartbeatAt: new Date(),
+      },
+    });
     this.emitter?.runError(ctx.projectId, ctx.runId, {
       code: /validation/i.test(reason) ? 'VALIDATION_FAILED' : 'NODE_FAILED',
       severity: 'permanent',

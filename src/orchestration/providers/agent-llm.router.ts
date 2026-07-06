@@ -2,6 +2,7 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 import { DirectLlmProvider, type DirectLlmJsonOptions, type DirectLlmJsonResult } from './direct-llm.provider';
 import { EveLlmProvider } from './eve-llm.provider';
 import type { AgentLlmEngine, AgentLlmEngineStatus } from './agent-provider.types';
+import { ProviderInvocationService } from './provider-invocation.service';
 
 /**
  * Eve migration — the LLM access point every agent node injects.
@@ -24,6 +25,7 @@ export class AgentLlmRouter {
   constructor(
     private readonly direct: DirectLlmProvider,
     @Optional() private readonly eve: EveLlmProvider | null,
+    @Optional() private readonly invocations: ProviderInvocationService | null = null,
   ) {}
 
   requestedEngine(): AgentLlmEngine {
@@ -70,10 +72,32 @@ export class AgentLlmRouter {
   }
 
   /** Delegates JSON generation to the selected engine. Identical signature on both providers. */
-  generateJson<T>(options: DirectLlmJsonOptions): Promise<DirectLlmJsonResult<T>> {
-    return this.useEve() && this.eve
-      ? this.eve.generateJson<T>(options)
-      : this.direct.generateJson<T>(options);
+  async generateJson<T>(options: DirectLlmJsonOptions): Promise<DirectLlmJsonResult<T>> {
+    const useEve = this.useEve() && this.eve;
+    const engine = useEve ? 'eve' : 'direct';
+    const provider = engine === 'eve' ? 'eve' : this.direct.providerName();
+    const requestId = this.invocations?.ensureRequestId(options.correlation) ?? options.correlation?.requestId;
+    const correlation = { ...options.correlation, requestId };
+    const agent = correlation.agent ?? options.subagent ?? options.agentName;
+    const invocation = await this.invocations?.start({
+      correlation,
+      agent,
+      engine,
+      provider,
+      model: engine === 'eve' ? this.getStatus().model : this.direct.model(),
+    }) ?? null;
+    const routedOptions = { ...options, correlation: { ...correlation, requestId: invocation?.requestId ?? requestId } };
+
+    try {
+      const result = useEve
+        ? await this.eve!.generateJson<T>(routedOptions)
+        : await this.direct.generateJson<T>(routedOptions);
+      await this.invocations?.succeed(invocation, result);
+      return result;
+    } catch (error) {
+      await this.invocations?.fail(invocation, error);
+      throw error;
+    }
   }
 
   private rawRequestedEngine(): 'eve' | 'direct' | 'graph' {

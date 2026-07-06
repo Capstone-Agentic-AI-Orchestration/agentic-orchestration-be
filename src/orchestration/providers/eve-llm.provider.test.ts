@@ -41,7 +41,7 @@ describe('EveLlmProvider', () => {
     process.env.EVE_SERVICE_TOKEN = 'secret';
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ sessionId: 'session-1' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ sessionId: 'session-1', continuationToken: 'continue-1' }), { status: 200 }))
       .mockResolvedValueOnce(
         streamResponse([
           ndjson({ type: 'message.appended', data: { turnId: 'turn-1', stepIndex: 0, messageDelta: '{"ok":' } }),
@@ -59,10 +59,23 @@ describe('EveLlmProvider', () => {
       systemPrompt: 'Return JSON.',
       userPrompt: '{}',
       onToken,
+      correlation: {
+        requestId: 'request-1',
+        projectId: 'project-1',
+        runId: 'run-1',
+        workOrderId: 'work-order-1',
+        agent: 'backend',
+        attempt: 2,
+      },
     });
 
     expect(result.value).toEqual({ ok: true });
     expect(result.model).toBe('eve:backend');
+    expect(result.providerMetadata).toEqual({
+      requestId: 'request-1',
+      eveSessionId: 'session-1',
+      continuationToken: 'continue-1',
+    });
     expect(onToken).toHaveBeenCalledWith('{"ok":');
     expect(onToken).toHaveBeenCalledWith('true}');
     expect(fetchMock).toHaveBeenNthCalledWith(
@@ -70,13 +83,35 @@ describe('EveLlmProvider', () => {
       'https://eve.example.test/eve/v1/session',
       expect.objectContaining({
         method: 'POST',
-        headers: expect.objectContaining({ Authorization: 'Bearer secret' }),
+        headers: expect.objectContaining({
+          Authorization: 'Bearer secret',
+          'X-DevFlow-Request-Id': 'request-1',
+          'X-DevFlow-Project-Id': 'project-1',
+          'X-DevFlow-Run-Id': 'run-1',
+          'X-DevFlow-Work-Order-Id': 'work-order-1',
+          'X-DevFlow-Agent': 'backend',
+          'X-DevFlow-Attempt': '2',
+        }),
       }),
     );
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
+      agent: 'backend',
+      metadata: {
+        requestId: 'request-1',
+        projectId: 'project-1',
+        runId: 'run-1',
+        workOrderId: 'work-order-1',
+        agent: 'backend',
+        attempt: 2,
+      },
+    });
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       'https://eve.example.test/eve/v1/session/session-1/stream',
-      expect.objectContaining({ method: 'GET' }),
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({ 'X-DevFlow-Request-Id': 'request-1' }),
+      }),
     );
   });
 

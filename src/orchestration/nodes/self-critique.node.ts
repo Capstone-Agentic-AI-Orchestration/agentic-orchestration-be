@@ -102,6 +102,12 @@ Review these artifacts against the acceptance criteria. Return your verdict as J
       }>({
         agentName: resolveModelForNode('self_critique', 'self_critique'),
         subagent: 'self-critique',
+        correlation: {
+          projectId,
+          runId,
+          nodeId: NODE.SELF_CRITIQUE,
+          agent: 'self-critique',
+        },
         systemPrompt: SELF_CRITIQUE_SYSTEM,
         userPrompt,
         expectedShape: 'object',

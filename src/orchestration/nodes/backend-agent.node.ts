@@ -169,6 +169,12 @@ export class BackendAgentNode {
       }>>({
         agentName: resolveModelForNode('backend_agent', 'backend_agent'),
         subagent: 'backend',
+        correlation: {
+          projectId,
+          runId,
+          nodeId: 'backend_agent',
+          agent: 'backend',
+        },
         onToken: (delta) => this.streamEmitter.emit(projectId, 'backend_agent', runId ?? '', 'token', delta),
         systemPrompt,
         userPrompt: `Generate NestJS backend files for this project:

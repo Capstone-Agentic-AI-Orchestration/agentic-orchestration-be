@@ -159,6 +159,12 @@ export class ArchitectureAgentNode {
       }>>({
         agentName: resolveModelForNode('architecture_agent', 'architecture_agent'),
         subagent: 'architecture',
+        correlation: {
+          projectId,
+          runId,
+          nodeId: 'architecture_agent',
+          agent: 'architecture',
+        },
         onToken: (delta) => this.streamEmitter.emit(projectId, 'architecture_agent', runId ?? '', 'token', delta),
         systemPrompt,
         userPrompt: `Generate architecture documentation for this project:
