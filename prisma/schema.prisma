@@ -783,11 +783,15 @@ model OrchestrationRun {
   currentNode     String?
   // Eve migration (Hybrid) — see docs/architecture/EVE_MIGRATION.md §6.4.
   // Serialized DevFlowState snapshot for the OrchestrationSequencer to persist run state and
-  // resume after a gate pause, replacing the LangGraph PostgresSaver checkpointer. Null while
-  // the legacy LangGraph engine (ORCHESTRATION_ENGINE=graph) owns durability.
+  // resume after a gate pause. Null until a run has produced a checkpointed state.
   checkpointState Json?
   error           String?                 @db.Text
   actorId         String?                 @db.Uuid
+  dispatchLabel   String?
+  dispatchQueuedAt DateTime?
+  leaseOwner      String?
+  leaseAcquiredAt DateTime?
+  leaseExpiresAt  DateTime?
   readyWorkOrders Int                     @default(0)
   completedWorkOrders Int                 @default(0)
   failedWorkOrders Int                    @default(0)
@@ -801,6 +805,8 @@ model OrchestrationRun {
   @@index([projectId, createdAt])
   @@index([projectId, status])
   @@index([actorId])
+  @@index([status, dispatchQueuedAt])
+  @@index([leaseExpiresAt])
   @@map("orchestration_runs")
   @@schema("orchestration")
 }

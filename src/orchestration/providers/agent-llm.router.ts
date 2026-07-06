@@ -1,51 +1,54 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
-import { GraphLlmProvider, type GraphLlmJsonOptions, type GraphLlmJsonResult } from './graph-llm.provider';
+import { DirectLlmProvider, type DirectLlmJsonOptions, type DirectLlmJsonResult } from './direct-llm.provider';
 import { EveLlmProvider } from './eve-llm.provider';
 import type { AgentLlmEngine, AgentLlmEngineStatus } from './agent-provider.types';
 
 /**
  * Eve migration — the LLM access point every agent node injects.
  *
- * Routes a generation turn to either the in-process provider ({@link GraphLlmProvider}, raw
+ * Routes a generation turn to either the in-process provider ({@link DirectLlmProvider}, raw
  * fetch with multi-provider fallback + JSON repair) or the external Eve agent service
  * ({@link EveLlmProvider}), selected by `ORCHESTRATION_LLM_ENGINE`. The two providers expose an
  * identical `generateJson` contract, so nodes are engine-agnostic — they call
  * `this.llm.generateJson(...)` and never know which backend served the turn.
  *
  * Safety: Eve is used only when `ORCHESTRATION_LLM_ENGINE=eve` AND the Eve service is configured
- * (EVE_SERVICE_URL). Otherwise it transparently falls back to the graph provider, so flipping the
+ * (EVE_SERVICE_URL). Otherwise it transparently falls back to the direct provider, so flipping the
  * flag without a deployed Eve service degrades gracefully instead of failing runs.
  */
 @Injectable()
 export class AgentLlmRouter {
   private readonly logger = new Logger(AgentLlmRouter.name);
+  private warnedGraphAlias = false;
 
   constructor(
-    private readonly graph: GraphLlmProvider,
+    private readonly direct: DirectLlmProvider,
     @Optional() private readonly eve: EveLlmProvider | null,
   ) {}
 
   requestedEngine(): AgentLlmEngine {
-    return process.env.ORCHESTRATION_LLM_ENGINE === 'graph' ? 'graph' : 'eve';
+    return this.rawRequestedEngine() === 'eve' ? 'eve' : 'direct';
   }
 
   getStatus(): AgentLlmEngineStatus {
     const requestedEngine = this.requestedEngine();
+    const deprecatedAlias = this.rawRequestedEngine() === 'graph';
     const eveServiceConfigured = Boolean(this.eve?.isConfigured());
-    const fallbackReason =
-      requestedEngine === 'eve' && !eveServiceConfigured
-        ? 'EVE_SERVICE_URL is not configured; using the in-process graph provider.'
+    const fallbackReason = requestedEngine === 'eve' && !eveServiceConfigured
+      ? 'EVE_SERVICE_URL is not configured; using the in-process direct provider.'
+      : deprecatedAlias
+        ? 'ORCHESTRATION_LLM_ENGINE=graph is deprecated; use direct.'
         : null;
 
     return {
       requestedEngine,
-      activeEngine: requestedEngine === 'eve' && eveServiceConfigured ? 'eve' : 'graph',
+      activeEngine: requestedEngine === 'eve' && eveServiceConfigured ? 'eve' : 'direct',
       fallbackReason,
       eveServiceConfigured,
       model:
         requestedEngine === 'eve' && eveServiceConfigured
           ? `eve:${process.env.EVE_MODEL ?? 'ai-gateway'}`
-          : this.graph.model(),
+          : this.direct.model(),
     };
   }
 
@@ -54,7 +57,7 @@ export class AgentLlmRouter {
     if (this.requestedEngine() !== 'eve') return false;
     if (!this.eve?.isConfigured()) {
       this.logger.warn(
-        'ORCHESTRATION_LLM_ENGINE=eve but EVE_SERVICE_URL is not set — falling back to the in-process graph provider.',
+        'ORCHESTRATION_LLM_ENGINE=eve but EVE_SERVICE_URL is not set — falling back to the in-process direct provider.',
       );
       return false;
     }
@@ -67,9 +70,22 @@ export class AgentLlmRouter {
   }
 
   /** Delegates JSON generation to the selected engine. Identical signature on both providers. */
-  generateJson<T>(options: GraphLlmJsonOptions): Promise<GraphLlmJsonResult<T>> {
+  generateJson<T>(options: DirectLlmJsonOptions): Promise<DirectLlmJsonResult<T>> {
     return this.useEve() && this.eve
       ? this.eve.generateJson<T>(options)
-      : this.graph.generateJson<T>(options);
+      : this.direct.generateJson<T>(options);
+  }
+
+  private rawRequestedEngine(): 'eve' | 'direct' | 'graph' {
+    const raw = process.env.ORCHESTRATION_LLM_ENGINE;
+    if (raw === 'eve' || raw === 'direct') return raw;
+    if (raw === 'graph') {
+      if (!this.warnedGraphAlias) {
+        this.warnedGraphAlias = true;
+        this.logger.warn('ORCHESTRATION_LLM_ENGINE=graph is deprecated; use direct.');
+      }
+      return 'graph';
+    }
+    return 'eve';
   }
 }

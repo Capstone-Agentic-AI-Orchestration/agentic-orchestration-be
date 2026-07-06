@@ -229,9 +229,9 @@ export const serviceBoundaries: ServiceBoundaryDefinition[] = [
   },
   {
     name: 'orchestration',
-    owns: ['orchestration_runs', 'work_order_executions', 'event_logs', 'run_budgets', 'agent_memories'],
+    owns: ['orchestration_runs', 'work_order_executions', 'event_logs', 'run_budgets', 'agent_memories', 'realtime orchestration gateway'],
     publishes: [],
-    dependsOn: ['project-delivery', 'notifications', 'admin'],
+    dependsOn: ['identity', 'project-delivery', 'notifications', 'admin'],
     extractionReadiness: 'internal-module',
   },
   {

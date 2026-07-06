@@ -1,7 +1,7 @@
 import { Prisma, WorkOrderAgentType, WorkOrderPriority } from '@prisma/client';
 
 export type AgentProviderMode = 'mock' | 'llm' | 'simulation';
-export type AgentLlmEngine = 'eve' | 'graph';
+export type AgentLlmEngine = 'eve' | 'direct';
 
 export interface WorkOrderAgentContext {
   project: {
@@ -56,6 +56,8 @@ export interface AgentProviderCapability {
   provider?: string;
   model?: string;
   fallbackModel?: string | null;
+  requestTimeoutMs?: number;
+  concurrencyLimit?: number;
 }
 
 export interface AgentProviderStatus {
@@ -68,6 +70,8 @@ export interface AgentProviderStatus {
   provider?: string;
   model?: string;
   fallbackModel?: string | null;
+  requestTimeoutMs?: number;
+  concurrencyLimit?: number;
   providers: AgentProviderCapability[];
 }
 

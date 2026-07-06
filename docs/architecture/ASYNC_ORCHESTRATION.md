@@ -34,7 +34,7 @@ BE writes Project.runId + OrchestrationRun(status=RUNNING)
 BE returns { accepted: true, runId }
 BE dispatcher starts run execution asynchronously
 BE sequencer loads memory/scaffolding context and calls provider layer
-Provider layer delegates to Eve when configured, otherwise graph fallback
+Provider layer delegates to Eve when configured, otherwise direct-provider fallback
 BE validates artifacts, persists results, updates run state
 BE emits typed orchestration:event messages over /devflow
 FE renders stored state and live events

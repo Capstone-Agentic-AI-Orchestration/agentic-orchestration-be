@@ -9,7 +9,7 @@ import {
   type LlmProviderName,
 } from './llm-runtime';
 
-export interface GraphLlmJsonOptions {
+export interface DirectLlmJsonOptions {
   agentName: string;
   systemPrompt: string;
   userPrompt: string;
@@ -17,7 +17,7 @@ export interface GraphLlmJsonOptions {
   maxTokens?: number;
   /**
    * Eve migration: the target Eve subagent directory name (e.g. 'backend', 'contract-negotiator').
-   * Used only by the Eve engine to route the turn; the graph engine ignores it. Set explicitly by
+   * Used only by the Eve engine to route the turn; the direct engine ignores it. Set explicitly by
    * each node so routing does not depend on `agentName` (which can be a model string under
    * NODE_PROVIDER_OVERRIDES).
    */
@@ -26,13 +26,13 @@ export interface GraphLlmJsonOptions {
   onToken?: (delta: string) => void;
 }
 
-export interface GraphLlmJsonResult<T> {
+export interface DirectLlmJsonResult<T> {
   value: T;
   model: string;
   usage: LlmUsage;
 }
 
-export interface GraphLlmProviderVerification {
+export interface DirectLlmProviderVerification {
   ok: boolean;
   provider: LlmProviderName;
   model: string;
@@ -43,12 +43,12 @@ export interface GraphLlmProviderVerification {
 }
 
 @Injectable()
-export class GraphLlmProvider extends BaseLlmProvider {
+export class DirectLlmProvider extends BaseLlmProvider {
   providerName(): LlmProviderName {
     return selectedLlmProvider();
   }
 
-  async verifyConnection(): Promise<GraphLlmProviderVerification> {
+  async verifyConnection(): Promise<DirectLlmProviderVerification> {
     const provider = this.providerName();
     const model = this.model();
     const fallbackModel = this.fallbackModel();
@@ -61,7 +61,7 @@ export class GraphLlmProvider extends BaseLlmProvider {
         model,
         fallbackModel,
         baseUrl,
-        reason: `Graph LLM provider requires ${this.apiKeyName()}.`,
+        reason: `Direct LLM provider requires ${this.apiKeyName()}.`,
         usage: null,
       };
     }
@@ -97,7 +97,7 @@ export class GraphLlmProvider extends BaseLlmProvider {
     }
   }
 
-  async generateJson<T>(options: GraphLlmJsonOptions): Promise<GraphLlmJsonResult<T>> {
+  async generateJson<T>(options: DirectLlmJsonOptions): Promise<DirectLlmJsonResult<T>> {
     const result = await this.fetchWithFallback<T>(
       options,
       (content) => this.parseJson<T>(content, options.expectedShape),

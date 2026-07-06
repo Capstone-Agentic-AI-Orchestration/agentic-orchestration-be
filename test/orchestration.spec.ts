@@ -94,6 +94,7 @@ function makePrismaMock() {
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(1),
       update: vi.fn().mockResolvedValue({}),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     orchestrationRun: {
       create: vi.fn().mockResolvedValue({ id: 'orchestration-run-1' }),
@@ -694,8 +695,13 @@ describe('OrchestrationService', () => {
         }),
       }),
     });
-    expect(prisma.workOrder.update).toHaveBeenCalledWith({
-      where: { id: 'work-order-1' },
+    expect(prisma.workOrder.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'work-order-1',
+        projectId: 'test-project-id',
+        status: WorkOrderStatus.DISPATCHED,
+        executionRunId: expect.any(String),
+      },
       data: expect.objectContaining({
         status: WorkOrderStatus.COMPLETED,
         artifactId: 'artifact-generated-1',
@@ -863,7 +869,7 @@ describe('OrchestrationService', () => {
 
     expect(prisma.orchestrationRun.create).not.toHaveBeenCalled();
     expect(prisma.workOrderExecution.create).not.toHaveBeenCalled();
-    expect(prisma.workOrder.update).not.toHaveBeenCalled();
+    expect(prisma.workOrder.updateMany).not.toHaveBeenCalled();
     expect(prisma.artifact.create).not.toHaveBeenCalled();
   });
 
@@ -1085,8 +1091,13 @@ describe('OrchestrationService', () => {
     ).rejects.toThrow(/OpenRouter deepseek\/deepseek-v4-flash:free.*returned invalid JSON|OpenRouter deepseek\/deepseek-v4-flash:free.*repair returned invalid JSON/);
 
     expect(prisma.artifact.create).not.toHaveBeenCalled();
-    expect(prisma.workOrder.update).toHaveBeenCalledWith({
-      where: { id: 'work-order-1' },
+    expect(prisma.workOrder.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'work-order-1',
+        projectId: 'test-project-id',
+        status: WorkOrderStatus.DISPATCHED,
+        executionRunId: expect.any(String),
+      },
       data: expect.objectContaining({
         status: WorkOrderStatus.FAILED,
         executionError: expect.stringMatching(/OpenRouter deepseek\/deepseek-v4-flash:free.*returned invalid JSON|OpenRouter deepseek\/deepseek-v4-flash:free.*repair returned invalid JSON/),
@@ -1326,8 +1337,13 @@ describe('OrchestrationService', () => {
     ).rejects.toThrow('Output validation failed');
 
     expect(prisma.artifact.create).not.toHaveBeenCalled();
-    expect(prisma.workOrder.update).toHaveBeenCalledWith({
-      where: { id: 'work-order-1' },
+    expect(prisma.workOrder.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'work-order-1',
+        projectId: 'test-project-id',
+        status: WorkOrderStatus.DISPATCHED,
+        executionRunId: expect.any(String),
+      },
       data: expect.objectContaining({
         status: WorkOrderStatus.FAILED,
         executionError: expect.stringContaining('Output validation failed'),

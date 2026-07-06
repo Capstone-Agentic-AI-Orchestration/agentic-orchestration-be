@@ -1,17 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentLlmRouter } from './agent-llm.router';
 import type { EveLlmProvider } from './eve-llm.provider';
-import type { GraphLlmProvider } from './graph-llm.provider';
+import type { DirectLlmProvider } from './direct-llm.provider';
 
 function makeRouter(eveConfigured: boolean) {
-  const graph = {
+  const direct = {
     model: vi.fn(() => 'openrouter/test-model'),
     generateJson: vi.fn(async () => ({
-      value: { engine: 'graph' },
+      value: { engine: 'direct' },
       model: 'openrouter/test-model',
       usage: { inputTokens: 1, outputTokens: 1 },
     })),
-  } as unknown as GraphLlmProvider;
+  } as unknown as DirectLlmProvider;
 
   const eve = {
     isConfigured: vi.fn(() => eveConfigured),
@@ -22,7 +22,7 @@ function makeRouter(eveConfigured: boolean) {
     })),
   } as unknown as EveLlmProvider;
 
-  return { router: new AgentLlmRouter(graph, eve), graph, eve };
+  return { router: new AgentLlmRouter(direct, eve), direct, eve };
 }
 
 describe('AgentLlmRouter', () => {
@@ -45,7 +45,7 @@ describe('AgentLlmRouter', () => {
   it('selects Eve when requested and configured', async () => {
     process.env.ORCHESTRATION_LLM_ENGINE = 'eve';
     process.env.EVE_MODEL = 'openai/gpt-5.4-mini';
-    const { router, graph, eve } = makeRouter(true);
+    const { router, direct, eve } = makeRouter(true);
 
     expect(router.getStatus()).toEqual({
       requestedEngine: 'eve',
@@ -64,16 +64,16 @@ describe('AgentLlmRouter', () => {
 
     expect(result.value).toEqual({ engine: 'eve' });
     expect(eve.generateJson).toHaveBeenCalledOnce();
-    expect(graph.generateJson).not.toHaveBeenCalled();
+    expect(direct.generateJson).not.toHaveBeenCalled();
   });
 
-  it('falls back to graph when Eve is requested but not configured', async () => {
+  it('falls back to direct when Eve is requested but not configured', async () => {
     process.env.ORCHESTRATION_LLM_ENGINE = 'eve';
-    const { router, graph, eve } = makeRouter(false);
+    const { router, direct, eve } = makeRouter(false);
 
     expect(router.getStatus()).toMatchObject({
       requestedEngine: 'eve',
-      activeEngine: 'graph',
+      activeEngine: 'direct',
       eveServiceConfigured: false,
     });
     expect(router.getStatus().fallbackReason).toContain('EVE_SERVICE_URL');
@@ -85,19 +85,32 @@ describe('AgentLlmRouter', () => {
       userPrompt: '{}',
     });
 
-    expect(result.value).toEqual({ engine: 'graph' });
-    expect(graph.generateJson).toHaveBeenCalledOnce();
+    expect(result.value).toEqual({ engine: 'direct' });
+    expect(direct.generateJson).toHaveBeenCalledOnce();
     expect(eve.generateJson).not.toHaveBeenCalled();
   });
 
-  it('uses graph when explicitly requested', () => {
+  it('uses direct when explicitly requested', () => {
+    process.env.ORCHESTRATION_LLM_ENGINE = 'direct';
+    const { router } = makeRouter(true);
+
+    expect(router.getStatus()).toMatchObject({
+      requestedEngine: 'direct',
+      activeEngine: 'direct',
+      fallbackReason: null,
+      eveServiceConfigured: true,
+      model: 'openrouter/test-model',
+    });
+  });
+
+  it('accepts graph as a deprecated alias for direct', () => {
     process.env.ORCHESTRATION_LLM_ENGINE = 'graph';
     const { router } = makeRouter(true);
 
     expect(router.getStatus()).toMatchObject({
-      requestedEngine: 'graph',
-      activeEngine: 'graph',
-      fallbackReason: null,
+      requestedEngine: 'direct',
+      activeEngine: 'direct',
+      fallbackReason: 'ORCHESTRATION_LLM_ENGINE=graph is deprecated; use direct.',
       eveServiceConfigured: true,
       model: 'openrouter/test-model',
     });

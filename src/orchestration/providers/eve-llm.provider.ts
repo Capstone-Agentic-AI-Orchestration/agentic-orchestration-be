@@ -1,18 +1,18 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { withLlmRequest } from './llm-runtime';
 import type { JsonShape, LlmUsage } from './base-llm.provider';
-import type { GraphLlmJsonOptions, GraphLlmJsonResult } from './graph-llm.provider';
+import type { DirectLlmJsonOptions, DirectLlmJsonResult } from './direct-llm.provider';
 
 /**
  * Eve delegation provider (Hybrid migration — see docs/architecture/EVE_MIGRATION.md §6.2).
  *
- * Drop-in replacement for {@link GraphLlmProvider.generateJson}: identical input/output shape
+ * Drop-in replacement for {@link DirectLlmProvider.generateJson}: identical input/output shape
  * so an agent node can switch engines with a one-line selector and no other change. Instead of
  * calling an LLM endpoint directly, it posts a turn to the external Eve agent service,
  * attaches to the session NDJSON stream, forwards text deltas to `onToken`, and parses the
  * assembled JSON.
  *
- * The in-process provider remains available as a fallback when ORCHESTRATION_LLM_ENGINE=graph
+ * The in-process provider remains available as a fallback when ORCHESTRATION_LLM_ENGINE=direct
  * or the Eve service is not configured.
  *
  * `agentName` carries the target subagent (the existing nodes already pass the node name here,
@@ -41,13 +41,13 @@ export class EveLlmProvider {
    * Resolves the Eve subagent directory name. Prefers the explicit `subagent` option (set by each
    * node); falls back to deriving it from `agentName` for callers that don't set it.
    */
-  private subagentFor(options: GraphLlmJsonOptions): string {
+  private subagentFor(options: DirectLlmJsonOptions): string {
     if (options.subagent?.trim()) return options.subagent.trim();
     const base = options.agentName.replace(/_agent$/, '').replace(/_/g, '-');
     return base || 'backend';
   }
 
-  async generateJson<T>(options: GraphLlmJsonOptions): Promise<GraphLlmJsonResult<T>> {
+  async generateJson<T>(options: DirectLlmJsonOptions): Promise<DirectLlmJsonResult<T>> {
     if (!this.isConfigured()) {
       throw new Error('EveLlmProvider requires EVE_SERVICE_URL to be set.');
     }
@@ -77,7 +77,7 @@ export class EveLlmProvider {
   private async streamSession(
     subagent: string,
     message: string,
-    options: GraphLlmJsonOptions,
+    options: DirectLlmJsonOptions,
     signal: AbortSignal,
   ): Promise<string> {
     const session = await this.createSession(subagent, message, signal);
@@ -117,7 +117,7 @@ export class EveLlmProvider {
   private async readSessionStream(
     subagent: string,
     sessionId: string,
-    options: GraphLlmJsonOptions,
+    options: DirectLlmJsonOptions,
     signal: AbortSignal,
   ): Promise<string> {
     const response = await fetch(`${this.baseUrl()}/eve/v1/session/${encodeURIComponent(sessionId)}/stream`, {

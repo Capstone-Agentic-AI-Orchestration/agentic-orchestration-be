@@ -122,7 +122,7 @@ Get a single project with gate events.
 ---
 
 ### GET /projects/:id/status
-Lightweight polling endpoint. Returns the current node and retry count from the LangGraph checkpoint.
+Lightweight polling endpoint. Returns the current node and retry count from the persisted run state.
 
 **Response — 200 OK**
 ```json
@@ -172,7 +172,7 @@ Approve or reject Gate 1 (architecture review).
 | `notes` | string | No |
 
 **Behaviour**
-- `approved: true` → resumes the graph from `gate_1_check`, project moves to `GENERATING_CODE`
+- `approved: true` → resumes the sequencer from `gate_1_check`, project moves to `GENERATING_CODE`
 - `approved: false` → records REJECTED gate event, project moves to `FAILED`, writes MISTAKE memory
 
 **Phase 2A addition**: on rejection, a MISTAKE memory is written for the contract that was rejected.
@@ -196,7 +196,7 @@ Approve or reject Gate 2 (code review).
 ```
 
 **Behaviour**
-- `approved: true` → writes SKILL memories (per artifact) + PATTERN memory, resumes graph, project moves to `COMMITTING` then `DELIVERED`
+- `approved: true` → writes SKILL memories (per artifact) + PATTERN memory, resumes the sequencer, project moves to `COMMITTING` then `DELIVERED`
 - `approved: false` → writes MISTAKE memories (per artifact), project moves to `FAILED`
 
 **Response — 200 OK**
@@ -243,7 +243,7 @@ Emitted by the server whenever the orchestration pipeline transitions to a new s
 |---|---|---|
 | `projectId` | string | The project this event belongs to |
 | `status` | string | New project status (matches HTTP status values) |
-| `currentNode` | string | Graph node that triggered the transition |
+| `currentNode` | string | Pipeline node that triggered the transition |
 | `error` | string \| null | Error message for `FAILED` events; `null` otherwise |
 
 **Status values emitted over WebSocket**

@@ -2358,14 +2358,26 @@ export class ProjectsService {
       throw new BadRequestException('Work order instructions are required before dispatch');
     }
 
-    const updated = await this.prisma.workOrder.update({
-      where: { id: workOrderId },
+    const claimed = await this.prisma.workOrder.updateMany({
+      where: { id: workOrderId, projectId: id, status: WorkOrderStatus.READY },
       data: {
         status: WorkOrderStatus.DISPATCHED,
         dispatchedAt: new Date(),
       },
+    });
+
+    if (claimed.count !== 1) {
+      throw new ConflictException('Work order was already dispatched by another request');
+    }
+
+    const updated = await this.prisma.workOrder.findFirst({
+      where: { id: workOrderId, projectId: id },
       include: workOrderInclude,
     });
+
+    if (!updated) {
+      throw new NotFoundException(`Work order ${workOrderId} not found`);
+    }
 
     await this.recordTimelineEvent(id, user, {
       type: ProjectTimelineEventType.WORK_ORDER_DISPATCHED,

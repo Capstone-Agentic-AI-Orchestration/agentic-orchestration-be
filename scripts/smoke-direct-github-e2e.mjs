@@ -52,7 +52,7 @@ async function assertOpenRouterPreflight() {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
       'HTTP-Referer': process.env.OPENROUTER_SITE_URL || 'http://localhost',
-      'X-Title': process.env.OPENROUTER_APP_NAME || 'DevFlow Eve Smoke',
+      'X-Title': process.env.OPENROUTER_APP_NAME || 'DevFlow Direct Smoke',
     },
     body: JSON.stringify({
       model,
@@ -103,7 +103,7 @@ async function assertOpenAiPreflight() {
       response_format: {
         type: 'json_schema',
         json_schema: {
-          name: 'eve_github_smoke_preflight',
+          name: 'direct_github_smoke_preflight',
           strict: false,
           schema: { type: 'object', additionalProperties: true },
         },
@@ -222,7 +222,7 @@ async function assertGeminiPreflight() {
       response_format: {
         type: 'json_schema',
         json_schema: {
-          name: 'eve_github_smoke_preflight',
+          name: 'direct_github_smoke_preflight',
           strict: false,
           schema: { type: 'object', additionalProperties: true },
         },
@@ -248,7 +248,8 @@ async function assertProviderPreflight() {
 
 async function selectLlmProvider() {
   const requestedProvider = process.env.LLM_PROVIDER || 'openrouter';
-  const autoSelect = process.env.EVE_GITHUB_SMOKE_PROVIDER_AUTO !== 'false';
+  const autoSelect =
+    (process.env.DIRECT_GITHUB_SMOKE_PROVIDER_AUTO ?? process.env.LANGGRAPH_GITHUB_SMOKE_PROVIDER_AUTO) !== 'false';
   const candidates = autoSelect
     ? [...new Set([requestedProvider, 'openrouter', 'opencode', 'openai', 'anthropic', 'gemini'])]
     : [requestedProvider];
@@ -258,7 +259,7 @@ async function selectLlmProvider() {
     process.env.LLM_PROVIDER = provider;
     try {
       await assertProviderPreflight();
-      console.log(`Eve GitHub E2E smoke using ${provider} provider.`);
+      console.log(`Direct GitHub E2E smoke using ${provider} provider.`);
       return provider;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -286,14 +287,14 @@ async function waitForProjectStatus(prisma, orchestration, projectId, expectedSt
     }
 
     if (lastProject?.status === ProjectStatus.FAILED) {
-      const graphStatus = await orchestration.getStatus(projectId).catch(() => null);
+      const runStatus = await orchestration.getStatus(projectId).catch(() => null);
       const latestRun = await prisma.orchestrationRun.findFirst({
         where: { projectId },
         orderBy: { createdAt: 'desc' },
         select: { error: true, currentNode: true },
       });
       throw new Error(
-        `${label} failed at ${graphStatus?.currentNode ?? latestRun?.currentNode ?? 'unknown'}: ${graphStatus?.error ?? latestRun?.error ?? 'Project status is FAILED'}`,
+        `${label} failed at ${runStatus?.currentNode ?? latestRun?.currentNode ?? 'unknown'}: ${runStatus?.error ?? latestRun?.error ?? 'Project status is FAILED'}`,
       );
     }
 
@@ -305,12 +306,13 @@ async function waitForProjectStatus(prisma, orchestration, projectId, expectedSt
 
 loadEnvFile();
 
-if (process.env.EVE_GITHUB_SMOKE_CREATE !== 'true') {
-  console.log('Eve GitHub E2E smoke skipped: set EVE_GITHUB_SMOKE_CREATE=true to create a real repository.');
+if ((process.env.DIRECT_GITHUB_SMOKE_CREATE ?? process.env.LANGGRAPH_GITHUB_SMOKE_CREATE) !== 'true') {
+  console.log('Direct GitHub E2E smoke skipped: set DIRECT_GITHUB_SMOKE_CREATE=true to create a real repository.');
   process.exit(0);
 }
 
 process.env.AGENT_PROVIDER = 'llm';
+process.env.ORCHESTRATION_LLM_ENGINE = 'direct';
 process.env.LLM_PROVIDER = process.env.LLM_PROVIDER || 'openrouter';
 
 await selectLlmProvider();
@@ -333,13 +335,13 @@ try {
   const githubStatus = github.getDeliveryStatus();
 
   if (!githubStatus.available) {
-    console.log(`Eve GitHub E2E smoke skipped: ${githubStatus.reason}`);
+    console.log(`Direct GitHub E2E smoke skipped: ${githubStatus.reason}`);
     process.exit(0);
   }
 
   const githubVerification = await github.verifyDeliveryAccess();
   if (!githubVerification.ok) {
-    console.log(`Eve GitHub E2E smoke skipped: ${githubVerification.reason}`);
+    console.log(`Direct GitHub E2E smoke skipped: ${githubVerification.reason}`);
     process.exit(0);
   }
 
@@ -351,7 +353,7 @@ try {
   const suffix = Date.now().toString();
   const project = await prisma.project.create({
     data: {
-      companyName: `DevFlow Eve Smoke ${suffix}`,
+      companyName: `DevFlow Direct Smoke ${suffix}`,
       brief: [
         'Build a simple landing page with smooth CSS animations.',
         'Use Next.js 16, React 19 with Tailwind CSS v4.',
@@ -384,7 +386,7 @@ try {
     orchestration,
     project.id,
     [ProjectStatus.AWAITING_GATE_1],
-    Number(process.env.EVE_GITHUB_SMOKE_GATE1_TIMEOUT_MS ?? 180000),
+    Number(process.env.DIRECT_GITHUB_SMOKE_GATE1_TIMEOUT_MS ?? process.env.LANGGRAPH_GITHUB_SMOKE_GATE1_TIMEOUT_MS ?? 180000),
     'Gate 1',
   );
 
@@ -395,7 +397,7 @@ try {
     orchestration,
     project.id,
     [ProjectStatus.AWAITING_GATE_2],
-    Number(process.env.EVE_GITHUB_SMOKE_GATE2_TIMEOUT_MS ?? 300000),
+    Number(process.env.DIRECT_GITHUB_SMOKE_GATE2_TIMEOUT_MS ?? process.env.LANGGRAPH_GITHUB_SMOKE_GATE2_TIMEOUT_MS ?? 300000),
     'Gate 2',
   );
 
@@ -411,12 +413,12 @@ try {
     orchestration,
     project.id,
     [ProjectStatus.DELIVERED],
-    Number(process.env.EVE_GITHUB_SMOKE_DELIVERY_TIMEOUT_MS ?? 180000),
+    Number(process.env.DIRECT_GITHUB_SMOKE_DELIVERY_TIMEOUT_MS ?? process.env.LANGGRAPH_GITHUB_SMOKE_DELIVERY_TIMEOUT_MS ?? 180000),
     'GitHub delivery',
   );
 
   if (!deliveredProject.repoUrl) {
-    throw new Error('Eve GitHub E2E smoke delivered project without repoUrl.');
+    throw new Error('Direct GitHub E2E smoke delivered project without repoUrl.');
   }
 
   const [artifactCount, latestRun] = await Promise.all([
@@ -427,7 +429,7 @@ try {
     }),
   ]);
 
-  console.log('Eve GitHub E2E smoke passed.');
+  console.log('Direct GitHub E2E smoke passed.');
   console.table([
     {
       projectId: project.id,

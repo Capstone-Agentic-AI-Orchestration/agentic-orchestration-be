@@ -40,9 +40,9 @@ import { AgentProviderRegistry } from './providers/agent-provider.registry';
 import { ArtifactContractValidator } from './providers/artifact-contract.validator';
 import { OutputValidationService } from './output-validation/output-validation.service';
 import {
-  GraphLlmProvider,
-  GraphLlmProviderVerification,
-} from './providers/graph-llm.provider';
+  DirectLlmProvider,
+  DirectLlmProviderVerification,
+} from './providers/direct-llm.provider';
 import { AgentLlmRouter } from './providers/agent-llm.router';
 import { OrchestrationEmitter } from './streaming/orchestration-emitter.service';
 import { StreamEmitter } from './streaming/stream-emitter.service';
@@ -179,9 +179,9 @@ interface MockWorkOrderState {
 export class OrchestrationService implements OnModuleInit {
   private readonly logger = new Logger(OrchestrationService.name);
 
-  // Eve migration: the LangGraph compiled graphs + Postgres checkpointer are replaced by the
-  // OrchestrationSequencer driving swappable node-implementation maps. The live and simulation
-  // runs share one sequencer + one topology and differ only by their impl map.
+  // Eve migration: the former LangGraph runtime is now a plain deterministic sequencer driving
+  // swappable node-implementation maps. The live and simulation runs share one sequencer + one
+  // topology and differ only by their impl map.
   private liveImpls!: DevFlowNodeImpls;
   private simulationImpls!: DevFlowNodeImpls;
 
@@ -218,23 +218,22 @@ export class OrchestrationService implements OnModuleInit {
     private readonly github: GithubService,
     private readonly sequencer: OrchestrationSequencer,
     @Optional() private readonly agentLlmRouter: AgentLlmRouter | null,
-    @Optional() @Inject(GraphLlmProvider)
-    private readonly graphLlmProvider: GraphLlmProvider | null,
+    @Optional() @Inject(DirectLlmProvider)
+    private readonly directLlmProvider: DirectLlmProvider | null,
     // Optional: WebSocket gateway may not be present in all environments
     @Optional() private readonly gateway: DevFlowGateway | null,
     @Optional() private readonly emitter: OrchestrationEmitter | null,
     @Optional() private readonly streamEmitter: StreamEmitter | null,
-    @Optional()
-    private readonly runDispatcher: OrchestrationRunDispatcher = new OrchestrationRunDispatcher(),
+    private readonly runDispatcher: OrchestrationRunDispatcher,
   ) {}
 
   getProviderStatus(): OrchestrationProviderStatus {
     const llmEngine = this.agentLlmRouter?.getStatus() ?? {
-      requestedEngine: process.env.ORCHESTRATION_LLM_ENGINE === 'graph' ? 'graph' : 'eve',
-      activeEngine: 'graph',
-      fallbackReason: 'Agent LLM router is not available; using graph-provider status only.',
+      requestedEngine: process.env.ORCHESTRATION_LLM_ENGINE === 'eve' ? 'eve' : 'direct',
+      activeEngine: 'direct',
+      fallbackReason: 'Agent LLM router is not available; using direct-provider status only.',
       eveServiceConfigured: false,
-      model: this.graphLlmProvider?.model() ?? 'unknown',
+      model: this.directLlmProvider?.model() ?? 'unknown',
     } satisfies AgentLlmEngineStatus;
 
     return {
@@ -253,7 +252,7 @@ export class OrchestrationService implements OnModuleInit {
     return this.github.verifyDeliveryAccess();
   }
 
-  async verifyLlmProviderAccess(): Promise<GraphLlmProviderVerification | EveLlmProviderVerification> {
+  async verifyLlmProviderAccess(): Promise<DirectLlmProviderVerification | EveLlmProviderVerification> {
     const engineStatus = this.agentLlmRouter?.getStatus();
     if (engineStatus?.activeEngine === 'eve') {
       return {
@@ -268,11 +267,11 @@ export class OrchestrationService implements OnModuleInit {
       };
     }
 
-    if (!this.graphLlmProvider) {
-      throw new Error('Graph LLM provider is not available in this runtime.');
+    if (!this.directLlmProvider) {
+      throw new Error('Direct LLM provider is not available in this runtime.');
     }
 
-    return this.graphLlmProvider.verifyConnection();
+    return this.directLlmProvider.verifyConnection();
   }
 
   async autoAnalyzeBrief(input: {
@@ -286,18 +285,18 @@ export class OrchestrationService implements OnModuleInit {
     complexity: 'simple' | 'medium' | 'complex';
     estimatedFiles: number;
   }> {
-    if (!this.graphLlmProvider) {
+    if (!this.directLlmProvider) {
       throw new BadRequestException(
-        'Auto-analyze requires an LLM provider, but the Graph LLM provider is not available in this runtime. Ensure the OrchestrationModule is properly configured.',
+        'Auto-analyze requires an LLM provider, but the direct LLM provider is not available in this runtime. Ensure the OrchestrationModule is properly configured.',
       );
     }
 
-    if (!this.graphLlmProvider.isAvailable()) {
+    if (!this.directLlmProvider.isAvailable()) {
       const keyName =
-        this.graphLlmProvider.providerName() === 'anthropic' ? 'ANTHROPIC_API_KEY' :
-        this.graphLlmProvider.providerName() === 'opencode' ? 'OPENCODE_API_KEY' :
-        this.graphLlmProvider.providerName() === 'gemini' ? 'GEMINI_API_KEY' :
-        this.graphLlmProvider.providerName() === 'openai' ? 'OPENAI_API_KEY' :
+        this.directLlmProvider.providerName() === 'anthropic' ? 'ANTHROPIC_API_KEY' :
+        this.directLlmProvider.providerName() === 'opencode' ? 'OPENCODE_API_KEY' :
+        this.directLlmProvider.providerName() === 'gemini' ? 'GEMINI_API_KEY' :
+        this.directLlmProvider.providerName() === 'openai' ? 'OPENAI_API_KEY' :
         'OPENROUTER_API_KEY';
       throw new BadRequestException(
         `Auto-analyze requires an LLM API key. Set the ${keyName} environment variable, or configure the provider in Admin > Providers.`,
@@ -348,7 +347,7 @@ Company name: ${input.companyName}
 Stack key: ${input.stackKey}
 Rough idea: ${input.brief}`;
 
-    const result = await this.graphLlmProvider.generateJson<Record<string, unknown>>({
+    const result = await this.directLlmProvider.generateJson<Record<string, unknown>>({
       agentName: 'auto_analyze',
       systemPrompt,
       userPrompt,
@@ -1004,8 +1003,16 @@ Rough idea: ${input.brief}`;
       currentNode: nodeName,
     });
 
-    await this.prisma.workOrder.update({
-      where: { id: workOrderId },
+    const executionClaim = await this.prisma.workOrder.updateMany({
+      where: {
+        id: workOrderId,
+        projectId,
+        OR: [
+          { status: WorkOrderStatus.READY },
+          { status: WorkOrderStatus.DISPATCHED, executionRunId: null, executionStartedAt: null },
+          ...(options.allowFailedRetry ? [{ status: WorkOrderStatus.FAILED }] : []),
+        ],
+      },
       data: {
         status: WorkOrderStatus.DISPATCHED,
         dispatchedAt: workOrder.dispatchedAt ?? startedAt,
@@ -1017,6 +1024,10 @@ Rough idea: ${input.brief}`;
         lastEventAt: startedAt,
       },
     });
+
+    if (executionClaim.count !== 1) {
+      throw new Error(`Work order ${workOrderId} was already claimed for execution`);
+    }
 
     await this.prisma.workOrderExecution.create({
       data: {
@@ -1161,8 +1172,8 @@ Rough idea: ${input.brief}`;
         },
       });
 
-      await this.prisma.workOrder.update({
-        where: { id: workOrderId },
+      const completionClaim = await this.prisma.workOrder.updateMany({
+        where: { id: workOrderId, projectId, status: WorkOrderStatus.DISPATCHED, executionRunId },
         data: {
           status: WorkOrderStatus.COMPLETED,
           artifactId: artifact.id,
@@ -1173,6 +1184,10 @@ Rough idea: ${input.brief}`;
           lastEventAt: completedAt,
         },
       });
+
+      if (completionClaim.count !== 1) {
+        throw new Error(`Work order ${workOrderId} is no longer owned by execution ${executionRunId}`);
+      }
 
       if (workOrder.taskId) {
         await this.prisma.projectTask.update({
@@ -1307,8 +1322,8 @@ Rough idea: ${input.brief}`;
         { workOrderId, attempt, agentType: workOrder.agentType },
       );
       this.streamEmitter?.flushAll(projectId);
-      await this.prisma.workOrder.update({
-        where: { id: workOrderId },
+      await this.prisma.workOrder.updateMany({
+        where: { id: workOrderId, projectId, status: WorkOrderStatus.DISPATCHED, executionRunId },
         data: {
           status: WorkOrderStatus.FAILED,
           failedAt,

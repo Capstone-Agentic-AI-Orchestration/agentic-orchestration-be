@@ -4,11 +4,11 @@ import { ProjectTaskStatus, WorkOrderPriority } from '@prisma/client';
 import { FrontendAgentNode } from '../src/orchestration/nodes/frontend-agent.node';
 import { GithubCommitNode } from '../src/orchestration/nodes/github-commit.node';
 import { RequirementsParserNode } from '../src/orchestration/nodes/requirements-parser.node';
-import { GraphLlmProvider } from '../src/orchestration/providers/graph-llm.provider';
+import { DirectLlmProvider } from '../src/orchestration/providers/direct-llm.provider';
 import { AgentLlmRouter } from '../src/orchestration/providers/agent-llm.router';
 import { DevFlowStateType, mergeArtifactsByPath } from '../src/orchestration/graph/devflow.state';
 
-describe('GraphLlmProvider', () => {
+describe('DirectLlmProvider', () => {
   const originalEnv = { ...process.env };
 
   afterEach(() => {
@@ -16,7 +16,7 @@ describe('GraphLlmProvider', () => {
     process.env = { ...originalEnv };
   });
 
-  it('parses OpenRouter JSON arrays for LangGraph file agents', async () => {
+  it('parses OpenRouter JSON arrays for direct file agents', async () => {
     process.env.LLM_PROVIDER = 'openrouter';
     process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
     process.env.OPENROUTER_MODEL = 'test/free-model';
@@ -44,7 +44,7 @@ describe('GraphLlmProvider', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await new GraphLlmProvider().generateJson<Array<{ filePath: string }>>({
+    const result = await new DirectLlmProvider().generateJson<Array<{ filePath: string }>>({
       agentName: 'frontend_agent',
       systemPrompt: 'Generate files.',
       userPrompt: 'Generate one file.',
@@ -60,7 +60,7 @@ describe('GraphLlmProvider', () => {
     expect(body.response_format).toBeUndefined();
   });
 
-  it('parses OpenAI JSON arrays for LangGraph file agents', async () => {
+  it('parses OpenAI JSON arrays for direct file agents', async () => {
     process.env.LLM_PROVIDER = 'openai';
     process.env.OPENAI_API_KEY = 'test-openai-key';
     process.env.OPENAI_MODEL = 'gpt-test-model';
@@ -88,7 +88,7 @@ describe('GraphLlmProvider', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await new GraphLlmProvider().generateJson<Array<{ filePath: string }>>({
+    const result = await new DirectLlmProvider().generateJson<Array<{ filePath: string }>>({
       agentName: 'architecture_agent',
       systemPrompt: 'Generate docs.',
       userPrompt: 'Generate one doc.',
@@ -139,7 +139,7 @@ describe('GraphLlmProvider', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await new GraphLlmProvider().generateJson<Array<{ filePath: string }>>({
+    const result = await new DirectLlmProvider().generateJson<Array<{ filePath: string }>>({
       agentName: 'frontend_agent',
       systemPrompt: 'Generate files.',
       userPrompt: 'Generate one file.',
@@ -191,7 +191,7 @@ describe('GraphLlmProvider', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await new GraphLlmProvider().generateJson<Array<{ filePath: string }>>({
+    const result = await new DirectLlmProvider().generateJson<Array<{ filePath: string }>>({
       agentName: 'frontend_agent',
       systemPrompt: 'Generate files.',
       userPrompt: 'Generate one file.',
@@ -210,7 +210,7 @@ describe('GraphLlmProvider', () => {
     expect(body.response_format).toBeUndefined();
   });
 
-  it('verifies the active graph LLM provider with a minimal request', async () => {
+  it('verifies the active direct LLM provider with a minimal request', async () => {
     process.env.LLM_PROVIDER = 'opencode';
     process.env.OPENCODE_API_KEY = 'test-opencode-key';
     process.env.OPENCODE_MODEL = 'deepseek-v4-flash';
@@ -227,7 +227,7 @@ describe('GraphLlmProvider', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(new GraphLlmProvider().verifyConnection()).resolves.toEqual({
+    await expect(new DirectLlmProvider().verifyConnection()).resolves.toEqual({
       ok: true,
       provider: 'opencode',
       model: 'deepseek-v4-flash',
@@ -239,22 +239,22 @@ describe('GraphLlmProvider', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('https://opencode.ai/zen/go/v1/chat/completions');
   });
 
-  it('reports a missing API key during graph LLM verification without a network request', async () => {
+  it('reports a missing API key during direct LLM verification without a network request', async () => {
     process.env.LLM_PROVIDER = 'openrouter';
     delete process.env.OPENROUTER_API_KEY;
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(new GraphLlmProvider().verifyConnection()).resolves.toEqual(expect.objectContaining({
+    await expect(new DirectLlmProvider().verifyConnection()).resolves.toEqual(expect.objectContaining({
       ok: false,
       provider: 'openrouter',
-      reason: 'Graph LLM provider requires OPENROUTER_API_KEY.',
+      reason: 'Direct LLM provider requires OPENROUTER_API_KEY.',
       usage: null,
     }));
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('parses Anthropic JSON arrays for LangGraph file agents', async () => {
+  it('parses Anthropic JSON arrays for direct file agents', async () => {
     process.env.LLM_PROVIDER = 'anthropic';
     process.env.ANTHROPIC_API_KEY = 'test-anthropic-key';
     process.env.ANTHROPIC_MODEL = 'claude-test-model';
@@ -281,7 +281,7 @@ describe('GraphLlmProvider', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await new GraphLlmProvider().generateJson<Array<{ filePath: string }>>({
+    const result = await new DirectLlmProvider().generateJson<Array<{ filePath: string }>>({
       agentName: 'architecture_agent',
       systemPrompt: 'Generate docs.',
       userPrompt: 'Generate one doc.',
@@ -301,7 +301,7 @@ describe('GraphLlmProvider', () => {
     ]));
   });
 
-  it('repairs malformed OpenRouter JSON before failing LangGraph agents', async () => {
+  it('repairs malformed OpenRouter JSON before failing direct agents', async () => {
     process.env.LLM_PROVIDER = 'openrouter';
     process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
     const fetchMock = vi
@@ -320,7 +320,7 @@ describe('GraphLlmProvider', () => {
       });
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await new GraphLlmProvider().generateJson<Array<{ filePath: string }>>({
+    const result = await new DirectLlmProvider().generateJson<Array<{ filePath: string }>>({
       agentName: 'architecture_agent',
       systemPrompt: 'Generate docs.',
       userPrompt: 'Generate architecture docs.',
@@ -376,7 +376,7 @@ describe('DevFlowState artifact reducer', () => {
   });
 });
 
-describe('LangGraph GitHub delivery node', () => {
+describe('GitHub delivery node', () => {
   it('creates a repository, commits generated artifacts, injects CI, and persists repoUrl', async () => {
     const github = {
       buildRepoName: vi.fn().mockReturnValue('acme-project-1'),
@@ -438,9 +438,9 @@ describe('LangGraph GitHub delivery node', () => {
   });
 });
 
-describe('LangGraph OpenRouter-backed agents', () => {
-  it('RequirementsParserNode uses the shared graph LLM provider', async () => {
-    const graphLlm = {
+describe('Direct OpenRouter-backed agents', () => {
+  it('RequirementsParserNode uses the shared direct LLM provider', async () => {
+    const directLlm = {
       model: vi.fn().mockReturnValue('openrouter-test-model'),
       generateJson: vi.fn().mockResolvedValue({
         value: {
@@ -478,7 +478,7 @@ describe('LangGraph OpenRouter-backed agents', () => {
     const node = new RequirementsParserNode(
       prisma as never,
       memory as never,
-      graphLlm as unknown as AgentLlmRouter,
+      directLlm as unknown as AgentLlmRouter,
       mockStreamEmitter as never,
     );
 
@@ -492,7 +492,7 @@ describe('LangGraph OpenRouter-backed agents', () => {
 
     expect(result.requirements?.projectType).toBe('SaaS dashboard');
     expect(result.complexity).toBe('medium');
-    expect(graphLlm.generateJson).toHaveBeenCalledWith(expect.objectContaining({
+    expect(directLlm.generateJson).toHaveBeenCalledWith(expect.objectContaining({
       agentName: 'requirements_parser',
       expectedShape: 'object',
     }));
@@ -501,8 +501,8 @@ describe('LangGraph OpenRouter-backed agents', () => {
     }));
   });
 
-  it('FrontendAgentNode generates artifacts through the shared graph LLM provider', async () => {
-    const graphLlm = {
+  it('FrontendAgentNode generates artifacts through the shared direct LLM provider', async () => {
+    const directLlm = {
       model: vi.fn().mockReturnValue('openrouter-test-model'),
       generateJson: vi.fn().mockResolvedValue({
         value: [
@@ -556,7 +556,7 @@ describe('LangGraph OpenRouter-backed agents', () => {
       prisma as never,
       memory as never,
       eventLog as never,
-      graphLlm as unknown as AgentLlmRouter,
+      directLlm as unknown as AgentLlmRouter,
       mockStreamEmitter2 as never,
       scaffolder as never,
       outputValidation as never,
@@ -622,7 +622,7 @@ describe('LangGraph OpenRouter-backed agents', () => {
         'README-frontend.md',
       ]),
     );
-    expect(graphLlm.generateJson).toHaveBeenCalledWith(expect.objectContaining({
+    expect(directLlm.generateJson).toHaveBeenCalledWith(expect.objectContaining({
       agentName: 'frontend_agent',
       expectedShape: 'array',
     }));

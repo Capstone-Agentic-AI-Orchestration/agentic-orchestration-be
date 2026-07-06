@@ -7,10 +7,11 @@ export const envSchema = z.object({
   AGENT_PROVIDER: z.enum(['mock', 'llm', 'simulation']).optional().default('mock'),
   // Eve migration — see docs/architecture/EVE_MIGRATION.md.
   // ORCHESTRATION_LLM_ENGINE selects how agent nodes generate: delegation to the Eve agent
-  // service ('eve', canonical) or the in-process raw-fetch provider ('graph', fallback).
-  // 'eve' is the default; AgentLlmRouter automatically falls back to 'graph' when EVE_SERVICE_URL
-  // is unset/unreachable, so this is safe before the Eve service is deployed.
-  ORCHESTRATION_LLM_ENGINE: z.enum(['graph', 'eve']).optional().default('eve'),
+  // service ('eve', canonical) or the in-process raw-fetch provider ('direct').
+  // 'graph' remains a deprecated alias for 'direct' for one compatibility window.
+  // 'eve' is the default; AgentLlmRouter automatically falls back to 'direct' when
+  // EVE_SERVICE_URL is unset/unreachable, so this is safe before the Eve service is deployed.
+  ORCHESTRATION_LLM_ENGINE: z.enum(['direct', 'graph', 'eve']).optional().default('eve'),
   ORCHESTRATION_DISPATCHER_MODE: z.enum(['in-process']).optional().default('in-process'),
   EVE_SERVICE_URL: z.preprocess(
     (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),

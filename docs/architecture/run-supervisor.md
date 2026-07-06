@@ -6,7 +6,7 @@ Phase 2B implementation. This document describes the deployed system, not a desi
 
 ## Problem
 
-LangGraph's fire-and-forget execution model means the HTTP layer returns immediately after starting a run. When a graph node hangs — Anthropic API timeout, network partition, Postgres deadlock — the run silently stalls. The project status never advances and no human is notified.
+The orchestration dispatcher returns immediately after starting a run. When a pipeline step hangs — model API timeout, network partition, Postgres deadlock — the run silently stalls. The project status never advances and no human is notified.
 
 The Run Supervisor solves this with two cooperating services:
 
@@ -56,7 +56,7 @@ Neither service makes LLM calls or external HTTP requests. Cost is pure Postgres
 └───────┬───────┘      └─────────────────┘
         │
         └──► OrchestrationService resumes
-             graph from LangGraph checkpoint
+             sequencer from checkpointState
 ```
 
 Terminal states: `DELIVERED`, `FAILED`. The supervisor never touches runs in these states.
@@ -198,7 +198,7 @@ for each stuck project:
     prisma.runBudget.update({ retryCount: { increment: 1 } })
     eventLog.logStuck(projectId, 'supervisor')
     prisma.project.update({ status: project.status })   ← touch updatedAt
-    // OrchestrationService detects the active status and resumes the graph
+    // OrchestrationService detects the active status and resumes the sequencer
 ```
 
 All three writes in the auto-retry path are issued via `Promise.allSettled` so a partial failure does not leave the project in an inconsistent state between retries.

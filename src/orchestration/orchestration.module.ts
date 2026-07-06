@@ -16,9 +16,9 @@ import { ValidatorNode } from './nodes/validator.node';
 import { GithubCommitNode } from './nodes/github-commit.node';
 import { AgentProviderRegistry } from './providers/agent-provider.registry';
 import { ArtifactContractValidator } from './providers/artifact-contract.validator';
-import { GraphLlmProvider } from './providers/graph-llm.provider';
-// Eve migration — drop-in for GraphLlmProvider.generateJson + the sequencer that replaced the
-// LangGraph engine. See docs/architecture/EVE_MIGRATION.md.
+import { DirectLlmProvider } from './providers/direct-llm.provider';
+// Eve migration — drop-in for DirectLlmProvider.generateJson + the deterministic sequencer
+// that replaced the LangGraph runtime. See docs/architecture/EVE_MIGRATION.md.
 import { EveLlmProvider } from './providers/eve-llm.provider';
 import { AgentLlmRouter } from './providers/agent-llm.router';
 import { OrchestrationSequencer } from './graph/orchestration-sequencer';
@@ -55,7 +55,7 @@ import { OutputValidationService } from './output-validation/output-validation.s
     GithubCommitNode,
     AgentProviderRegistry,
     ArtifactContractValidator,
-    GraphLlmProvider,
+    DirectLlmProvider,
     EveLlmProvider,
     AgentLlmRouter,
     OrchestrationSequencer,
