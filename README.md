@@ -43,7 +43,17 @@ Required:
 
 ```env
 DATABASE_URL="postgresql://..."
+DIRECT_URL="postgresql://..."
 SUPABASE_URL="https://your-project-ref.supabase.co"
+```
+
+`DATABASE_URL` is the backend runtime connection. `DIRECT_URL` is the direct Postgres connection Prisma CLI uses for migrations and introspection; in local development it can match `DATABASE_URL`. In Supabase production, use the direct/non-pooling connection string for `DIRECT_URL` when `DATABASE_URL` uses the pooled connection.
+
+Release-only schema verification values:
+
+```env
+SUPABASE_PROJECT_REF="your-project-ref"
+SUPABASE_ACCESS_TOKEN="sbp_..."
 ```
 
 Common optional values:
@@ -124,6 +134,9 @@ State-changing intake endpoints accept `Idempotency-Key`. Reusing the same key a
 ```powershell
 npm test              # Vitest unit/regression tests
 npm run build         # Compile NestJS to dist/
+npm run deploy:build  # Generate Prisma Client and compile the backend
+npm run deploy:release # Apply migrations and verify the live Supabase schema
+npm run deploy:smoke  # Run non-destructive orchestration readiness smoke
 npm run start         # Run compiled output
 npm run start:dev     # Development server
 npm run prisma:migrate      # Apply checked-in SQL migrations

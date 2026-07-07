@@ -6,6 +6,9 @@
   "private": true,
   "scripts": {
     "build": "nest build",
+    "deploy:build": "npm run prisma:generate && npm run build",
+    "deploy:release": "npm run prisma:migrate && npm run verify:supabase-schema",
+    "deploy:smoke": "npm run smoke:orchestration-readiness",
     "start": "node dist/main",
     "dev": "prisma generate && nest start --watch",
     "start:dev": "nest start --watch",
