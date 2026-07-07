@@ -128,10 +128,11 @@ export class ContractNegotiatorNode {
       this.streamEmitter.emit(projectId, NODE.NEGOTIATE_CONTRACT, runId ?? '', 'decision', `Calling LLM (${this.llm.model()}) to negotiate contract with ${memoryBundle.total} memory references...`);
 
       // ── 2. LLM call ───────────────────────────────────────────────────────
-      const systemPrompt = buildAgentSystemPrompt(
-        CONTRACT_NEGOTIATOR_SYSTEM,
+      const systemPrompt = buildAgentSystemPrompt({
+        basePrompt: CONTRACT_NEGOTIATOR_SYSTEM,
         memoryContext,
-      );
+        agentSkillRole: 'contract',
+      });
 
       const result = await this.llm.generateJson<Record<string, unknown>>({
         agentName: resolveModelForNode('negotiate_contract', 'contract_negotiator'),

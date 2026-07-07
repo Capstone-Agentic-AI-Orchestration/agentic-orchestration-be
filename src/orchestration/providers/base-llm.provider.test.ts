@@ -250,6 +250,38 @@ describe('BaseLlmProvider streaming', () => {
     expect(body.stream).toBeUndefined();
   });
 
+  it('repairs malformed JSON before returning a generated value', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          choices: [{ message: { content: 'Here is the object: {"needsRepair": true' } }],
+          usage: { prompt_tokens: 3, completion_tokens: 2 },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          choices: [{ message: { content: '{"needsRepair":true}' } }],
+          usage: { prompt_tokens: 2, completion_tokens: 1 },
+        }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await new TestProvider('openrouter').generate<{ needsRepair: boolean }>(
+      baseOptions,
+      parseJson,
+    );
+
+    expect(result.value).toEqual({ needsRepair: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const repairBody = parseJson<{ messages: Array<{ content: string }> }>(
+      (fetchMock.mock.calls[1][1] as { body: string }).body,
+    );
+    expect(repairBody.messages[0].content).toContain('Repair this test output');
+    expect(repairBody.messages[1].content).toContain('invalidOutput');
+  });
+
   it('honors LLM_STREAMING=false by falling back to the blocking path', async () => {
     process.env.LLM_STREAMING = 'false';
     const fetchMock = vi.fn().mockResolvedValue({

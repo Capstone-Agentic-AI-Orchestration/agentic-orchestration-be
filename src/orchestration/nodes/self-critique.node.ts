@@ -21,9 +21,10 @@ Shape:
 
 Rules:
 - Check each artifact against the acceptance criteria.
-- Check for: placeholder code (TODOs, stubs, "implementation goes here"), missing imports, inconsistent naming, missing error handling, generic placeholder content (lorem ipsum, "example.com"), and type safety violations (any types, untyped params).
+- Check for duplicate file paths and scaffolded files that agents must not emit (package.json, lockfiles, tsconfig files, next/postcss config, nest-cli.json, eslint config).
+- Check for: placeholder code (TODOs, stubs, "implementation goes here"), missing imports, inconsistent naming, missing error handling, generic placeholder content (lorem ipsum, "example.com"), unfinished ellipses, and type safety violations (any types, untyped params).
 - Check cross-file consistency: do frontend API calls match backend routes? Do Prisma usages match schema models?
-- Be specific: reference file paths and exact issues.
+- Be specific and concise: reference file paths, the failing agent, and the exact change needed.
 - If everything looks solid, return {"verdict":"pass","issues":[],"suggestions":[]}.`;
 
 @Injectable()
@@ -133,10 +134,10 @@ Review these artifacts against the acceptance criteria. Return your verdict as J
 
       const feedback = [
         ...(critique.issues.length > 0
-          ? ['QUALITY ISSUES:', ...critique.issues.map((i) => `• ${i}`)]
+          ? ['QUALITY ISSUES:', ...critique.issues.map((i) => `- ${i}`)]
           : []),
         ...(critique.suggestions.length > 0
-          ? ['IMPROVEMENT SUGGESTIONS:', ...critique.suggestions.map((s) => `• ${s}`)]
+          ? ['IMPROVEMENT SUGGESTIONS:', ...critique.suggestions.map((s) => `- ${s}`)]
           : []),
       ].join('\n');
 

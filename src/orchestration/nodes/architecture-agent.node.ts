@@ -144,13 +144,14 @@ export class ArchitectureAgentNode {
         .filter(Boolean)
         .join('\n\n');
 
-      const systemPrompt = buildAgentSystemPrompt(
-        ARCHITECTURE_AGENT_SYSTEM,
-        structuredMemory,
+      const systemPrompt = buildAgentSystemPrompt({
+        basePrompt: ARCHITECTURE_AGENT_SYSTEM,
+        memoryContext: structuredMemory,
         artifactManifest,
-        combinedFeedback || undefined,
-        state.contractSummary || undefined,
-      );
+        previousFeedback: combinedFeedback || undefined,
+        contractSummary: state.contractSummary || undefined,
+        agentSkillRole: 'architecture',
+      });
 
       const result = await this.llm.generateJson<Array<{
         filePath: string;

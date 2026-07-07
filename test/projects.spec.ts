@@ -241,6 +241,43 @@ describe('ProjectsService', () => {
       'nextjs-nestjs-supabase',
       'Acme Logistics',
       pmUser.id,
+      OrchestrationRunTrigger.START,
+      undefined,
+    );
+  });
+
+  it('startOrchestration forwards optional design guidance', async () => {
+    prisma.project.findFirst.mockResolvedValue({
+      id: 'project-1',
+      companyName: 'Acme Logistics',
+      brief: 'Build a delivery dashboard',
+      stackKey: 'nextjs-nestjs-supabase',
+      runId: null,
+      kickoff: { status: ProjectKickoffStatus.READY },
+      workOrders: [{ instructions: 'Build the first dashboard shell.' }],
+    });
+
+    await service.startOrchestration('project-1', pmUser, {
+      designGuidance: {
+        theme: 'black',
+        productFeel: 'operational',
+        layoutDensity: 'balanced',
+        accessibilityLevel: 'strict',
+        forbiddenPatterns: ['gradient orb'],
+      },
+    });
+
+    expect(orchestration.startRun).toHaveBeenCalledWith(
+      'project-1',
+      'Build a delivery dashboard',
+      'nextjs-nestjs-supabase',
+      'Acme Logistics',
+      pmUser.id,
+      OrchestrationRunTrigger.START,
+      expect.objectContaining({
+        theme: 'black',
+        forbiddenPatterns: ['gradient orb'],
+      }),
     );
   });
 

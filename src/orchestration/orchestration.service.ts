@@ -12,6 +12,8 @@ import { buildSimulationNodeImpls } from './graph/simulation-nodes';
 import {
   applyDevFlowPartial,
   createInitialDevFlowState,
+  normalizeDesignGuidance,
+  type DesignGuidanceInput,
   type DevFlowStateType,
 } from './graph/devflow.state';
 import {
@@ -26,6 +28,7 @@ import { BackendAgentNode } from './nodes/backend-agent.node';
 import { DatabaseAgentNode } from './nodes/database-agent.node';
 import { ArchitectureAgentNode } from './nodes/architecture-agent.node';
 import { ValidatorNode } from './nodes/validator.node';
+import { ExecutionValidationNode } from './nodes/execution-validation.node';
 import { GithubCommitNode } from './nodes/github-commit.node';
 import { SelfCritiqueNode } from './nodes/self-critique.node';
 import { MemoryService } from '../memory/memory.service';
@@ -176,6 +179,32 @@ interface MockWorkOrderState {
   error: string | null;
 }
 
+export type AutoAnalyzeMode = 'fast' | 'thorough';
+
+export interface AutoAnalyzeBriefInput {
+  companyName: string;
+  brief: string;
+  stackKey: string;
+  designGuidance?: DesignGuidanceInput;
+  mode?: AutoAnalyzeMode;
+}
+
+export interface AutoAnalyzeBriefResult {
+  enhancedBrief: string;
+  suggestedFeatures: string[];
+  suggestedTechStack: { frontend: string; backend: string; database: string; styling: string };
+  complexity: 'simple' | 'medium' | 'complex';
+  estimatedFiles: number;
+}
+
+type AutoAnalyzeCacheEntry =
+  | { expiresAt: number; result: AutoAnalyzeBriefResult }
+  | { expiresAt: number; pending: Promise<AutoAnalyzeBriefResult> };
+
+const AUTO_ANALYZE_CACHE_TTL_MS = 5 * 60 * 1000;
+const AUTO_ANALYZE_PENDING_TTL_MS = 30 * 1000;
+const DEFAULT_AUTO_ANALYZE_MAX_TOKENS = 1200;
+
 // ─── Service ──────────────────────────────────────────────────────────────────
 
 @Injectable()
@@ -201,6 +230,8 @@ export class OrchestrationService implements OnModuleInit {
    * auto-recovery for the project (manual intervention takes precedence).
    */
   private readonly pausedRuns = new Set<string>();
+
+  private readonly autoAnalyzeCache = new Map<string, AutoAnalyzeCacheEntry>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -228,6 +259,7 @@ export class OrchestrationService implements OnModuleInit {
     @Optional() private readonly emitter: OrchestrationEmitter | null,
     @Optional() private readonly streamEmitter: StreamEmitter | null,
     private readonly runDispatcher: OrchestrationRunDispatcher,
+    @Optional() private readonly executionValidation?: ExecutionValidationNode,
   ) {}
 
   getProviderStatus(): OrchestrationProviderStatus {
@@ -277,17 +309,42 @@ export class OrchestrationService implements OnModuleInit {
     return this.directLlmProvider.verifyConnection();
   }
 
-  async autoAnalyzeBrief(input: {
-    companyName: string;
-    brief: string;
-    stackKey: string;
-  }): Promise<{
-    enhancedBrief: string;
-    suggestedFeatures: string[];
-    suggestedTechStack: { frontend: string; backend: string; database: string; styling: string };
-    complexity: 'simple' | 'medium' | 'complex';
-    estimatedFiles: number;
-  }> {
+  async autoAnalyzeBrief(input: AutoAnalyzeBriefInput): Promise<AutoAnalyzeBriefResult> {
+    const mode = input.mode === 'thorough' ? 'thorough' : 'fast';
+    const cacheKey = this.autoAnalyzeCacheKey(input, mode);
+    const now = Date.now();
+    const cached = this.autoAnalyzeCache.get(cacheKey);
+
+    if (cached && cached.expiresAt > now) {
+      return 'result' in cached ? cached.result : cached.pending;
+    }
+
+    if (cached) {
+      this.autoAnalyzeCache.delete(cacheKey);
+    }
+
+    const pending = this.generateAutoAnalyzeBrief({ ...input, mode })
+      .then((result) => {
+        this.autoAnalyzeCache.set(cacheKey, {
+          expiresAt: Date.now() + AUTO_ANALYZE_CACHE_TTL_MS,
+          result,
+        });
+        return result;
+      })
+      .catch((error: unknown) => {
+        this.autoAnalyzeCache.delete(cacheKey);
+        throw error;
+      });
+
+    this.autoAnalyzeCache.set(cacheKey, {
+      expiresAt: now + AUTO_ANALYZE_PENDING_TTL_MS,
+      pending,
+    });
+
+    return pending;
+  }
+
+  private async generateAutoAnalyzeBrief(input: AutoAnalyzeBriefInput & { mode: AutoAnalyzeMode }): Promise<AutoAnalyzeBriefResult> {
     if (!this.directLlmProvider) {
       throw new BadRequestException(
         'Auto-analyze requires an LLM provider, but the direct LLM provider is not available in this runtime. Ensure the OrchestrationModule is properly configured.',
@@ -306,20 +363,23 @@ export class OrchestrationService implements OnModuleInit {
       );
     }
 
-    // Fetch global memory context so the analyzer can learn from past brief
-    // analyses — successful project patterns, common feature groupings, and
-    // past mistakes to avoid — even before a project is created.
-    const memoryQuery = [
-      input.stackKey,
-      input.brief.slice(0, 200),
-      'brief analysis requirements',
-    ].filter(Boolean).join(' ');
-
-    const memoryContext = await this.memory.readRelevant('requirements', memoryQuery, 3).catch(() => []);
+    const memoryContext = input.mode === 'thorough'
+      ? await this.memory.readRelevant(
+          'requirements',
+          [
+            input.stackKey,
+            input.brief.slice(0, 200),
+            'brief analysis requirements',
+          ].filter(Boolean).join(' '),
+          3,
+        ).catch(() => [])
+      : [];
 
     const contextBlock = memoryContext.length > 0
       ? `\n\nContext from similar past analyses:\n${this.memory.formatAsContext(memoryContext)}`
       : '';
+
+    const designGuidance = normalizeDesignGuidance(input.designGuidance);
 
     const systemPrompt = `You are a product analyst helping a PM turn a rough idea into a structured project brief.
 Return a valid JSON object with this exact shape:
@@ -342,6 +402,8 @@ Rules:
 - suggestedTechStack: Infer from the stack key hint; use sensible defaults if not clear.
 - complexity: "simple" for <4 features, "medium" for 4-7, "complex" for 8+.
 - estimatedFiles: Rough file count based on features and complexity.
+- Account for this UI design direction when clarifying the brief, especially frontend-facing features:
+  theme=${designGuidance.theme}, productFeel=${designGuidance.productFeel}, layoutDensity=${designGuidance.layoutDensity}, accessibilityLevel=${designGuidance.accessibilityLevel}, designPreset=${designGuidance.designSystem?.presetId ?? 'devflow-black-ops'}, forbiddenPatterns=${designGuidance.forbiddenPatterns.join(', ') || 'none'}, antiPatterns=${designGuidance.designSystem?.antiPatterns.join(', ') || 'none'}, notes=${designGuidance.notes ?? 'none'}
 Respond ONLY with the JSON object — no markdown fences, no prose.${contextBlock}`;
 
     const userPrompt = `Analyze this project idea and produce a structured brief.
@@ -355,6 +417,7 @@ Rough idea: ${input.brief}`;
       systemPrompt,
       userPrompt,
       expectedShape: 'object',
+      maxTokens: this.autoAnalyzeMaxTokens(),
     });
 
     const value = result.value;
@@ -398,8 +461,40 @@ Rough idea: ${input.brief}`;
     };
   }
 
+  private autoAnalyzeMaxTokens(): number {
+    const parsed = Number.parseInt(process.env.AUTO_ANALYZE_MAX_OUTPUT_TOKENS ?? '', 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_AUTO_ANALYZE_MAX_TOKENS;
+  }
+
+  private autoAnalyzeCacheKey(input: AutoAnalyzeBriefInput, mode: AutoAnalyzeMode): string {
+    const designGuidance = normalizeDesignGuidance(input.designGuidance);
+    return JSON.stringify({
+      mode,
+      companyName: this.normalizeAutoAnalyzeKeyPart(input.companyName || 'Unknown company'),
+      brief: this.normalizeAutoAnalyzeKeyPart(input.brief),
+      stackKey: this.normalizeAutoAnalyzeKeyPart(input.stackKey || 'nextjs-nestjs-supabase'),
+      designGuidance: {
+        theme: designGuidance.theme,
+        productFeel: designGuidance.productFeel,
+        layoutDensity: designGuidance.layoutDensity,
+        accessibilityLevel: designGuidance.accessibilityLevel,
+        presetId: designGuidance.designSystem?.presetId ?? 'devflow-black-ops',
+        forbiddenPatterns: [...designGuidance.forbiddenPatterns].sort(),
+        antiPatterns: [...(designGuidance.designSystem?.antiPatterns ?? [])].sort(),
+        notes: this.normalizeAutoAnalyzeKeyPart(designGuidance.notes ?? ''),
+      },
+    });
+  }
+
+  private normalizeAutoAnalyzeKeyPart(value: string): string {
+    return value.trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+
   onModuleInit(): void {
     this.logger.log('Initializing orchestration pipeline...');
+    if (!this.executionValidation) {
+      throw new Error('ExecutionValidationNode is not registered in OrchestrationModule.');
+    }
     this.liveImpls = buildDevFlowNodeImpls(
       this.requirementsParser,
       this.contractNegotiator,
@@ -409,6 +504,7 @@ Rough idea: ${input.brief}`;
       this.architectureAgent,
       this.selfCritique,
       this.validator,
+      this.executionValidation,
       this.githubCommit,
     );
     this.simulationImpls = buildSimulationNodeImpls(this.emitter);
@@ -537,8 +633,10 @@ Rough idea: ${input.brief}`;
     companyName: string,
     actorId?: string,
     trigger: OrchestrationRunTrigger = OrchestrationRunTrigger.START,
+    designGuidance?: DesignGuidanceInput,
   ): Promise<string> {
     const runId = createId();
+    const normalizedDesignGuidance = normalizeDesignGuidance(designGuidance);
     this.agentProviderRegistry.getActiveProviderOrThrow();
 
     this.logger.log(
@@ -639,6 +737,7 @@ Rough idea: ${input.brief}`;
         brief,
         stackKey,
         companyName,
+        designGuidance: normalizedDesignGuidance,
         gate1Approved: true,
         gate2Approved: true,
       });
@@ -659,6 +758,7 @@ Rough idea: ${input.brief}`;
       brief,
       stackKey,
       companyName,
+      designGuidance: normalizedDesignGuidance,
     });
 
     // Drive the pipeline via the dispatcher. Errors are handled inside driveRun

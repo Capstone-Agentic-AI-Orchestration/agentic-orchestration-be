@@ -13,6 +13,7 @@ import { DatabaseAgentNode } from './nodes/database-agent.node';
 import { ArchitectureAgentNode } from './nodes/architecture-agent.node';
 import { SelfCritiqueNode } from './nodes/self-critique.node';
 import { ValidatorNode } from './nodes/validator.node';
+import { ExecutionValidationNode } from './nodes/execution-validation.node';
 import { GithubCommitNode } from './nodes/github-commit.node';
 import { AgentProviderRegistry } from './providers/agent-provider.registry';
 import { ArtifactContractValidator } from './providers/artifact-contract.validator';
@@ -30,6 +31,7 @@ import { OrchestrationEmitter } from './streaming/orchestration-emitter.service'
 import { OrchestrationRunDispatcher } from './run-dispatcher.service';
 import { ProjectScaffolderService } from './scaffolding/project-scaffolder.service';
 import { OutputValidationService } from './output-validation/output-validation.service';
+import { ExecutionValidationService } from './execution-validation/execution-validation.service';
 
 @Module({
   imports: [
@@ -53,6 +55,7 @@ import { OutputValidationService } from './output-validation/output-validation.s
     ArchitectureAgentNode,
     SelfCritiqueNode,
     ValidatorNode,
+    ExecutionValidationNode,
     GithubCommitNode,
     AgentProviderRegistry,
     ArtifactContractValidator,
@@ -68,6 +71,7 @@ import { OutputValidationService } from './output-validation/output-validation.s
     OrchestrationRunDispatcher,
     ProjectScaffolderService,
     OutputValidationService,
+    ExecutionValidationService,
   ],
   exports: [OrchestrationService, OrchestrationEmitter],
 })

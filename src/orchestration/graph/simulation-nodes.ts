@@ -205,6 +205,31 @@ export function buildSimulationNodeImpls(
       return { error: null };
     },
 
+    [NODE.EXECUTION_VALIDATE_OUTPUTS]: async (state) => {
+      await play(emitter, state, NODE.EXECUTION_VALIDATE_OUTPUTS, [
+        { type: 'decision', text: 'Materializing generated artifacts (simulated)…', pct: 35 },
+        { type: 'tool-call', text: 'Running build validation (simulated)…', pct: 75 },
+        { type: 'decision', text: 'Sandbox execution validation passed.', pct: 100 },
+      ]);
+      return {
+        error: null,
+        retryPlan: [],
+        executionValidation: {
+          valid: true,
+          checkedAt: new Date().toISOString(),
+          checks: [
+            {
+              name: 'simulation-execution-validation',
+              agentType: 'architecture',
+              status: 'passed',
+              durationMs: 0,
+              summary: 'Simulation mode skipped real sandbox commands.',
+            },
+          ],
+        },
+      };
+    },
+
     [NODE.COMMIT_TO_GITHUB]: async (state) => {
       await play(emitter, state, NODE.COMMIT_TO_GITHUB, [
         { type: 'tool-call', text: 'Creating repository (simulated)…', pct: 40 },

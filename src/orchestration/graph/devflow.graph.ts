@@ -7,6 +7,7 @@ import { BackendAgentNode } from '../nodes/backend-agent.node';
 import { DatabaseAgentNode } from '../nodes/database-agent.node';
 import { ArchitectureAgentNode } from '../nodes/architecture-agent.node';
 import { ValidatorNode } from '../nodes/validator.node';
+import { ExecutionValidationNode } from '../nodes/execution-validation.node';
 import { GithubCommitNode } from '../nodes/github-commit.node';
 import { SelfCritiqueNode } from '../nodes/self-critique.node';
 import { OrchestrationEmitter } from '../streaming/orchestration-emitter.service';
@@ -42,6 +43,7 @@ export interface DevFlowNodeImpls {
   [NODE.ARCHITECTURE_AGENT]: NodeImpl;
   [NODE.SELF_CRITIQUE]: NodeImpl;
   [NODE.VALIDATE_OUTPUTS]: NodeImpl;
+  [NODE.EXECUTION_VALIDATE_OUTPUTS]: NodeImpl;
   [NODE.COMMIT_TO_GITHUB]: NodeImpl;
 }
 
@@ -92,6 +94,7 @@ export function buildDevFlowNodeImpls(
   architectureAgent: ArchitectureAgentNode,
   selfCritique: SelfCritiqueNode,
   validator: ValidatorNode,
+  executionValidation: ExecutionValidationNode,
   githubCommit: GithubCommitNode,
 ): DevFlowNodeImpls {
   return {
@@ -103,6 +106,7 @@ export function buildDevFlowNodeImpls(
     [NODE.ARCHITECTURE_AGENT]: (state) => architectureAgent.execute(state),
     [NODE.SELF_CRITIQUE]: (state) => selfCritique.execute(state),
     [NODE.VALIDATE_OUTPUTS]: (state) => validator.execute(state),
+    [NODE.EXECUTION_VALIDATE_OUTPUTS]: (state) => executionValidation.execute(state),
     [NODE.COMMIT_TO_GITHUB]: (state) => githubCommit.execute(state),
   };
 }

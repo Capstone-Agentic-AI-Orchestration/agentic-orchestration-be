@@ -155,12 +155,13 @@ export class BackendAgentNode {
         .filter(Boolean)
         .join('\n\n');
 
-      const systemPrompt = buildAgentSystemPrompt(
-        BACKEND_AGENT_SYSTEM,
-        structuredMemory,
+      const systemPrompt = buildAgentSystemPrompt({
+        basePrompt: BACKEND_AGENT_SYSTEM,
+        memoryContext: structuredMemory,
         artifactManifest,
-        combinedFeedback || undefined,
-      );
+        previousFeedback: combinedFeedback || undefined,
+        agentSkillRole: 'backend',
+      });
 
       const result = await this.llm.generateJson<Array<{
         filePath: string;

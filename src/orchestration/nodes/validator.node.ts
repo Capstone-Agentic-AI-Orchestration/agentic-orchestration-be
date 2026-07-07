@@ -70,7 +70,7 @@ export class ValidatorNode {
       if (result.valid) {
         this.logger.log(`[${state.projectId}] Validation passed`);
         this.streamEmitter.emit(projectId, NODE.VALIDATE_OUTPUTS, runId ?? '', 'decision', 'Validation passed: all artifacts meet contract requirements');
-        return {};
+        return { retryPlan: [], validationFeedback: null };
       }
 
       this.logger.warn(
@@ -171,7 +171,11 @@ export class ValidatorNode {
     );
 
     // Run real syntax + type-aware checks via OutputValidationService
-    const validationErrors = this.outputValidation.validateBatch(state.artifacts, state.projectId);
+    const validationErrors = this.outputValidation.validateBatch(
+      state.artifacts,
+      state.projectId,
+      { designGuidance: state.designGuidance },
+    );
     const syntaxIssues = validationErrors
       .filter((e) => e.code === 'TS_SYNTAX' || e.code === 'SQL_SYNTAX' || e.code === 'MD_SYNTAX')
       .map((e) => e.message);
@@ -242,11 +246,18 @@ export class ValidatorNode {
           if (agentType === 'architecture') return lower.includes('documentation') || lower.includes('readme') || lower.includes('architecture');
           return false;
         })
-        .map((c) => `• ${c}`);
+        .map((c) => `- ${c}`);
 
       const feedbackParts = [
-        'VALIDATION ERRORS (fix every one):',
-        ...issues.map((i) => `• ${i}`),
+        `RETRY SCOPE: ${agentType} agent only. Fix the issues below without changing unrelated agent outputs.`,
+        'MUST FIX:',
+        ...issues.map((i) => `- ${i}`),
+        '',
+        'RULES FOR THIS RETRY:',
+        '- Return complete replacement artifact content, not patches or summaries.',
+        '- Preserve working file paths, public names, DTO fields, routes, and model names unless the issue explicitly requires a rename.',
+        '- Do not emit scaffolded files such as package.json, tsconfig files, next/postcss config, nest-cli.json, lockfiles, or linter config.',
+        '- Remove placeholders, TODOs, stub text, example.com, lorem ipsum, and unfinished ellipses.',
       ];
 
       if (relevantCriteria.length > 0) {

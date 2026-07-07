@@ -27,6 +27,7 @@ import { AddTaskCommentDto } from './dto/task-comment.dto';
 import { CreateWorkOrderDto, UpdateWorkOrderDto } from './dto/work-order.dto';
 import { UpdateProjectKickoffDto } from './dto/project-kickoff.dto';
 import { ControlOrchestrationDto } from './dto/control-orchestration.dto';
+import { StartOrchestrationDto } from './dto/start-orchestration.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import {
   CursorPage,
@@ -360,6 +361,7 @@ export class ProjectsService {
   async startOrchestration(
     id: string,
     user: AuthUser,
+    options: StartOrchestrationDto = {},
   ): Promise<{ accepted: boolean; runId: string }> {
     const project = await this.prisma.project.findFirst({
       where: this.projectAccessWhere(user, id),
@@ -407,6 +409,8 @@ export class ProjectsService {
       project.stackKey,
       project.companyName,
       user.id,
+      OrchestrationRunTrigger.START,
+      options.designGuidance,
     );
 
     return { accepted: true, runId };
@@ -551,7 +555,13 @@ export class ProjectsService {
 
   async autoAnalyzeBrief(
     user: AuthUser,
-    input: { companyName: string; brief: string; stackKey: string },
+    input: {
+      companyName: string;
+      brief: string;
+      stackKey: string;
+      designGuidance?: StartOrchestrationDto['designGuidance'];
+      mode?: 'fast' | 'thorough';
+    },
   ) {
     if (user.role !== UserRole.PM && user.role !== UserRole.ADMIN) {
       throw new ForbiddenException('Only PMs and admins can use auto-analyze.');
@@ -563,6 +573,8 @@ export class ProjectsService {
       companyName: input.companyName || 'Unknown company',
       brief: input.brief.trim(),
       stackKey: input.stackKey || 'nextjs-nestjs-supabase',
+      designGuidance: input.designGuidance,
+      mode: input.mode,
     });
   }
 

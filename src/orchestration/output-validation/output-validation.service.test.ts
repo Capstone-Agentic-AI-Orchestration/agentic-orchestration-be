@@ -153,5 +153,112 @@ describe('OutputValidationService', () => {
       const errors = service.validateBatch(artifacts, 'proj-1');
       expect(errors.some(e => e.code === 'TS_SYNTAX')).toBe(true);
     });
+
+    it('rejects duplicate generated file paths', () => {
+      const artifacts: GeneratedArtifact[] = [
+        { agentType: 'frontend', filePath: 'src/app/page.tsx', content: 'export default function Page() { return <div>One</div>; }', language: 'typescript' },
+        { agentType: 'frontend', filePath: 'src/app/page.tsx', content: 'export default function PageTwo() { return <div>Two</div>; }', language: 'typescript' },
+      ];
+      const errors = service.validateBatch(artifacts, 'proj-1');
+      expect(errors.some(e => e.code === 'BASE' && e.message.includes('Duplicate generated filePath'))).toBe(true);
+    });
+
+    it('rejects scaffolded config files from generated artifacts', () => {
+      const artifacts: GeneratedArtifact[] = [
+        { agentType: 'backend', filePath: 'package.json', content: '{"scripts":{"build":"nest build"}}'.padEnd(50, ' '), language: 'json' },
+      ];
+      const errors = service.validateBatch(artifacts, 'proj-1');
+      expect(errors.some(e => e.code === 'BASE' && e.message.includes('scaffolded by DevFlow'))).toBe(true);
+    });
+
+    it('rejects placeholder content in generated artifacts', () => {
+      const artifacts: GeneratedArtifact[] = [
+        {
+          agentType: 'backend',
+          filePath: 'src/orders.service.ts',
+          content: 'import { Injectable } from "@nestjs/common"; @Injectable() export class OrdersService { list() { throw new Error("TODO: implementation goes here"); } }',
+          language: 'typescript',
+        },
+      ];
+      const errors = service.validateBatch(artifacts, 'proj-1');
+      expect(errors.some(e => e.code === 'BASE' && e.message.includes('placeholder or stub'))).toBe(true);
+    });
+
+    it('rejects frontend artifacts that use forbidden design patterns', () => {
+      const artifacts: GeneratedArtifact[] = [
+        {
+          agentType: 'frontend',
+          filePath: 'src/app/page.tsx',
+          content: 'export default function Page() { return <main><h1>Project dashboard</h1><p>Gradient orb background</p></main>; }',
+          language: 'typescript',
+        },
+      ];
+      const errors = service.validateBatch(artifacts, 'proj-1', {
+        designGuidance: {
+          theme: 'black',
+          productFeel: 'operational',
+          layoutDensity: 'balanced',
+          accessibilityLevel: 'strict',
+          forbiddenPatterns: ['gradient orb'],
+        },
+      });
+      expect(errors.some(e => e.agentType === 'frontend' && e.message.includes('forbidden design pattern'))).toBe(true);
+    });
+
+    it('rejects frontend artifacts that use design-system anti-patterns', () => {
+      const artifacts: GeneratedArtifact[] = [
+        {
+          agentType: 'frontend',
+          filePath: 'src/app/page.tsx',
+          content: 'export default function Page() { return <main><h1>Project dashboard</h1><p>Oversized hero intro</p></main>; }',
+          language: 'typescript',
+        },
+      ];
+      const errors = service.validateBatch(artifacts, 'proj-1', {
+        designGuidance: {
+          theme: 'black',
+          productFeel: 'operational',
+          layoutDensity: 'balanced',
+          accessibilityLevel: 'strict',
+          forbiddenPatterns: [],
+          designSystem: {
+            presetId: 'devflow-black-ops',
+            palette: 'Black operational cockpit.',
+            typography: 'Compact system sans.',
+            spacing: '8px grid.',
+            layout: 'Dashboard layout.',
+            components: 'Tables and panels.',
+            motion: 'Subtle feedback.',
+            voice: 'Direct PM language.',
+            brand: 'DevFlow black theme.',
+            antiPatterns: ['oversized hero'],
+          },
+        },
+      });
+      expect(errors.some(e => e.agentType === 'frontend' && e.message.includes('oversized hero'))).toBe(true);
+    });
+
+    it('requires loading, empty, and error states for data-fetching frontend artifacts', () => {
+      const artifacts: GeneratedArtifact[] = [
+        {
+          agentType: 'frontend',
+          filePath: 'src/app/projects/page.tsx',
+          content: 'export default async function Page() { const response = await fetch("/api/projects"); const data = await response.json(); return <main>{data.items.map((item) => <div key={item.id}>{item.name}</div>)}</main>; }',
+          language: 'typescript',
+        },
+      ];
+      const errors = service.validateBatch(artifacts, 'proj-1', {
+        designGuidance: {
+          theme: 'black',
+          productFeel: 'operational',
+          layoutDensity: 'balanced',
+          accessibilityLevel: 'strict',
+          forbiddenPatterns: [],
+        },
+      });
+      expect(errors.filter(e => e.agentType === 'frontend').map(e => e.message).join('\n')).toContain('loading state');
+      expect(errors.filter(e => e.agentType === 'frontend').map(e => e.message).join('\n')).toContain('error state');
+      expect(errors.filter(e => e.agentType === 'frontend').map(e => e.message).join('\n')).toContain('empty state');
+    });
   });
 });

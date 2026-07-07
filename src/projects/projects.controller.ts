@@ -33,6 +33,7 @@ import { AddTaskCommentDto } from './dto/task-comment.dto';
 import { CreateWorkOrderDto, UpdateWorkOrderDto } from './dto/work-order.dto';
 import { UpdateProjectKickoffDto } from './dto/project-kickoff.dto';
 import { AutoAnalyzeBriefDto } from './dto/auto-analyze-brief.dto';
+import { StartOrchestrationDto } from './dto/start-orchestration.dto';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { Roles } from '../auth/roles.decorator';
@@ -613,8 +614,13 @@ export class ProjectsController {
   @Post(':id/orchestration/start')
   @Roles(UserRole.PM, UserRole.ADMIN)
   @HttpCode(HttpStatus.ACCEPTED)
-  startOrchestration(@Param('id') id: string, @CurrentUser() user: AuthUser) {
-    return this.projectsService.startOrchestration(id, user);
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+  startOrchestration(
+    @Param('id') id: string,
+    @Body() dto: StartOrchestrationDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.projectsService.startOrchestration(id, user, dto);
   }
 
   @Get(':id/orchestration/status')

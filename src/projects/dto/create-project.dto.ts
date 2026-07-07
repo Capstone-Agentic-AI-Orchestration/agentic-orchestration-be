@@ -1,4 +1,6 @@
-import { IsString, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsOptional, IsString, MinLength, ValidateNested } from 'class-validator';
+import { DesignGuidanceDto } from './design-guidance.dto';
 
 export class CreateProjectDto {
   @IsString()
@@ -12,4 +14,9 @@ export class CreateProjectDto {
   @IsString()
   @MinLength(1, { message: 'stackKey must not be empty' })
   stackKey!: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DesignGuidanceDto)
+  designGuidance?: DesignGuidanceDto;
 }

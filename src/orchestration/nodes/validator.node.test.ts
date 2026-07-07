@@ -138,6 +138,42 @@ describe('ValidatorNode multi-agent retry', () => {
     expect(plan.find((d) => d.agentType === 'backend')).toBeUndefined();
   });
 
+  it('scopes missing, duplicate, and forbidden file feedback to the responsible agent', async () => {
+    process.env.ORCHESTRATION_TYPECHECK = 'false';
+    const { node } = makeNode();
+    const invalidState = state([
+      {
+        agentType: 'frontend',
+        filePath: 'src/app/page.tsx',
+        content: `export default function Page() { return <main>Project dashboard</main>; }`,
+        language: 'typescript',
+      },
+      {
+        agentType: 'frontend',
+        filePath: 'src/app/page.tsx',
+        content: `export function DuplicatePage() { return <main>Duplicate dashboard</main>; }`,
+        language: 'typescript',
+      },
+      {
+        agentType: 'frontend',
+        filePath: 'package.json',
+        content: `{"scripts":{"build":"next build"},"dependencies":{"next":"16.0.0"}}`,
+        language: 'json',
+      },
+    ]);
+    invalidState.contract = contract(['src/app/page.tsx', 'src/app/dashboard.tsx']);
+
+    const result = await node.execute(invalidState);
+    const plan = result.retryPlan ?? [];
+    const frontend = plan.find((d) => d.agentType === 'frontend');
+
+    expect(plan.map((d) => d.agentType)).toEqual(['frontend']);
+    expect(frontend?.feedback).toContain('Duplicate generated filePath');
+    expect(frontend?.feedback).toContain('scaffolded by DevFlow');
+    expect(frontend?.feedback).toContain('MISSING FILE: src/app/dashboard.tsx');
+    expect(frontend?.feedback).toContain('RETRY SCOPE: frontend agent only');
+  });
+
   it('terminates with an error and empty plan when retries are exhausted', async () => {
     const { node } = makeNode();
     // MAX_RETRIES = 5, so retryCount = 4 is the last attempt.

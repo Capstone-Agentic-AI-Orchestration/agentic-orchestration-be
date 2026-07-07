@@ -44,6 +44,50 @@ export interface RetryDirective {
   feedback: string;
 }
 
+export interface ExecutionValidationCheck {
+  name: string;
+  agentType: RetryDirective['agentType'];
+  status: 'passed' | 'failed' | 'skipped';
+  command?: string;
+  durationMs: number;
+  summary: string;
+  outputTail?: string;
+}
+
+export interface ExecutionValidationReport {
+  valid: boolean;
+  checkedAt: string;
+  checks: ExecutionValidationCheck[];
+  retryPlan?: RetryDirective[];
+}
+
+export interface DesignGuidance {
+  theme: 'black' | 'light' | 'system';
+  productFeel: 'enterprise' | 'playful' | 'editorial' | 'luxury' | 'operational';
+  layoutDensity: 'compact' | 'balanced' | 'spacious';
+  accessibilityLevel: 'standard' | 'strict';
+  forbiddenPatterns: string[];
+  notes?: string;
+  designSystem?: DesignSystemContract;
+}
+
+export interface DesignSystemContract {
+  presetId: string;
+  palette: string;
+  typography: string;
+  spacing: string;
+  layout: string;
+  components: string;
+  motion: string;
+  voice: string;
+  brand: string;
+  antiPatterns: string[];
+}
+
+export type DesignGuidanceInput = Partial<Omit<DesignGuidance, 'designSystem'>> & {
+  designSystem?: Partial<DesignSystemContract> | null;
+};
+
 export interface GeneratedArtifact {
   agentType: 'frontend' | 'backend' | 'database' | 'architecture';
   filePath: string;
@@ -108,7 +152,46 @@ export interface DevFlowStateType {
   contractSummary: string;
   /** Self-critique feedback from the review node, addressed before formal validation. */
   selfCritique: string;
+  /** Runtime/build validation report for materialized generated artifacts. */
+  executionValidation: ExecutionValidationReport | null;
+  /** PM-selected frontend design contract, carried through prompts and validation. */
+  designGuidance: DesignGuidance;
 }
+
+export const DEFAULT_DESIGN_SYSTEM: DesignSystemContract = {
+  presetId: 'devflow-black-ops',
+  palette:
+    'Black operational cockpit: near-black canvas, graphite panels, white primary text, muted blue actions, amber warnings, green success states.',
+  typography:
+    'System sans UI, compact hierarchy, clear labels, tabular numbers for operational data, no decorative display fonts.',
+  spacing:
+    'Balanced 8px grid with compact controls, generous row hit areas, and stable panel dimensions.',
+  layout:
+    'Dense dashboard layouts with side navigation, task panels, timelines, tables, and approval surfaces. Avoid marketing hero composition.',
+  components:
+    'Tables, timelines, cards, tabs, segmented controls, forms, status badges, approval panels, and command/tool buttons.',
+  motion:
+    'Subtle feedback only: hover, focus, progress, loading, and state transitions. Avoid ornamental motion.',
+  voice:
+    'Clear PM/operator language with concise labels, explicit states, and no hype copy.',
+  brand:
+    'DevFlow black theme: technical, reliable, agent-orchestration aware, and built for repeated project delivery.',
+  antiPatterns: [
+    'generic marketing hero',
+    'gradient orb',
+    'placeholder UI',
+    'lorem ipsum',
+  ],
+};
+
+export const DEFAULT_DESIGN_GUIDANCE: DesignGuidance = {
+  theme: 'black',
+  productFeel: 'operational',
+  layoutDensity: 'balanced',
+  accessibilityLevel: 'strict',
+  forbiddenPatterns: [],
+  designSystem: DEFAULT_DESIGN_SYSTEM,
+};
 
 /** Field defaults — the explicit equivalent of the old Annotation `default` factories. */
 export function createInitialDevFlowState(
@@ -135,7 +218,53 @@ export function createInitialDevFlowState(
     retryPlan: seed.retryPlan ?? [],
     contractSummary: seed.contractSummary ?? '',
     selfCritique: seed.selfCritique ?? '',
+    executionValidation: seed.executionValidation ?? null,
+    designGuidance: normalizeDesignGuidance(seed.designGuidance),
   };
+}
+
+export function normalizeDesignGuidance(
+  guidance?: DesignGuidanceInput | null,
+): DesignGuidance {
+  const designSystem = normalizeDesignSystem(guidance?.designSystem);
+  return {
+    ...DEFAULT_DESIGN_GUIDANCE,
+    ...guidance,
+    forbiddenPatterns: Array.isArray(guidance?.forbiddenPatterns)
+      ? guidance.forbiddenPatterns
+          .map((pattern) => pattern.trim())
+          .filter(Boolean)
+      : [],
+    notes: guidance?.notes?.trim() || undefined,
+    designSystem,
+  };
+}
+
+function normalizeDesignSystem(
+  designSystem?: Partial<DesignSystemContract> | null,
+): DesignSystemContract {
+  const merged = {
+    ...DEFAULT_DESIGN_SYSTEM,
+    ...designSystem,
+  };
+  return {
+    presetId: cleanDesignText(merged.presetId) || DEFAULT_DESIGN_SYSTEM.presetId,
+    palette: cleanDesignText(merged.palette) || DEFAULT_DESIGN_SYSTEM.palette,
+    typography: cleanDesignText(merged.typography) || DEFAULT_DESIGN_SYSTEM.typography,
+    spacing: cleanDesignText(merged.spacing) || DEFAULT_DESIGN_SYSTEM.spacing,
+    layout: cleanDesignText(merged.layout) || DEFAULT_DESIGN_SYSTEM.layout,
+    components: cleanDesignText(merged.components) || DEFAULT_DESIGN_SYSTEM.components,
+    motion: cleanDesignText(merged.motion) || DEFAULT_DESIGN_SYSTEM.motion,
+    voice: cleanDesignText(merged.voice) || DEFAULT_DESIGN_SYSTEM.voice,
+    brand: cleanDesignText(merged.brand) || DEFAULT_DESIGN_SYSTEM.brand,
+    antiPatterns: Array.isArray(merged.antiPatterns)
+      ? merged.antiPatterns.map((pattern) => pattern.trim()).filter(Boolean)
+      : [...DEFAULT_DESIGN_SYSTEM.antiPatterns],
+  };
+}
+
+function cleanDesignText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 /**

@@ -22,7 +22,8 @@ function makeImpls(overrides: Partial<DevFlowNodeImpls> = {}): DevFlowNodeImpls 
     [NODE.DATABASE_AGENT]: passthrough(),
     [NODE.ARCHITECTURE_AGENT]: passthrough(),
     [NODE.SELF_CRITIQUE]: passthrough(),
-    [NODE.VALIDATE_OUTPUTS]: passthrough(),
+    [NODE.VALIDATE_OUTPUTS]: () => ({ retryPlan: [] }),
+    [NODE.EXECUTION_VALIDATE_OUTPUTS]: passthrough(),
     [NODE.COMMIT_TO_GITHUB]: passthrough(),
     ...overrides,
   };
@@ -69,6 +70,7 @@ describe('OrchestrationSequencer', () => {
     const nodes = emitter.runStatus.mock.calls.map((c) => c[3]);
     expect(nodes).toContain(NODE.PARSE_REQUIREMENTS);
     expect(nodes).toContain(NODE.NEGOTIATE_CONTRACT);
+    expect(nodes).toContain(NODE.EXECUTION_VALIDATE_OUTPUTS);
     expect(nodes).toContain(NODE.COMMIT_TO_GITHUB);
 
     const persistedNodes = prisma.orchestrationRun.update.mock.calls.map((c) => c[0].data.currentNode);
@@ -113,5 +115,69 @@ describe('OrchestrationSequencer', () => {
     expect(prisma.orchestrationRun.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: 'FAILED' }) }),
     );
+  });
+
+  it('does not run execution validation when static validation requests a retry', async () => {
+    const { sequencer } = makeSequencer();
+    const executionValidate = vi.fn(() => ({}));
+    let validationAttempts = 0;
+    const outcome = await sequencer.run({
+      impls: makeImpls({
+        [NODE.VALIDATE_OUTPUTS]: () => {
+          validationAttempts += 1;
+          return validationAttempts === 1
+            ? {
+                retryPlan: [{ agentType: 'frontend', feedback: 'fix static validation' }],
+              }
+            : { error: 'static validation remained broken' };
+        },
+        [NODE.FRONTEND_AGENT]: () => ({ retryPlan: [] }),
+        [NODE.EXECUTION_VALIDATE_OUTPUTS]: executionValidate,
+      }),
+      projectId: 'proj-1',
+      runId: 'run-1',
+      state: seedState({ gate1Approved: true, gate2Approved: true, retryCount: 4 }),
+      fromPhase: 'B',
+      signal: new AbortController().signal,
+    });
+
+    expect(outcome.kind).toBe('failed');
+    expect(executionValidate).not.toHaveBeenCalled();
+  });
+
+  it('routes execution validation retry plans before gate 2', async () => {
+    const { sequencer, emitter } = makeSequencer();
+    let executionAttempts = 0;
+    let frontendRetries = 0;
+
+    const outcome = await sequencer.run({
+      impls: makeImpls({
+        [NODE.EXECUTION_VALIDATE_OUTPUTS]: () => {
+          executionAttempts += 1;
+          return executionAttempts === 1
+            ? {
+                retryCount: 1,
+                retryPlan: [{ agentType: 'frontend', feedback: 'fix build' }],
+              }
+            : { retryPlan: [] };
+        },
+        [NODE.FRONTEND_AGENT]: () => {
+          frontendRetries += 1;
+          return {};
+        },
+      }),
+      projectId: 'proj-1',
+      runId: 'run-1',
+      state: seedState({ gate1Approved: true, gate2Approved: true }),
+      fromPhase: 'B',
+      signal: new AbortController().signal,
+    });
+
+    expect(outcome.kind).toBe('delivered');
+    expect(executionAttempts).toBe(2);
+    expect(frontendRetries).toBe(2);
+    const nodes = emitter.runStatus.mock.calls.map((c) => c[3]);
+    expect(nodes).toContain(NODE.EXECUTION_VALIDATE_OUTPUTS);
+    expect(nodes).toContain(NODE.COMMIT_TO_GITHUB);
   });
 });

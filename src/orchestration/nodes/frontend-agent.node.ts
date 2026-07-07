@@ -99,7 +99,11 @@ export class FrontendAgentNode {
             language: 'typescript',
             source: 'skip',
           };
-          const validationErrors = this.outputValidation.validateBatch([candidateArtifact], state.projectId);
+          const validationErrors = this.outputValidation.validateBatch(
+            [candidateArtifact],
+            state.projectId,
+            { designGuidance: state.designGuidance },
+          );
           if (validationErrors.length === 0) {
             this.logger.log(
               `[${state.projectId}] Skip-generation: reusing frontend memory artifact (similarity=${skipCandidate.similarity?.toFixed(3)})`,
@@ -153,13 +157,15 @@ export class FrontendAgentNode {
         .filter(Boolean)
         .join('\n\n');
 
-      const systemPrompt = buildAgentSystemPrompt(
-        FRONTEND_AGENT_SYSTEM,
-        structuredMemory,
+      const systemPrompt = buildAgentSystemPrompt({
+        basePrompt: FRONTEND_AGENT_SYSTEM,
+        memoryContext: structuredMemory,
         artifactManifest,
-        combinedFeedback || undefined,
-        state.contractSummary || undefined,
-      );
+        previousFeedback: combinedFeedback || undefined,
+        contractSummary: state.contractSummary || undefined,
+        designGuidance: state.designGuidance,
+        agentSkillRole: 'frontend',
+      });
 
       const result = await this.llm.generateJson<Array<{
         filePath: string;

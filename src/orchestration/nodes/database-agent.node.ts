@@ -151,12 +151,13 @@ export class DatabaseAgentNode {
         .filter(Boolean)
         .join('\n\n');
 
-      const systemPrompt = buildAgentSystemPrompt(
-        DATABASE_AGENT_SYSTEM,
-        structuredMemory,
+      const systemPrompt = buildAgentSystemPrompt({
+        basePrompt: DATABASE_AGENT_SYSTEM,
+        memoryContext: structuredMemory,
         artifactManifest,
-        combinedFeedback || undefined,
-      );
+        previousFeedback: combinedFeedback || undefined,
+        agentSkillRole: 'database',
+      });
 
       const result = await this.llm.generateJson<Array<{
         filePath: string;
