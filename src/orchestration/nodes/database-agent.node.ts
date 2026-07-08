@@ -11,7 +11,12 @@ import { DATABASE_AGENT_SYSTEM, buildAgentSystemPrompt, buildStructuredMemoryCon
 import { resolveModelForNode } from '../providers/base-llm.provider';
 import { ProjectScaffolderService } from '../scaffolding/project-scaffolder.service';
 import { OutputValidationService } from '../output-validation/output-validation.service';
-import { createBackendApiContractArtifact, createDatabaseModelContractArtifact, renderDomainContractContext } from '../domain-contracts';
+import {
+  createBackendApiContractArtifact,
+  createDatabaseModelContractArtifact,
+  createOutputStructureContractArtifact,
+  renderDomainContractContext,
+} from '../domain-contracts';
 
 @Injectable()
 export class DatabaseAgentNode {
@@ -75,6 +80,7 @@ export class DatabaseAgentNode {
       const allDbFiles = [...new Set([...coreFiles, ...dbFiles])];
       const apiContractArtifact = createBackendApiContractArtifact(state);
       const dataModelArtifact = createDatabaseModelContractArtifact(state);
+      const outputStructureArtifact = createOutputStructureContractArtifact(state);
 
       const skipCandidate = await this.memory.findSkipCandidate(
         'database',
@@ -100,7 +106,7 @@ export class DatabaseAgentNode {
             language: 'prisma',
             source: 'skip',
           };
-          const validationErrors = this.outputValidation.validateBatch([dataModelArtifact, candidateArtifact], state.projectId);
+          const validationErrors = this.outputValidation.validateBatch([dataModelArtifact, outputStructureArtifact, candidateArtifact], state.projectId);
           if (validationErrors.length === 0) {
             this.logger.log(
               `[${state.projectId}] Skip-generation: reusing database memory artifact (similarity=${skipCandidate.similarity?.toFixed(3)})`,
@@ -148,6 +154,7 @@ export class DatabaseAgentNode {
       const structuredMemory = buildStructuredMemoryContext(memoryBundle.layers);
       const domainContracts = renderDomainContractContext([
         ...(state.artifacts ?? []),
+        outputStructureArtifact,
         apiContractArtifact,
         dataModelArtifact,
       ]);
@@ -201,11 +208,15 @@ ${dataModelArtifact.content}
 Related API_CONTRACT.json (backend owns and persists this contract; use it to align entities, query patterns, pagination support, and seed data with backend API needs):
 ${apiContractArtifact.content}
 
+Authoritative OUTPUT_STRUCTURE.json (frontend owns and persists this contract; do not emit OUTPUT_STRUCTURE.json in your JSON output):
+${outputStructureArtifact.content}
+
 Requirements:
 - prisma/schema.prisma: Full Prisma schema with all models, relations, and indexes (the generator client and datasource blocks will be provided automatically)
 - migrations SQL: Clean DDL with CREATE TABLE, indexes, and foreign keys
 - prisma/seed.ts: Realistic seed data using @prisma/client
 - Entity names, fields, indexes, constraints, relations, migration policy, and seed data must match DATA_MODEL.json and support API_CONTRACT.json route groups
+- Database file paths must match OUTPUT_STRUCTURE.json: prisma/schema.prisma, prisma/migrations/**/*.sql, prisma/seed.ts, and README-database.md
 - README-database.md: ERD description, migration guide, seeding instructions`,
         expectedShape: 'array',
       });

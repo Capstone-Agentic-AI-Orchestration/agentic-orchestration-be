@@ -4,6 +4,7 @@ import {
   buildArchitectureReviewContract,
   buildBackendApiContract,
   buildDatabaseModelContract,
+  buildOutputStructureContract,
   createBackendApiContractArtifact,
 } from './domain-contracts';
 
@@ -42,6 +43,24 @@ function state(features = ['Invoice tracking']): DevFlowStateType {
 }
 
 describe('domain contract templates', () => {
+  it('builds an output structure contract with frontend MVVM and agent-native rules', () => {
+    const output = buildOutputStructureContract(state(['Invoice tracking', 'Client portal']));
+
+    expect(output.kind).toBe('output-structure');
+    expect(output.agents.frontend.architecture).toBe('mvvm');
+    expect(output.agents.frontend.features[0]).toMatchObject({
+      feature: 'invoice-tracking',
+      modelPath: 'src/features/invoice-tracking/model/types.ts',
+      viewModelPath: 'src/features/invoice-tracking/view-model/use-invoice-tracking.ts',
+      viewPath: 'src/features/invoice-tracking/view/InvoiceTrackingView.tsx',
+      routePath: 'src/app/invoice-tracking/page.tsx',
+    });
+    expect(output.agents.frontend.allowedPatterns).toContain('src/features/<feature>/view-model/**');
+    expect(output.agents.backend.allowedPatterns).toContain('src/modules/<resource>/<resource>.service.ts');
+    expect(output.agents.database.allowedPatterns).toContain('prisma/schema.prisma');
+    expect(output.agents.architecture.allowedPatterns).toContain('ADRS.md');
+  });
+
   it('builds a rich backend API contract from the project contract', () => {
     const api = buildBackendApiContract(state());
 
@@ -107,6 +126,7 @@ describe('domain contract templates', () => {
 
     expect(review.sourceContracts).toEqual(expect.arrayContaining([
       'DESIGN.md',
+      'OUTPUT_STRUCTURE.json',
       'API_CONTRACT.json',
       'DATA_MODEL.json',
     ]));

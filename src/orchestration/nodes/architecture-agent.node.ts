@@ -15,6 +15,7 @@ import {
   createArchitectureReviewContractArtifact,
   createBackendApiContractArtifact,
   createDatabaseModelContractArtifact,
+  createOutputStructureContractArtifact,
   renderDomainContractContext,
 } from '../domain-contracts';
 
@@ -70,6 +71,7 @@ export class ArchitectureAgentNode {
       const docFiles = ['ARCHITECTURE.md', 'API.md', 'DEPLOYMENT.md', 'ADRS.md'];
       const apiContractArtifact = createBackendApiContractArtifact(state);
       const dataModelArtifact = createDatabaseModelContractArtifact(state);
+      const outputStructureArtifact = createOutputStructureContractArtifact(state);
       const architectureReviewArtifact = createArchitectureReviewContractArtifact(state);
 
       const skipCandidate = await this.memory.findSkipCandidate(
@@ -96,7 +98,7 @@ export class ArchitectureAgentNode {
             language: 'markdown',
             source: 'skip',
           };
-          const validationErrors = this.outputValidation.validateBatch([architectureReviewArtifact, candidateArtifact], state.projectId);
+          const validationErrors = this.outputValidation.validateBatch([architectureReviewArtifact, outputStructureArtifact, candidateArtifact], state.projectId);
           if (validationErrors.length === 0) {
             this.logger.log(
               `[${state.projectId}] Skip-generation: reusing architecture memory artifact (similarity=${skipCandidate.similarity?.toFixed(3)})`,
@@ -147,6 +149,7 @@ export class ArchitectureAgentNode {
       const structuredMemory = buildStructuredMemoryContext(memoryBundle.layers);
       const domainContracts = renderDomainContractContext([
         ...(state.artifacts ?? []),
+        outputStructureArtifact,
         apiContractArtifact,
         dataModelArtifact,
         architectureReviewArtifact,
@@ -201,6 +204,9 @@ ${architectureReviewArtifact.content}
 
 Sibling contracts that docs and ADRs must cite and reconcile:
 
+OUTPUT_STRUCTURE.json:
+${outputStructureArtifact.content}
+
 API_CONTRACT.json:
 ${apiContractArtifact.content}
 
@@ -230,7 +236,8 @@ Generate these 4 documentation files:
 
 4. ADRS.md
    - ADR-style records for stack, API, data model, auth/security, deployment, and major trade-offs
-   - Each decision must cite the relevant generated artifact or domain contract`,
+   - Each decision must cite the relevant generated artifact or domain contract
+   - Architecture docs must stay in the root Markdown files allowed by OUTPUT_STRUCTURE.json`,
         expectedShape: 'array',
       });
 

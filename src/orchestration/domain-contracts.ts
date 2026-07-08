@@ -8,10 +8,49 @@ import type { ValidationError } from './output-validation/schemas/schema.types';
 const CONTRACT_VERSION = 'v1' as const;
 const DOMAIN_CONTRACT_PATHS: Record<AgentDomainContractKind, string> = {
   'frontend-design': 'DESIGN.md',
+  'output-structure': 'OUTPUT_STRUCTURE.json',
   'backend-api': 'API_CONTRACT.json',
   'database-model': 'DATA_MODEL.json',
   'architecture-review': 'ARCHITECTURE_REVIEW.md',
 };
+
+type OutputStructureAgentType = GeneratedArtifact['agentType'];
+
+export interface OutputStructureFeatureTemplate {
+  feature: string;
+  routePath: string;
+  modelPath: string;
+  viewModelPath: string;
+  viewPath: string;
+}
+
+export interface OutputStructureAgentRule {
+  agentType: OutputStructureAgentType;
+  architecture: 'mvvm' | 'nestjs-domain' | 'prisma' | 'architecture-docs';
+  allowedPatterns: string[];
+  requiredPatterns: string[];
+  forbiddenPatterns: string[];
+  notes: string[];
+}
+
+export interface OutputStructureContractTemplate {
+  kind: 'output-structure';
+  version: typeof CONTRACT_VERSION;
+  projectName: string;
+  source: string;
+  agents: {
+    frontend: OutputStructureAgentRule & {
+      mvvmRoot: 'src/features';
+      appRoutePolicy: string;
+      sharedUiPolicy: string;
+      features: OutputStructureFeatureTemplate[];
+    };
+    backend: OutputStructureAgentRule;
+    database: OutputStructureAgentRule;
+    architecture: OutputStructureAgentRule;
+  };
+  repairHints: string[];
+}
 
 export interface BackendApiRouteTemplate {
   resource: string;
@@ -202,6 +241,142 @@ export function createArchitectureReviewContractArtifact(
   };
 }
 
+export function createOutputStructureContractArtifact(
+  state: DevFlowStateType,
+): GeneratedArtifact {
+  const contract = buildOutputStructureContract(state);
+  return {
+    agentType: 'frontend',
+    filePath: DOMAIN_CONTRACT_PATHS['output-structure'],
+    content: stableJson(contract),
+    language: 'json',
+    source: 'scaffold',
+    domainContract: {
+      kind: 'output-structure',
+      version: CONTRACT_VERSION,
+      summary: `Output structure contract for ${contract.agents.frontend.features.length} MVVM feature(s)`,
+    },
+  };
+}
+
+export function buildOutputStructureContract(
+  state: DevFlowStateType,
+): OutputStructureContractTemplate {
+  const projectContract = state.contract;
+  const features = resourceNames(projectContract?.requirements.features ?? [])
+    .map((feature) => buildOutputStructureFeature(feature));
+
+  return {
+    kind: 'output-structure',
+    version: CONTRACT_VERSION,
+    projectName: projectContract?.projectName ?? state.companyName,
+    source: 'DevFlow output structure contract generated from the approved project contract',
+    agents: {
+      frontend: {
+        agentType: 'frontend',
+        architecture: 'mvvm',
+        mvvmRoot: 'src/features',
+        appRoutePolicy: 'src/app/** files are route/layout shells only and must import feature views from src/features/**/view.',
+        sharedUiPolicy: 'Reusable primitives belong in src/shared/ui/**; existing src/components/ui/** remains allowed for compatibility.',
+        features,
+        allowedPatterns: [
+          'src/features/<feature>/model/**',
+          'src/features/<feature>/view-model/**',
+          'src/features/<feature>/view/**',
+          'src/app/**/page.tsx',
+          'src/app/layout.tsx',
+          'src/shared/ui/**',
+          'src/components/ui/**',
+          'src/styles/**',
+          'README-frontend.md',
+        ],
+        requiredPatterns: [
+          'src/features/<feature>/model/types.ts',
+          'src/features/<feature>/view-model/use-<feature>.ts',
+          'src/features/<feature>/view/<Feature>View.tsx',
+          'src/app/<feature>/page.tsx',
+        ],
+        forbiddenPatterns: [
+          'business UI directly in src/app/**',
+          'feature components directly in src/components/**',
+        ],
+        notes: [
+          'Keep state derivation and client-side interaction logic in view-model files.',
+          'Keep display components in view files.',
+          'Keep DTO/view types in model files.',
+        ],
+      },
+      backend: {
+        agentType: 'backend',
+        architecture: 'nestjs-domain',
+        allowedPatterns: [
+          'src/main.ts',
+          'src/app.module.ts',
+          'src/modules/<resource>/<resource>.module.ts',
+          'src/modules/<resource>/<resource>.controller.ts',
+          'src/modules/<resource>/<resource>.service.ts',
+          'src/modules/<resource>/dto/*.dto.ts',
+          'src/modules/core/**',
+          'README-backend.md',
+        ],
+        requiredPatterns: [
+          'src/modules/<resource>/<resource>.module.ts',
+          'src/modules/<resource>/<resource>.controller.ts',
+          'src/modules/<resource>/<resource>.service.ts',
+          'src/modules/<resource>/dto/*.dto.ts',
+        ],
+        forbiddenPatterns: [
+          'domain services at src/*.service.ts',
+          'controllers outside src/modules/**',
+        ],
+        notes: ['Keep NestJS resources grouped by module under src/modules/<resource>.'],
+      },
+      database: {
+        agentType: 'database',
+        architecture: 'prisma',
+        allowedPatterns: [
+          'prisma/schema.prisma',
+          'prisma/migrations/**/*.sql',
+          'prisma/seed.ts',
+          'README-database.md',
+        ],
+        requiredPatterns: [
+          'prisma/schema.prisma',
+          'prisma/migrations/**/*.sql',
+          'prisma/seed.ts',
+        ],
+        forbiddenPatterns: ['schema files outside prisma/**'],
+        notes: ['Keep Prisma schema, SQL migrations, and seed data under prisma/.'],
+      },
+      architecture: {
+        agentType: 'architecture',
+        architecture: 'architecture-docs',
+        allowedPatterns: [
+          'ARCHITECTURE.md',
+          'API.md',
+          'DEPLOYMENT.md',
+          'ADRS.md',
+          'ARCHITECTURE_REVIEW.md',
+        ],
+        requiredPatterns: [
+          'ARCHITECTURE.md',
+          'API.md',
+          'DEPLOYMENT.md',
+          'ADRS.md',
+        ],
+        forbiddenPatterns: ['implementation source files from architecture agent'],
+        notes: ['Keep architecture output as root-level Markdown documentation.'],
+      },
+    },
+    repairHints: [
+      'Move frontend business UI into src/features/<feature>/view and keep src/app pages as thin route shells.',
+      'Move frontend state and mapping logic into src/features/<feature>/view-model.',
+      'Move backend source files into src/modules/<resource> unless they are approved entrypoint files.',
+      'Keep database files under prisma/ and architecture docs at the repository root.',
+    ],
+  };
+}
+
 export function buildBackendApiContract(
   state: DevFlowStateType,
 ): BackendApiContractTemplate {
@@ -297,6 +472,7 @@ export function buildArchitectureReviewContract(
     .map((artifact) => artifact.filePath);
   const sourceContracts = unique([
     'DESIGN.md',
+    'OUTPUT_STRUCTURE.json',
     'API_CONTRACT.json',
     'DATA_MODEL.json',
     ...existing,
@@ -327,6 +503,8 @@ export function isDomainContractPath(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, '/').toUpperCase();
   return normalized.endsWith('/DESIGN.MD') ||
     normalized === 'DESIGN.MD' ||
+    normalized.endsWith('/OUTPUT_STRUCTURE.JSON') ||
+    normalized === 'OUTPUT_STRUCTURE.JSON' ||
     normalized.endsWith('/API_CONTRACT.JSON') ||
     normalized === 'API_CONTRACT.JSON' ||
     normalized.endsWith('/DATA_MODEL.JSON') ||
@@ -362,6 +540,8 @@ export function validateDomainContractArtifacts(
     const path = artifact.filePath;
     if (/DESIGN\.md$/i.test(path)) {
       errors.push(...requireContent(path, artifact, ['# DESIGN.md', '## Color', '## Components'], 'frontend'));
+    } else if (/OUTPUT_STRUCTURE\.json$/i.test(path)) {
+      errors.push(...validateOutputStructureContractArtifact(path, artifact));
     } else if (/API_CONTRACT\.json$/i.test(path)) {
       errors.push(...validateBackendApiContractArtifact(path, artifact));
     } else if (/DATA_MODEL\.json$/i.test(path)) {
@@ -377,9 +557,13 @@ export function validateDomainContractDrift(
   artifacts: GeneratedArtifact[],
 ): ValidationError[] {
   const errors: ValidationError[] = [];
+  const outputStructureContract = parseOutputStructureContract(findArtifact(artifacts, /OUTPUT_STRUCTURE\.json$/i));
   const apiContract = parseBackendApiContract(findArtifact(artifacts, /API_CONTRACT\.json$/i));
   const dataContract = parseDatabaseModelContract(findArtifact(artifacts, /DATA_MODEL\.json$/i));
 
+  if (outputStructureContract) {
+    errors.push(...validateOutputStructureDrift(artifacts, outputStructureContract));
+  }
   if (apiContract) {
     errors.push(...validateBackendApiDrift(artifacts, apiContract));
   }
@@ -389,6 +573,38 @@ export function validateDomainContractDrift(
   errors.push(...validateArchitectureReviewDrift(artifacts));
 
   return errors;
+}
+
+export function parseOutputStructureContract(
+  artifact: GeneratedArtifact | undefined,
+): OutputStructureContractTemplate | null {
+  const parsed = parseJsonArtifact(artifact);
+  if (!parsed || parsed.kind !== 'output-structure') return null;
+  const agents = objectValue(parsed.agents, {});
+  const frontend = objectValue(agents.frontend, {});
+  const backend = objectValue(agents.backend, {});
+  const database = objectValue(agents.database, {});
+  const architecture = objectValue(agents.architecture, {});
+
+  return {
+    kind: 'output-structure',
+    version: CONTRACT_VERSION,
+    projectName: stringValue(parsed.projectName, 'Project'),
+    source: stringValue(parsed.source, 'unknown'),
+    agents: {
+      frontend: {
+        ...parseOutputStructureAgentRule(frontend, 'frontend', 'mvvm'),
+        mvvmRoot: 'src/features',
+        appRoutePolicy: stringValue(frontend.appRoutePolicy, ''),
+        sharedUiPolicy: stringValue(frontend.sharedUiPolicy, ''),
+        features: arrayValue(frontend.features) as OutputStructureFeatureTemplate[],
+      },
+      backend: parseOutputStructureAgentRule(backend, 'backend', 'nestjs-domain'),
+      database: parseOutputStructureAgentRule(database, 'database', 'prisma'),
+      architecture: parseOutputStructureAgentRule(architecture, 'architecture', 'architecture-docs'),
+    },
+    repairHints: arrayValue(parsed.repairHints).map(String),
+  };
 }
 
 export function parseBackendApiContract(
@@ -485,6 +701,76 @@ function validateBackendApiContractArtifact(
   if (!contract.pagination?.queryParams?.length) errors.push(contractError(path, 'backend', `${path} requires pagination.queryParams`));
   if (!contract.prismaPolicy?.access) errors.push(contractError(path, 'backend', `${path} requires prismaPolicy.access`));
   return errors;
+}
+
+function validateOutputStructureContractArtifact(
+  path: string,
+  artifact: GeneratedArtifact,
+): ValidationError[] {
+  const contract = parseOutputStructureContract(artifact);
+  if (!contract) {
+    return [{
+      code: 'SCHEMA_VIOLATION',
+      path,
+      agentType: 'frontend',
+      message: `${path} must be valid JSON using the output-structure contract shape`,
+    }];
+  }
+
+  const errors: ValidationError[] = [];
+  const rules = [
+    contract.agents.frontend,
+    contract.agents.backend,
+    contract.agents.database,
+    contract.agents.architecture,
+  ];
+  for (const rule of rules) {
+    if (!rule.allowedPatterns.length) {
+      errors.push(contractError(path, rule.agentType, `${path} requires allowedPatterns for ${rule.agentType}`));
+    }
+    if (!rule.requiredPatterns.length) {
+      errors.push(contractError(path, rule.agentType, `${path} requires requiredPatterns for ${rule.agentType}`));
+    }
+  }
+  if (!contract.agents.frontend.features.length) {
+    errors.push(contractError(path, 'frontend', `${path} requires frontend.features for MVVM output folders`));
+  }
+  if (!contract.agents.frontend.mvvmRoot) {
+    errors.push(contractError(path, 'frontend', `${path} requires frontend.mvvmRoot`));
+  }
+  if (!contract.repairHints.length) {
+    errors.push(contractError(path, 'frontend', `${path} requires repairHints`));
+  }
+  return errors;
+}
+
+function validateOutputStructureDrift(
+  artifacts: GeneratedArtifact[],
+  contract: OutputStructureContractTemplate,
+): ValidationError[] {
+  const errors: ValidationError[] = [];
+  for (const artifact of artifacts) {
+    if (isDomainContractPath(artifact.filePath)) continue;
+    const normalizedPath = normalizeArtifactPath(artifact.filePath);
+    if (!isAllowedByOutputStructure(artifact.agentType, normalizedPath)) {
+      errors.push({
+        code: 'CONTRACT',
+        path: 'OUTPUT_STRUCTURE.json',
+        agentType: artifact.agentType,
+        message: `${artifact.filePath} violates OUTPUT_STRUCTURE.json for ${artifact.agentType}. Expected one of: ${patternsForAgent(contract, artifact.agentType).join(', ')}`,
+      });
+      continue;
+    }
+    if (artifact.agentType === 'frontend' && isNonShellAppRoute(artifact)) {
+      errors.push({
+        code: 'CONTRACT',
+        path: 'OUTPUT_STRUCTURE.json',
+        agentType: 'frontend',
+        message: `${artifact.filePath} violates OUTPUT_STRUCTURE.json: src/app/** files must be thin route/layout shells that import a feature view from src/features/**/view`,
+      });
+    }
+  }
+  return errors.slice(0, 24);
 }
 
 function validateDatabaseModelContractArtifact(
@@ -663,6 +949,90 @@ function buildRouteGroup(resource: string): BackendApiContractTemplate['routeGro
     service: names.service,
     routes,
   };
+}
+
+function buildOutputStructureFeature(feature: string): OutputStructureFeatureTemplate {
+  const viewName = `${pascalCase(feature)}View`;
+  return {
+    feature,
+    routePath: `src/app/${feature}/page.tsx`,
+    modelPath: `src/features/${feature}/model/types.ts`,
+    viewModelPath: `src/features/${feature}/view-model/use-${feature}.ts`,
+    viewPath: `src/features/${feature}/view/${viewName}.tsx`,
+  };
+}
+
+function parseOutputStructureAgentRule(
+  raw: Record<string, unknown>,
+  agentType: OutputStructureAgentType,
+  architecture: OutputStructureAgentRule['architecture'],
+): OutputStructureAgentRule {
+  return {
+    agentType,
+    architecture: stringValue(raw.architecture, architecture) as OutputStructureAgentRule['architecture'],
+    allowedPatterns: arrayValue(raw.allowedPatterns).map(String),
+    requiredPatterns: arrayValue(raw.requiredPatterns).map(String),
+    forbiddenPatterns: arrayValue(raw.forbiddenPatterns).map(String),
+    notes: arrayValue(raw.notes).map(String),
+  };
+}
+
+function isAllowedByOutputStructure(
+  agentType: GeneratedArtifact['agentType'],
+  filePath: string,
+): boolean {
+  if (agentType === 'frontend') return isAllowedFrontendPath(filePath);
+  if (agentType === 'backend') return isAllowedBackendPath(filePath);
+  if (agentType === 'database') return isAllowedDatabasePath(filePath);
+  return isAllowedArchitecturePath(filePath);
+}
+
+function isAllowedFrontendPath(filePath: string): boolean {
+  return /^src\/features\/[^/]+\/(?:model|view-model|view)\/.+\.(?:ts|tsx|jsx)$/i.test(filePath) ||
+    /^src\/app\/(?:.+\/)?page\.tsx$/i.test(filePath) ||
+    /^src\/app\/layout\.tsx$/i.test(filePath) ||
+    /^src\/shared\/ui\/.+\.(?:ts|tsx|jsx)$/i.test(filePath) ||
+    /^src\/components\/ui\/.+\.(?:ts|tsx|jsx)$/i.test(filePath) ||
+    /^src\/styles\/.+\.(?:css|scss)$/i.test(filePath) ||
+    filePath === 'README-frontend.md';
+}
+
+function isAllowedBackendPath(filePath: string): boolean {
+  return filePath === 'src/main.ts' ||
+    filePath === 'src/app.module.ts' ||
+    /^src\/modules\/[^/]+\/[^/]+\.module\.ts$/i.test(filePath) ||
+    /^src\/modules\/[^/]+\/[^/]+\.controller\.ts$/i.test(filePath) ||
+    /^src\/modules\/[^/]+\/[^/]+\.service\.ts$/i.test(filePath) ||
+    /^src\/modules\/[^/]+\/dto\/.+\.dto\.ts$/i.test(filePath) ||
+    /^src\/modules\/core\/.+\.(?:ts|md)$/i.test(filePath) ||
+    filePath === 'README-backend.md';
+}
+
+function isAllowedDatabasePath(filePath: string): boolean {
+  return filePath === 'prisma/schema.prisma' ||
+    /^prisma\/migrations\/.+\.sql$/i.test(filePath) ||
+    filePath === 'prisma/seed.ts' ||
+    filePath === 'README-database.md';
+}
+
+function isAllowedArchitecturePath(filePath: string): boolean {
+  return ['ARCHITECTURE.md', 'API.md', 'DEPLOYMENT.md', 'ADRS.md', 'ARCHITECTURE_REVIEW.md'].includes(filePath);
+}
+
+function isNonShellAppRoute(artifact: GeneratedArtifact): boolean {
+  const filePath = normalizeArtifactPath(artifact.filePath);
+  if (!/^src\/app\/(?:.+\/)?page\.tsx$/i.test(filePath)) return false;
+  const content = artifact.content;
+  const importsFeatureView = /from\s+['"`](?:@\/|\.\.?\/)*features\/[^'"`]+\/view(?:\/[^'"`]*)?['"`]/i.test(content) ||
+    /from\s+['"`](?:@\/|\.\.?\/)*src\/features\/[^'"`]+\/view(?:\/[^'"`]*)?['"`]/i.test(content);
+  return !importsFeatureView;
+}
+
+function patternsForAgent(
+  contract: OutputStructureContractTemplate,
+  agentType: GeneratedArtifact['agentType'],
+): string[] {
+  return contract.agents[agentType].allowedPatterns;
 }
 
 function buildRoutes(resource: string): BackendApiRouteTemplate[] {
@@ -978,6 +1348,10 @@ function normalizeRoutePath(path: string): string {
   return joinPath('', path).replace(/\/+/g, '/').replace(/\/$/, '') || '/';
 }
 
+function normalizeArtifactPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
 function slugify(value: string): string {
   const cleaned = value
     .toLowerCase()
@@ -1011,6 +1385,7 @@ function stableJson(value: unknown): string {
 
 function inferKind(filePath: string): AgentDomainContractKind {
   if (/DESIGN\.md$/i.test(filePath)) return 'frontend-design';
+  if (/OUTPUT_STRUCTURE\.json$/i.test(filePath)) return 'output-structure';
   if (/API_CONTRACT\.json$/i.test(filePath)) return 'backend-api';
   if (/DATA_MODEL\.(json|md)$/i.test(filePath)) return 'database-model';
   return 'architecture-review';

@@ -7,6 +7,7 @@ import {
   createArchitectureReviewContractArtifact,
   createBackendApiContractArtifact,
   createDatabaseModelContractArtifact,
+  createOutputStructureContractArtifact,
 } from '../domain-contracts';
 
 function mockContext(overrides?: Partial<WorkOrderAgentContext>): WorkOrderAgentContext {
@@ -315,6 +316,7 @@ describe('OutputValidationService', () => {
             summary: 'visual contract',
           },
         },
+        createOutputStructureContractArtifact(state),
         createBackendApiContractArtifact(state),
         createDatabaseModelContractArtifact(state),
         createArchitectureReviewContractArtifact(state),
@@ -337,6 +339,86 @@ describe('OutputValidationService', () => {
 
       const errors = service.validateBatch(artifacts, 'proj-1');
       expect(errors.some(e => e.agentType === 'backend' && e.message.includes('valid JSON'))).toBe(true);
+    });
+
+    it('accepts frontend MVVM paths from the output structure contract', () => {
+      process.env.ORCHESTRATION_TYPECHECK = 'false';
+      try {
+        const state = domainState(['Invoice tracking']);
+        const artifacts: GeneratedArtifact[] = [
+          createOutputStructureContractArtifact(state),
+          {
+            agentType: 'frontend',
+            filePath: 'src/features/invoice-tracking/model/types.ts',
+            content: 'export interface InvoiceTrackingViewModel { title: string; status: string; }\n',
+            language: 'typescript',
+          },
+          {
+            agentType: 'frontend',
+            filePath: 'src/features/invoice-tracking/view-model/use-invoice-tracking.ts',
+            content: "import type { InvoiceTrackingViewModel } from '../model/types';\nexport function useInvoiceTracking(): InvoiceTrackingViewModel { return { title: 'Invoices', status: 'ready' }; }\n",
+            language: 'typescript',
+          },
+          {
+            agentType: 'frontend',
+            filePath: 'src/features/invoice-tracking/view/InvoiceTrackingView.tsx',
+            content: "import { useInvoiceTracking } from '../view-model/use-invoice-tracking';\nexport function InvoiceTrackingView() { const model = useInvoiceTracking(); return <main><h1>{model.title}</h1><p>{model.status}</p></main>; }\n",
+            language: 'typescript',
+          },
+          {
+            agentType: 'frontend',
+            filePath: 'src/app/invoice-tracking/page.tsx',
+            content: "import { InvoiceTrackingView } from '../../features/invoice-tracking/view/InvoiceTrackingView';\nexport default function Page() { return <InvoiceTrackingView />; }\n",
+            language: 'typescript',
+          },
+        ];
+
+        const errors = service.validateBatch(artifacts, 'proj-1');
+        expect(errors.filter(e => e.agentType === 'frontend' && e.path === 'OUTPUT_STRUCTURE.json')).toHaveLength(0);
+      } finally {
+        delete process.env.ORCHESTRATION_TYPECHECK;
+      }
+    });
+
+    it('rejects frontend business UI directly in src/app when output structure is active', () => {
+      process.env.ORCHESTRATION_TYPECHECK = 'false';
+      try {
+        const state = domainState(['Invoice tracking']);
+        const errors = service.validateBatch([
+          createOutputStructureContractArtifact(state),
+          {
+            agentType: 'frontend',
+            filePath: 'src/app/invoice-tracking/page.tsx',
+            content: "export default function Page() { return <main><h1>Invoices</h1><button>Create invoice</button></main>; }\n",
+            language: 'typescript',
+          },
+        ], 'proj-1');
+
+        expect(errors.some(e => e.agentType === 'frontend' && e.message.includes('thin route'))).toBe(true);
+      } finally {
+        delete process.env.ORCHESTRATION_TYPECHECK;
+      }
+    });
+
+    it('rejects backend files outside module folders when output structure is active', () => {
+      process.env.ORCHESTRATION_TYPECHECK = 'false';
+      try {
+        const state = domainState(['Invoice tracking']);
+        const errors = service.validateBatch([
+          createOutputStructureContractArtifact(state),
+          {
+            agentType: 'backend',
+            filePath: 'src/orders.service.ts',
+            content: 'import { Injectable } from "@nestjs/common"; @Injectable() export class OrdersService { findAll(): string[] { return ["one"]; } }\n',
+            language: 'typescript',
+          },
+        ], 'proj-1');
+
+        expect(errors.some(e => e.agentType === 'backend' && e.message.includes('OUTPUT_STRUCTURE.json'))).toBe(true);
+        expect(errors.some(e => e.agentType === 'backend' && e.message.includes('src/modules/<resource>'))).toBe(true);
+      } finally {
+        delete process.env.ORCHESTRATION_TYPECHECK;
+      }
     });
 
     it('reports API and data model contract drift to the owning agents', () => {

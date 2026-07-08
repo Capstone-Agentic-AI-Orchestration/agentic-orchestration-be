@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ValidatorNode } from './validator.node';
 import { OutputValidationService } from '../output-validation/output-validation.service';
 import type { DevFlowStateType, GeneratedArtifact, ProjectContract } from '../graph/devflow.state';
-import { createBackendApiContractArtifact, createDatabaseModelContractArtifact } from '../domain-contracts';
+import { createBackendApiContractArtifact, createDatabaseModelContractArtifact, createOutputStructureContractArtifact } from '../domain-contracts';
 
 function contract(fileManifest: string[], features: string[] = []): ProjectContract {
   return {
@@ -175,6 +175,30 @@ describe('ValidatorNode multi-agent retry', () => {
     expect(backend?.feedback).toContain('invoice-tracking');
     expect(database?.feedback).toContain('DATA_MODEL.json');
     expect(database?.feedback).toContain('InvoiceTracking');
+  });
+
+  it('routes output structure violations to the owning agent', async () => {
+    process.env.ORCHESTRATION_TYPECHECK = 'false';
+    const { node } = makeNode();
+    const contractState = state([], 0);
+    contractState.contract = contract([], ['Invoice tracking']);
+    const result = await node.execute(
+      state([
+        createOutputStructureContractArtifact(contractState),
+        {
+          agentType: 'backend',
+          filePath: 'src/orders.service.ts',
+          content: 'import { Injectable } from "@nestjs/common"; @Injectable() export class OrdersService { findAll(): string[] { return ["one"]; } }\n',
+          language: 'typescript',
+        },
+      ]),
+    );
+
+    const plan = result.retryPlan ?? [];
+    const backend = plan.find((d) => d.agentType === 'backend');
+    expect(backend?.feedback).toContain('OUTPUT_STRUCTURE.json');
+    expect(backend?.feedback).toContain('src/modules/<resource>');
+    expect(plan.find((d) => d.agentType === 'frontend')).toBeUndefined();
   });
 
   it('scopes missing, duplicate, and forbidden file feedback to the responsible agent', async () => {

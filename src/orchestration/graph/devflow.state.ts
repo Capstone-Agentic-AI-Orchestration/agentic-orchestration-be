@@ -37,6 +37,7 @@ export type ArtifactSource = 'llm' | 'scaffold' | 'skip' | 'mock';
 
 export type AgentDomainContractKind =
   | 'frontend-design'
+  | 'output-structure'
   | 'backend-api'
   | 'database-model'
   | 'architecture-review';

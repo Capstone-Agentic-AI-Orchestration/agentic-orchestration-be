@@ -173,7 +173,7 @@ Produce 5–10 acceptance criteria as clear, testable statements.`,
         projectName: typeof parsed['projectName'] === 'string' ? parsed['projectName'] : `${state.companyName} Project`,
         description: typeof parsed['description'] === 'string' ? parsed['description'] : state.brief,
         requirements: state.requirements,
-        fileManifest: this.normalizeFileManifest(rawFileManifest),
+        fileManifest: this.normalizeFileManifest(rawFileManifest, state.requirements),
         acceptanceCriteria: Array.isArray(parsed['acceptanceCriteria'])
           ? (parsed['acceptanceCriteria'] as string[])
           : [],
@@ -256,6 +256,7 @@ Produce 5–10 acceptance criteria as clear, testable statements.`,
             Array.isArray(parsed.fileManifest)
               ? parsed.fileManifest.filter((f: unknown): f is string => typeof f === 'string')
               : [],
+            requirements,
           ),
           acceptanceCriteria: Array.isArray(parsed.acceptanceCriteria)
             ? parsed.acceptanceCriteria
@@ -282,6 +283,7 @@ Produce 5–10 acceptance criteria as clear, testable statements.`,
             Array.isArray(parsed.fileManifest)
               ? parsed.fileManifest.filter((f: unknown): f is string => typeof f === 'string')
               : [],
+            requirements,
           ),
           acceptanceCriteria: Array.isArray(parsed.acceptanceCriteria)
             ? parsed.acceptanceCriteria
@@ -295,15 +297,18 @@ Produce 5–10 acceptance criteria as clear, testable statements.`,
     return null;
   }
 
-  private normalizeFileManifest(fileManifest: string[]): string[] {
+  private normalizeFileManifest(fileManifest: string[], requirements: ProjectContract['requirements']): string[] {
+    const featureFiles = this.mvvmFeatureFiles(requirements.features);
     const coreFiles = [
       'DESIGN.md',
+      'OUTPUT_STRUCTURE.json',
       'src/app/page.tsx',
       'src/app/layout.tsx',
-      'src/components/ui/Button.tsx',
-      'src/components/ui/Card.tsx',
+      'src/shared/ui/Button.tsx',
+      'src/shared/ui/Card.tsx',
       'src/styles/globals.css',
       'README-frontend.md',
+      ...featureFiles,
       'API_CONTRACT.json',
       'src/app.module.ts',
       'src/main.ts',
@@ -324,9 +329,30 @@ Produce 5–10 acceptance criteria as clear, testable statements.`,
       'ADRS.md',
     ];
     const supportedFile = (filePath: string) =>
-      /\.(tsx|jsx|css|scss|module\.css|module\.ts|controller\.ts|service\.ts|dto\.ts|guard\.ts|pipe\.ts|interceptor\.ts|prisma|sql|md)$/i.test(filePath) ||
+      /\.(ts|tsx|jsx|css|scss|module\.css|module\.ts|controller\.ts|service\.ts|dto\.ts|guard\.ts|pipe\.ts|interceptor\.ts|prisma|sql|md)$/i.test(filePath) ||
       /seed\.(ts|js)$/i.test(filePath);
 
     return [...new Set([...coreFiles, ...fileManifest.filter(supportedFile)])].slice(0, 32);
+  }
+
+  private mvvmFeatureFiles(features: string[]): string[] {
+    const slugs = features
+      .map((feature) => feature.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''))
+      .filter(Boolean)
+      .slice(0, 4);
+    const featureSlugs = slugs.length > 0 ? slugs : ['items'];
+    return featureSlugs.flatMap((feature) => {
+      const viewName = feature
+        .split('-')
+        .filter(Boolean)
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join('');
+      return [
+        `src/features/${feature}/model/types.ts`,
+        `src/features/${feature}/view-model/use-${feature}.ts`,
+        `src/features/${feature}/view/${viewName}View.tsx`,
+        `src/app/${feature}/page.tsx`,
+      ];
+    });
   }
 }

@@ -12,6 +12,7 @@ import {
   createArchitectureReviewContractArtifact,
   createBackendApiContractArtifact,
   createDatabaseModelContractArtifact,
+  createOutputStructureContractArtifact,
 } from '../domain-contracts';
 import { renderDesignMarkdown } from '../prompts/agent-prompts';
 
@@ -131,7 +132,11 @@ export function buildSimulationNodeImpls(
         requirements,
         fileManifest: [
           'DESIGN.md',
-          'app/page.tsx',
+          'OUTPUT_STRUCTURE.json',
+          'src/app/page.tsx',
+          'src/features/dashboard/model/types.ts',
+          'src/features/dashboard/view-model/use-dashboard.ts',
+          'src/features/dashboard/view/DashboardView.tsx',
           'API_CONTRACT.json',
           'src/main.ts',
           'DATA_MODEL.json',
@@ -170,8 +175,36 @@ export function buildSimulationNodeImpls(
               summary: 'OpenDesign-style DevFlow visual contract for frontend artifacts',
             },
           },
-          artifact('frontend', 'app/page.tsx', 'tsx'),
-          artifact('frontend', 'app/layout.tsx', 'tsx'),
+          createOutputStructureContractArtifact(state),
+          {
+            agentType: 'frontend',
+            filePath: 'src/features/dashboard/model/types.ts',
+            language: 'typescript',
+            content: 'export interface DashboardViewModel { title: string; status: string; }\n',
+            source: 'mock',
+          },
+          {
+            agentType: 'frontend',
+            filePath: 'src/features/dashboard/view-model/use-dashboard.ts',
+            language: 'typescript',
+            content: "import type { DashboardViewModel } from '../model/types';\nexport function useDashboard(): DashboardViewModel { return { title: 'Dashboard', status: 'ready' }; }\n",
+            source: 'mock',
+          },
+          {
+            agentType: 'frontend',
+            filePath: 'src/features/dashboard/view/DashboardView.tsx',
+            language: 'tsx',
+            content: "import { useDashboard } from '../view-model/use-dashboard';\nexport function DashboardView() { const model = useDashboard(); return <main><h1>{model.title}</h1><p>{model.status}</p></main>; }\n",
+            source: 'mock',
+          },
+          {
+            agentType: 'frontend',
+            filePath: 'src/app/page.tsx',
+            language: 'tsx',
+            content: "import { DashboardView } from '../features/dashboard/view/DashboardView';\nexport default function Page() { return <DashboardView />; }\n",
+            source: 'mock',
+          },
+          artifact('frontend', 'src/app/layout.tsx', 'tsx'),
         ],
       };
     },

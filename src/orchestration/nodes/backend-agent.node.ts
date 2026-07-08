@@ -11,7 +11,7 @@ import { BACKEND_AGENT_SYSTEM, buildAgentSystemPrompt, buildStructuredMemoryCont
 import { resolveModelForNode } from '../providers/base-llm.provider';
 import { ProjectScaffolderService } from '../scaffolding/project-scaffolder.service';
 import { OutputValidationService } from '../output-validation/output-validation.service';
-import { createBackendApiContractArtifact, renderDomainContractContext } from '../domain-contracts';
+import { createBackendApiContractArtifact, createOutputStructureContractArtifact, renderDomainContractContext } from '../domain-contracts';
 
 @Injectable()
 export class BackendAgentNode {
@@ -79,6 +79,7 @@ export class BackendAgentNode {
         ...new Set([...coreFiles, ...backendFiles]),
       ];
       const apiContractArtifact = createBackendApiContractArtifact(state);
+      const outputStructureArtifact = createOutputStructureContractArtifact(state);
 
       const skipCandidate = await this.memory.findSkipCandidate(
         'backend',
@@ -104,7 +105,7 @@ export class BackendAgentNode {
             language: 'typescript',
             source: 'skip',
           };
-          const validationErrors = this.outputValidation.validateBatch([apiContractArtifact, candidateArtifact], state.projectId);
+          const validationErrors = this.outputValidation.validateBatch([apiContractArtifact, outputStructureArtifact, candidateArtifact], state.projectId);
           if (validationErrors.length === 0) {
             this.logger.log(
               `[${state.projectId}] Skip-generation: reusing backend memory artifact (similarity=${skipCandidate.similarity?.toFixed(3)})`,
@@ -151,6 +152,7 @@ export class BackendAgentNode {
       const structuredMemory = buildStructuredMemoryContext(memoryBundle.layers);
       const domainContracts = renderDomainContractContext([
         ...(state.artifacts ?? []),
+        outputStructureArtifact,
         apiContractArtifact,
       ]);
 
@@ -200,12 +202,16 @@ ${allBackendFiles.map((f) => `- ${f}`).join('\n')}
 Authoritative API_CONTRACT.json (DevFlow will persist this contract artifact automatically; do not emit API_CONTRACT.json in your JSON output):
 ${apiContractArtifact.content}
 
+Authoritative OUTPUT_STRUCTURE.json (frontend owns and persists this contract; do not emit OUTPUT_STRUCTURE.json in your JSON output):
+${outputStructureArtifact.content}
+
 Generate complete NestJS code with:
 - Proper @Module, @Controller, @Injectable decorators
 - Full CRUD operations where applicable
 - Zod-validated DTOs
 - Swagger/OpenAPI decorators where appropriate
 - Route groups, methods, paths, DTO names, module/service ownership, auth details, pagination conventions, Prisma access policy, response DTOs, and documented errors must match API_CONTRACT.json exactly
+- Backend file paths must match OUTPUT_STRUCTURE.json, especially src/modules/<resource>/<resource>.module.ts, controller.ts, service.ts, and dto/*.dto.ts
 - Use API_CONTRACT.json repairHints as the checklist when fixing validator feedback
 - Config files (package.json, tsconfig.json, nest-cli.json, tsconfig.build.json, README-backend.md) will be provided automatically — do not include them in your output`,
         expectedShape: 'array',
