@@ -11,7 +11,12 @@ import { ARCHITECTURE_AGENT_SYSTEM, buildAgentSystemPrompt, buildStructuredMemor
 import { resolveModelForNode } from '../providers/base-llm.provider';
 import { ProjectScaffolderService } from '../scaffolding/project-scaffolder.service';
 import { OutputValidationService } from '../output-validation/output-validation.service';
-import { createArchitectureReviewContractArtifact, renderDomainContractContext } from '../domain-contracts';
+import {
+  createArchitectureReviewContractArtifact,
+  createBackendApiContractArtifact,
+  createDatabaseModelContractArtifact,
+  renderDomainContractContext,
+} from '../domain-contracts';
 
 @Injectable()
 export class ArchitectureAgentNode {
@@ -63,6 +68,8 @@ export class ArchitectureAgentNode {
       this.streamEmitter.emit(projectId, 'architecture_agent', runId ?? '', 'decision', `Loaded ${memoryBundle.total} memory references for architecture context`);
 
       const docFiles = ['ARCHITECTURE.md', 'API.md', 'DEPLOYMENT.md', 'ADRS.md'];
+      const apiContractArtifact = createBackendApiContractArtifact(state);
+      const dataModelArtifact = createDatabaseModelContractArtifact(state);
       const architectureReviewArtifact = createArchitectureReviewContractArtifact(state);
 
       const skipCandidate = await this.memory.findSkipCandidate(
@@ -140,6 +147,8 @@ export class ArchitectureAgentNode {
       const structuredMemory = buildStructuredMemoryContext(memoryBundle.layers);
       const domainContracts = renderDomainContractContext([
         ...(state.artifacts ?? []),
+        apiContractArtifact,
+        dataModelArtifact,
         architectureReviewArtifact,
       ]);
 
@@ -189,6 +198,14 @@ ${artifactSummary}
 
 Architecture review contract (DevFlow will persist this contract artifact automatically; do not emit ARCHITECTURE_REVIEW.md in your JSON output):
 ${architectureReviewArtifact.content}
+
+Sibling contracts that docs and ADRs must cite and reconcile:
+
+API_CONTRACT.json:
+${apiContractArtifact.content}
+
+DATA_MODEL.json:
+${dataModelArtifact.content}
 
 Generate these 4 documentation files:
 

@@ -11,7 +11,7 @@ import { DATABASE_AGENT_SYSTEM, buildAgentSystemPrompt, buildStructuredMemoryCon
 import { resolveModelForNode } from '../providers/base-llm.provider';
 import { ProjectScaffolderService } from '../scaffolding/project-scaffolder.service';
 import { OutputValidationService } from '../output-validation/output-validation.service';
-import { createDatabaseModelContractArtifact, renderDomainContractContext } from '../domain-contracts';
+import { createBackendApiContractArtifact, createDatabaseModelContractArtifact, renderDomainContractContext } from '../domain-contracts';
 
 @Injectable()
 export class DatabaseAgentNode {
@@ -73,6 +73,7 @@ export class DatabaseAgentNode {
         'README-database.md',
       ];
       const allDbFiles = [...new Set([...coreFiles, ...dbFiles])];
+      const apiContractArtifact = createBackendApiContractArtifact(state);
       const dataModelArtifact = createDatabaseModelContractArtifact(state);
 
       const skipCandidate = await this.memory.findSkipCandidate(
@@ -147,6 +148,7 @@ export class DatabaseAgentNode {
       const structuredMemory = buildStructuredMemoryContext(memoryBundle.layers);
       const domainContracts = renderDomainContractContext([
         ...(state.artifacts ?? []),
+        apiContractArtifact,
         dataModelArtifact,
       ]);
 
@@ -196,11 +198,14 @@ ${allDbFiles.map((f) => `- ${f}`).join('\n')}
 Authoritative DATA_MODEL.json (DevFlow will persist this contract artifact automatically; do not emit DATA_MODEL.json in your JSON output):
 ${dataModelArtifact.content}
 
+Related API_CONTRACT.json (backend owns and persists this contract; use it to align entities, query patterns, pagination support, and seed data with backend API needs):
+${apiContractArtifact.content}
+
 Requirements:
 - prisma/schema.prisma: Full Prisma schema with all models, relations, and indexes (the generator client and datasource blocks will be provided automatically)
 - migrations SQL: Clean DDL with CREATE TABLE, indexes, and foreign keys
 - prisma/seed.ts: Realistic seed data using @prisma/client
-- Entity names, fields, indexes, constraints, relations, migration policy, and seed data must match DATA_MODEL.json
+- Entity names, fields, indexes, constraints, relations, migration policy, and seed data must match DATA_MODEL.json and support API_CONTRACT.json route groups
 - README-database.md: ERD description, migration guide, seeding instructions`,
         expectedShape: 'array',
       });

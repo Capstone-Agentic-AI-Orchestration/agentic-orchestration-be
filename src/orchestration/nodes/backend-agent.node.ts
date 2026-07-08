@@ -205,7 +205,8 @@ Generate complete NestJS code with:
 - Full CRUD operations where applicable
 - Zod-validated DTOs
 - Swagger/OpenAPI decorators where appropriate
-- Routes, DTO names, auth details, response DTOs, and documented errors must match API_CONTRACT.json
+- Route groups, methods, paths, DTO names, module/service ownership, auth details, pagination conventions, Prisma access policy, response DTOs, and documented errors must match API_CONTRACT.json exactly
+- Use API_CONTRACT.json repairHints as the checklist when fixing validator feedback
 - Config files (package.json, tsconfig.json, nest-cli.json, tsconfig.build.json, README-backend.md) will be provided automatically — do not include them in your output`,
         expectedShape: 'array',
       });

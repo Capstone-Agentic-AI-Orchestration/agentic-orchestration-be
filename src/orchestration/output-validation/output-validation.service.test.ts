@@ -2,7 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { WorkOrderAgentType } from '@prisma/client';
 import { OutputValidationService } from './output-validation.service';
 import type { GeneratedWorkOrderOutput, WorkOrderAgentContext } from '../providers/agent-provider.types';
-import type { GeneratedArtifact } from '../graph/devflow.state';
+import type { DevFlowStateType, GeneratedArtifact, ProjectContract } from '../graph/devflow.state';
+import {
+  createArchitectureReviewContractArtifact,
+  createBackendApiContractArtifact,
+  createDatabaseModelContractArtifact,
+} from '../domain-contracts';
 
 function mockContext(overrides?: Partial<WorkOrderAgentContext>): WorkOrderAgentContext {
   return {
@@ -19,6 +24,40 @@ function mockContext(overrides?: Partial<WorkOrderAgentContext>): WorkOrderAgent
     executionRunId: 'exec-1',
     ...overrides,
   };
+}
+
+function domainContract(features = ['Invoice tracking']): ProjectContract {
+  return {
+    projectId: 'proj-1',
+    projectName: 'Operations Hub',
+    description: 'Track operational invoices.',
+    requirements: {
+      projectType: 'internal tool',
+      features,
+      techStack: {
+        frontend: 'Next.js',
+        backend: 'NestJS',
+        database: 'PostgreSQL',
+        styling: 'Tailwind',
+      },
+      complexity: 'medium',
+      estimatedFiles: 6,
+    },
+    fileManifest: [],
+    acceptanceCriteria: ['Users can list and create invoices'],
+    lockedAt: new Date('2026-07-09T00:00:00.000Z').toISOString(),
+  };
+}
+
+function domainState(features = ['Invoice tracking']): DevFlowStateType {
+  return {
+    projectId: 'proj-1',
+    runId: 'run-1',
+    stackKey: 'next-nest-pg',
+    companyName: 'TestCo',
+    contract: domainContract(features),
+    artifacts: [],
+  } as unknown as DevFlowStateType;
 }
 
 describe('OutputValidationService', () => {
@@ -262,6 +301,7 @@ describe('OutputValidationService', () => {
     });
 
     it('accepts valid domain contract artifacts', () => {
+      const state = domainState();
       const artifacts: GeneratedArtifact[] = [
         {
           agentType: 'frontend',
@@ -275,42 +315,9 @@ describe('OutputValidationService', () => {
             summary: 'visual contract',
           },
         },
-        {
-          agentType: 'backend',
-          filePath: 'API_CONTRACT.json',
-          content: JSON.stringify({ kind: 'backend-api', version: 'v1', routes: [] }),
-          language: 'json',
-          source: 'scaffold',
-          domainContract: {
-            kind: 'backend-api',
-            version: 'v1',
-            summary: 'api contract',
-          },
-        },
-        {
-          agentType: 'database',
-          filePath: 'DATA_MODEL.json',
-          content: JSON.stringify({ kind: 'database-model', version: 'v1', entities: [] }),
-          language: 'json',
-          source: 'scaffold',
-          domainContract: {
-            kind: 'database-model',
-            version: 'v1',
-            summary: 'data contract',
-          },
-        },
-        {
-          agentType: 'architecture',
-          filePath: 'ARCHITECTURE_REVIEW.md',
-          content: '# Architecture Review Contract\n\nReview source contracts before writing docs.',
-          language: 'markdown',
-          source: 'scaffold',
-          domainContract: {
-            kind: 'architecture-review',
-            version: 'v1',
-            summary: 'architecture review',
-          },
-        },
+        createBackendApiContractArtifact(state),
+        createDatabaseModelContractArtifact(state),
+        createArchitectureReviewContractArtifact(state),
       ];
 
       const errors = service.validateBatch(artifacts, 'proj-1');
@@ -335,35 +342,21 @@ describe('OutputValidationService', () => {
     it('reports API and data model contract drift to the owning agents', () => {
       process.env.ORCHESTRATION_TYPECHECK = 'false';
       try {
+        const state = domainState(['Invoice tracking']);
+        const apiContractArtifact = createBackendApiContractArtifact(state);
+        const dataModelArtifact = createDatabaseModelContractArtifact({
+          ...state,
+          artifacts: [apiContractArtifact],
+        } as DevFlowStateType);
         const artifacts: GeneratedArtifact[] = [
-          {
-            agentType: 'backend',
-            filePath: 'API_CONTRACT.json',
-            content: JSON.stringify({
-              kind: 'backend-api',
-              version: 'v1',
-              routes: [{ method: 'GET', path: '/api/invoices' }],
-            }),
-            language: 'json',
-            source: 'scaffold',
-          },
+          apiContractArtifact,
           {
             agentType: 'backend',
             filePath: 'src/orders.controller.ts',
-            content: 'export class OrdersController { list(): string { return "orders"; } }',
+            content: 'import { Controller, Get } from "@nestjs/common"; @Controller("orders") export class OrdersController { @Get() list(): string { return "orders"; } }',
             language: 'typescript',
           },
-          {
-            agentType: 'database',
-            filePath: 'DATA_MODEL.json',
-            content: JSON.stringify({
-              kind: 'database-model',
-              version: 'v1',
-              entities: [{ name: 'Invoice' }],
-            }),
-            language: 'json',
-            source: 'scaffold',
-          },
+          dataModelArtifact,
           {
             agentType: 'database',
             filePath: 'prisma/schema.prisma',
@@ -373,11 +366,32 @@ describe('OutputValidationService', () => {
         ];
 
         const errors = service.validateBatch(artifacts, 'proj-1');
-        expect(errors.some(e => e.agentType === 'backend' && e.message.includes('invoices'))).toBe(true);
-        expect(errors.some(e => e.agentType === 'database' && e.message.includes('Invoice'))).toBe(true);
+        expect(errors.some(e => e.agentType === 'backend' && e.message.includes('invoice-tracking'))).toBe(true);
+        expect(errors.some(e => e.agentType === 'database' && e.message.includes('InvoiceTracking'))).toBe(true);
       } finally {
         delete process.env.ORCHESTRATION_TYPECHECK;
       }
+    });
+
+    it('reports missing ADR coverage to the architecture owner', () => {
+      const state = domainState(['Invoice tracking']);
+      const errors = service.validateBatch([
+        createArchitectureReviewContractArtifact(state),
+        {
+          agentType: 'architecture',
+          filePath: 'ARCHITECTURE.md',
+          content: '# Architecture\n\nSystem overview for the operations hub with components and data flow.',
+          language: 'markdown',
+        },
+        {
+          agentType: 'architecture',
+          filePath: 'ADRS.md',
+          content: '# ADRS\n\n## ADR: Stack\n\nWe use the selected stack for implementation consistency.',
+          language: 'markdown',
+        },
+      ], 'proj-1');
+
+      expect(errors.some(e => e.agentType === 'architecture' && e.message.includes('must cover api decisions'))).toBe(true);
     });
   });
 });

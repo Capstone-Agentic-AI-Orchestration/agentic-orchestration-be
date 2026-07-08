@@ -2,15 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ValidatorNode } from './validator.node';
 import { OutputValidationService } from '../output-validation/output-validation.service';
 import type { DevFlowStateType, GeneratedArtifact, ProjectContract } from '../graph/devflow.state';
+import { createBackendApiContractArtifact, createDatabaseModelContractArtifact } from '../domain-contracts';
 
-function contract(fileManifest: string[]): ProjectContract {
+function contract(fileManifest: string[], features: string[] = []): ProjectContract {
   return {
     projectId: 'proj-1',
     projectName: 'Test',
     description: 'Test project',
     requirements: {
       projectType: 'app',
-      features: [],
+      features,
       techStack: { frontend: 'Next.js', backend: 'NestJS', database: 'PostgreSQL', styling: 'Tailwind' },
       complexity: 'medium',
       estimatedFiles: 2,
@@ -141,36 +142,23 @@ describe('ValidatorNode multi-agent retry', () => {
   it('routes domain contract drift to backend and database owners', async () => {
     process.env.ORCHESTRATION_TYPECHECK = 'false';
     const { node } = makeNode();
+    const contractState = state([], 0);
+    contractState.contract = contract([], ['Invoice tracking']);
+    const apiContractArtifact = createBackendApiContractArtifact(contractState);
+    const dataModelArtifact = createDatabaseModelContractArtifact({
+      ...contractState,
+      artifacts: [apiContractArtifact],
+    } as DevFlowStateType);
     const result = await node.execute(
       state([
-        {
-          agentType: 'backend',
-          filePath: 'API_CONTRACT.json',
-          content: JSON.stringify({
-            kind: 'backend-api',
-            version: 'v1',
-            routes: [{ method: 'GET', path: '/api/invoices' }],
-          }),
-          language: 'json',
-          source: 'scaffold',
-        },
+        apiContractArtifact,
         {
           agentType: 'backend',
           filePath: 'src/orders.controller.ts',
-          content: 'export class OrdersController { list(): string { return "orders"; } }',
+          content: 'import { Controller, Get } from "@nestjs/common"; @Controller("orders") export class OrdersController { @Get() list(): string { return "orders"; } }',
           language: 'typescript',
         },
-        {
-          agentType: 'database',
-          filePath: 'DATA_MODEL.json',
-          content: JSON.stringify({
-            kind: 'database-model',
-            version: 'v1',
-            entities: [{ name: 'Invoice' }],
-          }),
-          language: 'json',
-          source: 'scaffold',
-        },
+        dataModelArtifact,
         {
           agentType: 'database',
           filePath: 'prisma/schema.prisma',
@@ -184,9 +172,9 @@ describe('ValidatorNode multi-agent retry', () => {
     const backend = plan.find((d) => d.agentType === 'backend');
     const database = plan.find((d) => d.agentType === 'database');
     expect(backend?.feedback).toContain('API_CONTRACT.json');
-    expect(backend?.feedback).toContain('invoices');
+    expect(backend?.feedback).toContain('invoice-tracking');
     expect(database?.feedback).toContain('DATA_MODEL.json');
-    expect(database?.feedback).toContain('Invoice');
+    expect(database?.feedback).toContain('InvoiceTracking');
   });
 
   it('scopes missing, duplicate, and forbidden file feedback to the responsible agent', async () => {
