@@ -61,6 +61,11 @@ describe('simulation node impls', () => {
     expect(be.artifacts?.every((a) => a.agentType === 'backend')).toBe(true);
     expect(db.artifacts?.every((a) => a.agentType === 'database')).toBe(true);
     expect(arch.artifacts?.every((a) => a.agentType === 'architecture')).toBe(true);
+    expect(fe.artifacts?.some((a) => a.filePath === 'DESIGN.md')).toBe(true);
+    expect(be.artifacts?.some((a) => a.filePath === 'API_CONTRACT.json')).toBe(true);
+    expect(db.artifacts?.some((a) => a.filePath === 'DATA_MODEL.json')).toBe(true);
+    expect(arch.artifacts?.some((a) => a.filePath === 'ARCHITECTURE_REVIEW.md')).toBe(true);
+    expect(arch.artifacts?.some((a) => a.filePath === 'ADRS.md')).toBe(true);
   });
 
   it('validate_outputs clears error so the run proceeds to Gate 2', async () => {

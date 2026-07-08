@@ -7,10 +7,11 @@ import { AgentLlmRouter } from '../providers/agent-llm.router';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StreamEmitter } from '../streaming/stream-emitter.service';
 import { humanReadableError } from './human-readable-error';
-import { FRONTEND_AGENT_SYSTEM, buildAgentSystemPrompt, buildStructuredMemoryContext } from '../prompts/agent-prompts';
+import { FRONTEND_AGENT_SYSTEM, buildAgentSystemPrompt, buildStructuredMemoryContext, renderDesignMarkdown } from '../prompts/agent-prompts';
 import { resolveModelForNode } from '../providers/base-llm.provider';
 import { ProjectScaffolderService } from '../scaffolding/project-scaffolder.service';
 import { OutputValidationService } from '../output-validation/output-validation.service';
+import { renderDomainContractContext } from '../domain-contracts';
 
 @Injectable()
 export class FrontendAgentNode {
@@ -77,6 +78,7 @@ export class FrontendAgentNode {
       const allFrontendFiles = [
         ...new Set([...coreSourceFiles, ...frontendSourceFiles]),
       ];
+      const designContractArtifact = this.createDesignContractArtifact(state);
 
       const skipCandidate = await this.memory.findSkipCandidate(
         'frontend',
@@ -100,7 +102,7 @@ export class FrontendAgentNode {
             source: 'skip',
           };
           const validationErrors = this.outputValidation.validateBatch(
-            [candidateArtifact],
+            [designContractArtifact, candidateArtifact],
             state.projectId,
             { designGuidance: state.designGuidance },
           );
@@ -109,7 +111,7 @@ export class FrontendAgentNode {
               `[${state.projectId}] Skip-generation: reusing frontend memory artifact (similarity=${skipCandidate.similarity?.toFixed(3)})`,
             );
             await this.memory.bumpUsageStats(skipCandidate.id);
-            return { artifacts: this.mergeWithScaffold([candidateArtifact], state), validationFeedback: null };
+            return { artifacts: this.mergeWithScaffold([designContractArtifact, candidateArtifact], state), validationFeedback: null };
           }
           this.logger.warn(
             `[${state.projectId}] Skip candidate failed content validation (${validationErrors.length} errors), falling through to LLM generation`,
@@ -123,6 +125,7 @@ export class FrontendAgentNode {
       if (process.env.MOCK_MODE === 'true') {
         this.streamEmitter.emit(projectId, 'frontend_agent', runId ?? '', 'decision', 'Mock mode: generating predefined frontend components');
         const mockArtifacts: GeneratedArtifact[] = [
+          designContractArtifact,
           {
             agentType: 'frontend',
             filePath: 'src/app/page.tsx',
@@ -148,6 +151,10 @@ export class FrontendAgentNode {
         : '';
 
       const structuredMemory = buildStructuredMemoryContext(memoryBundle.layers);
+      const domainContracts = renderDomainContractContext([
+        ...(state.artifacts ?? []),
+        designContractArtifact,
+      ]);
 
       const selfCritiqueFeedback = state.selfCritique
         ? `Self-review found these quality issues before validation — address them:\n${state.selfCritique}`
@@ -163,6 +170,7 @@ export class FrontendAgentNode {
         artifactManifest,
         previousFeedback: combinedFeedback || undefined,
         contractSummary: state.contractSummary || undefined,
+        domainContracts,
         designGuidance: state.designGuidance,
         agentSkillRole: 'frontend',
       });
@@ -197,13 +205,16 @@ Generate complete, production-quality code for each file. Config files (package.
         expectedShape: 'array',
       });
 
-      const llmArtifacts: GeneratedArtifact[] = result.value.map((item) => ({
-        agentType: 'frontend' as const,
-        filePath: item.filePath,
-        content: item.content,
-        language: item.language ?? this.inferLanguage(item.filePath),
-        source: 'llm',
-      }));
+      const llmArtifacts: GeneratedArtifact[] = [
+        designContractArtifact,
+        ...result.value.map((item) => ({
+          agentType: 'frontend' as const,
+          filePath: item.filePath,
+          content: item.content,
+          language: item.language ?? this.inferLanguage(item.filePath),
+          source: 'llm' as const,
+        })),
+      ];
 
       const artifacts = this.mergeWithScaffold(llmArtifacts, state);
 
@@ -254,6 +265,21 @@ Generate complete, production-quality code for each file. Config files (package.
       companyName: state.companyName,
     });
     return this.scaffolder.merge(llmArtifacts, scaffoldFiles, 'frontend');
+  }
+
+  private createDesignContractArtifact(state: DevFlowStateType): GeneratedArtifact {
+    return {
+      agentType: 'frontend',
+      filePath: 'DESIGN.md',
+      content: renderDesignMarkdown(state.designGuidance),
+      language: 'markdown',
+      source: 'scaffold',
+      domainContract: {
+        kind: 'frontend-design',
+        version: 'v1',
+        summary: 'OpenDesign-style DevFlow visual contract for frontend artifacts',
+      },
+    };
   }
 
   private inferLanguage(filePath: string): string {

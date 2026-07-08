@@ -74,6 +74,22 @@ describe('agent prompt reliability contracts', () => {
     expect(prompt).toContain('PROJECT CONVENTIONS');
   });
 
+  it('injects domain contracts as authoritative planning artifacts', () => {
+    const prompt = buildAgentSystemPrompt({
+      basePrompt: BACKEND_AGENT_SYSTEM,
+      domainContracts: [
+        'DOMAIN CONTRACTS (authoritative planning artifacts - generated code and docs must conform to these):',
+        '--- API_CONTRACT.json (backend-api) ---',
+        '{"kind":"backend-api","routes":[{"method":"GET","path":"/api/orders"}]}',
+      ].join('\n'),
+      agentSkillRole: 'backend',
+    });
+
+    expect(prompt).toContain('DOMAIN CONTRACTS');
+    expect(prompt).toContain('API_CONTRACT.json');
+    expect(prompt).toContain('/api/orders');
+  });
+
   it('injects selected frontend design guidance into prompt options', () => {
     const prompt = buildAgentSystemPrompt({
       basePrompt: FRONTEND_AGENT_SYSTEM,

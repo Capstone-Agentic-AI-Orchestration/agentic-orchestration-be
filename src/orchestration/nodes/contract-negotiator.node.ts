@@ -297,12 +297,14 @@ Produce 5–10 acceptance criteria as clear, testable statements.`,
 
   private normalizeFileManifest(fileManifest: string[]): string[] {
     const coreFiles = [
+      'DESIGN.md',
       'src/app/page.tsx',
       'src/app/layout.tsx',
       'src/components/ui/Button.tsx',
       'src/components/ui/Card.tsx',
       'src/styles/globals.css',
       'README-frontend.md',
+      'API_CONTRACT.json',
       'src/app.module.ts',
       'src/main.ts',
       'src/modules/core/core.module.ts',
@@ -310,18 +312,21 @@ Produce 5–10 acceptance criteria as clear, testable statements.`,
       'src/modules/core/core.service.ts',
       'src/modules/core/dto/create-item.dto.ts',
       'README-backend.md',
+      'DATA_MODEL.json',
       'prisma/schema.prisma',
       'prisma/migrations/0001_initial.sql',
       'prisma/seed.ts',
       'README-database.md',
+      'ARCHITECTURE_REVIEW.md',
       'ARCHITECTURE.md',
       'API.md',
       'DEPLOYMENT.md',
+      'ADRS.md',
     ];
     const supportedFile = (filePath: string) =>
       /\.(tsx|jsx|css|scss|module\.css|module\.ts|controller\.ts|service\.ts|dto\.ts|guard\.ts|pipe\.ts|interceptor\.ts|prisma|sql|md)$/i.test(filePath) ||
       /seed\.(ts|js)$/i.test(filePath);
 
-    return [...new Set([...coreFiles, ...fileManifest.filter(supportedFile)])].slice(0, 24);
+    return [...new Set([...coreFiles, ...fileManifest.filter(supportedFile)])].slice(0, 32);
   }
 }

@@ -138,6 +138,57 @@ describe('ValidatorNode multi-agent retry', () => {
     expect(plan.find((d) => d.agentType === 'backend')).toBeUndefined();
   });
 
+  it('routes domain contract drift to backend and database owners', async () => {
+    process.env.ORCHESTRATION_TYPECHECK = 'false';
+    const { node } = makeNode();
+    const result = await node.execute(
+      state([
+        {
+          agentType: 'backend',
+          filePath: 'API_CONTRACT.json',
+          content: JSON.stringify({
+            kind: 'backend-api',
+            version: 'v1',
+            routes: [{ method: 'GET', path: '/api/invoices' }],
+          }),
+          language: 'json',
+          source: 'scaffold',
+        },
+        {
+          agentType: 'backend',
+          filePath: 'src/orders.controller.ts',
+          content: 'export class OrdersController { list(): string { return "orders"; } }',
+          language: 'typescript',
+        },
+        {
+          agentType: 'database',
+          filePath: 'DATA_MODEL.json',
+          content: JSON.stringify({
+            kind: 'database-model',
+            version: 'v1',
+            entities: [{ name: 'Invoice' }],
+          }),
+          language: 'json',
+          source: 'scaffold',
+        },
+        {
+          agentType: 'database',
+          filePath: 'prisma/schema.prisma',
+          content: 'model Order {\n  id String @id @default(cuid())\n}',
+          language: 'prisma',
+        },
+      ]),
+    );
+
+    const plan = result.retryPlan ?? [];
+    const backend = plan.find((d) => d.agentType === 'backend');
+    const database = plan.find((d) => d.agentType === 'database');
+    expect(backend?.feedback).toContain('API_CONTRACT.json');
+    expect(backend?.feedback).toContain('invoices');
+    expect(database?.feedback).toContain('DATA_MODEL.json');
+    expect(database?.feedback).toContain('Invoice');
+  });
+
   it('scopes missing, duplicate, and forbidden file feedback to the responsible agent', async () => {
     process.env.ORCHESTRATION_TYPECHECK = 'false';
     const { node } = makeNode();

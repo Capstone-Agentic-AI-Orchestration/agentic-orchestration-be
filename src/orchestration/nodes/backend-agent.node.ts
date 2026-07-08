@@ -11,6 +11,7 @@ import { BACKEND_AGENT_SYSTEM, buildAgentSystemPrompt, buildStructuredMemoryCont
 import { resolveModelForNode } from '../providers/base-llm.provider';
 import { ProjectScaffolderService } from '../scaffolding/project-scaffolder.service';
 import { OutputValidationService } from '../output-validation/output-validation.service';
+import { createBackendApiContractArtifact, renderDomainContractContext } from '../domain-contracts';
 
 @Injectable()
 export class BackendAgentNode {
@@ -77,6 +78,7 @@ export class BackendAgentNode {
       const allBackendFiles = [
         ...new Set([...coreFiles, ...backendFiles]),
       ];
+      const apiContractArtifact = createBackendApiContractArtifact(state);
 
       const skipCandidate = await this.memory.findSkipCandidate(
         'backend',
@@ -102,13 +104,13 @@ export class BackendAgentNode {
             language: 'typescript',
             source: 'skip',
           };
-          const validationErrors = this.outputValidation.validateBatch([candidateArtifact], state.projectId);
+          const validationErrors = this.outputValidation.validateBatch([apiContractArtifact, candidateArtifact], state.projectId);
           if (validationErrors.length === 0) {
             this.logger.log(
               `[${state.projectId}] Skip-generation: reusing backend memory artifact (similarity=${skipCandidate.similarity?.toFixed(3)})`,
             );
             await this.memory.bumpUsageStats(skipCandidate.id);
-            return { artifacts: this.mergeWithScaffold([candidateArtifact], state), validationFeedback: null };
+            return { artifacts: this.mergeWithScaffold([apiContractArtifact, candidateArtifact], state), validationFeedback: null };
           }
           this.logger.warn(
             `[${state.projectId}] Skip candidate failed content validation (${validationErrors.length} errors), falling through to LLM generation`,
@@ -122,6 +124,7 @@ export class BackendAgentNode {
       if (process.env.MOCK_MODE === 'true') {
         this.streamEmitter.emit(projectId, 'backend_agent', runId ?? '', 'decision', 'Mock mode: generating predefined backend files');
         const mockArtifacts: GeneratedArtifact[] = [
+          apiContractArtifact,
           {
             agentType: 'backend',
             filePath: 'src/main.ts',
@@ -146,6 +149,10 @@ export class BackendAgentNode {
         : '';
 
       const structuredMemory = buildStructuredMemoryContext(memoryBundle.layers);
+      const domainContracts = renderDomainContractContext([
+        ...(state.artifacts ?? []),
+        apiContractArtifact,
+      ]);
 
       const selfCritiqueFeedback = state.selfCritique
         ? `Self-review found these quality issues before validation — address them:\n${state.selfCritique}`
@@ -160,6 +167,7 @@ export class BackendAgentNode {
         memoryContext: structuredMemory,
         artifactManifest,
         previousFeedback: combinedFeedback || undefined,
+        domainContracts,
         agentSkillRole: 'backend',
       });
 
@@ -189,22 +197,29 @@ Acceptance Criteria: ${state.contract.acceptanceCriteria.join('; ')}
 Files to generate:
 ${allBackendFiles.map((f) => `- ${f}`).join('\n')}
 
+Authoritative API_CONTRACT.json (DevFlow will persist this contract artifact automatically; do not emit API_CONTRACT.json in your JSON output):
+${apiContractArtifact.content}
+
 Generate complete NestJS code with:
 - Proper @Module, @Controller, @Injectable decorators
 - Full CRUD operations where applicable
 - Zod-validated DTOs
 - Swagger/OpenAPI decorators where appropriate
+- Routes, DTO names, auth details, response DTOs, and documented errors must match API_CONTRACT.json
 - Config files (package.json, tsconfig.json, nest-cli.json, tsconfig.build.json, README-backend.md) will be provided automatically — do not include them in your output`,
         expectedShape: 'array',
       });
 
-      const llmArtifacts: GeneratedArtifact[] = result.value.map((item) => ({
-        agentType: 'backend' as const,
-        filePath: item.filePath,
-        content: item.content,
-        language: item.language ?? this.inferLanguage(item.filePath),
-        source: 'llm',
-      }));
+      const llmArtifacts: GeneratedArtifact[] = [
+        apiContractArtifact,
+        ...result.value.map((item) => ({
+          agentType: 'backend' as const,
+          filePath: item.filePath,
+          content: item.content,
+          language: item.language ?? this.inferLanguage(item.filePath),
+          source: 'llm' as const,
+        })),
+      ];
 
       const artifacts = this.mergeWithScaffold(llmArtifacts, state);
 

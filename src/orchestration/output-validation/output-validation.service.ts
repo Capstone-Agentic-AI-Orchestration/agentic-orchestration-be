@@ -7,6 +7,11 @@ import type { ValidationError, ValidationResult } from './schemas/schema.types';
 import { checkSyntax } from './syntax-checkers/index';
 import { checkTypeScriptProgram } from './syntax-checkers/typescript.program.checker';
 import { checkIntegration } from './cross-artifact/integration.checker';
+import {
+  isDomainContractPath,
+  validateDomainContractArtifacts,
+  validateDomainContractDrift,
+} from '../domain-contracts';
 
 const FORBIDDEN_GENERATED_PATHS = [
   /(^|\/)package(?:-lock)?\.json$/i,
@@ -78,8 +83,10 @@ export class OutputValidationService {
     }
 
     all.push(...this.validateFrontendDesign(artifacts, context.designGuidance));
+    all.push(...validateDomainContractArtifacts(artifacts));
     all.push(...this.validateProgram(artifacts, filesWithSyntaxErrors));
     all.push(...this.validateIntegration(artifacts));
+    all.push(...validateDomainContractDrift(artifacts));
 
     return all;
   }
@@ -134,7 +141,9 @@ export class OutputValidationService {
       }
     }
 
-    errors.push(...checkSyntax(artifact.content, artifact.filePath));
+    if (!isDomainContractPath(artifact.filePath)) {
+      errors.push(...checkSyntax(artifact.content, artifact.filePath));
+    }
 
     // Stamp the owning agent so the validator can route retries precisely.
     return errors.map((e) => ({ agentType: artifact.agentType, ...e }));

@@ -8,6 +8,12 @@ import type {
 } from './devflow.state';
 import type { DevFlowNodeImpls } from './devflow.graph';
 import { NODE } from './topology';
+import {
+  createArchitectureReviewContractArtifact,
+  createBackendApiContractArtifact,
+  createDatabaseModelContractArtifact,
+} from '../domain-contracts';
+import { renderDesignMarkdown } from '../prompts/agent-prompts';
 
 /**
  * Simulation node implementations (Phase 3c).
@@ -124,10 +130,15 @@ export function buildSimulationNodeImpls(
         description: 'Simulated architecture contract for UI testing.',
         requirements,
         fileManifest: [
+          'DESIGN.md',
           'app/page.tsx',
+          'API_CONTRACT.json',
           'src/main.ts',
+          'DATA_MODEL.json',
           'prisma/schema.prisma',
+          'ARCHITECTURE_REVIEW.md',
           'ARCHITECTURE.md',
+          'ADRS.md',
         ],
         acceptanceCriteria: [
           'App boots and renders the dashboard',
@@ -147,6 +158,18 @@ export function buildSimulationNodeImpls(
       ]);
       return {
         artifacts: [
+          {
+            agentType: 'frontend',
+            filePath: 'DESIGN.md',
+            language: 'markdown',
+            content: renderDesignMarkdown(state.designGuidance),
+            source: 'scaffold',
+            domainContract: {
+              kind: 'frontend-design',
+              version: 'v1',
+              summary: 'OpenDesign-style DevFlow visual contract for frontend artifacts',
+            },
+          },
           artifact('frontend', 'app/page.tsx', 'tsx'),
           artifact('frontend', 'app/layout.tsx', 'tsx'),
         ],
@@ -161,6 +184,7 @@ export function buildSimulationNodeImpls(
       ]);
       return {
         artifacts: [
+          createBackendApiContractArtifact(state),
           artifact('backend', 'src/main.ts', 'ts'),
           artifact('backend', 'src/app.module.ts', 'ts'),
         ],
@@ -174,7 +198,10 @@ export function buildSimulationNodeImpls(
         { type: 'decision', text: 'Database artifacts generated.', pct: 100 },
       ]);
       return {
-        artifacts: [artifact('database', 'prisma/schema.prisma', 'prisma')],
+        artifacts: [
+          createDatabaseModelContractArtifact(state),
+          artifact('database', 'prisma/schema.prisma', 'prisma'),
+        ],
       };
     },
 
@@ -185,7 +212,11 @@ export function buildSimulationNodeImpls(
         { type: 'decision', text: 'Architecture docs generated.', pct: 100 },
       ]);
       return {
-        artifacts: [artifact('architecture', 'ARCHITECTURE.md', 'markdown')],
+        artifacts: [
+          createArchitectureReviewContractArtifact(state),
+          artifact('architecture', 'ARCHITECTURE.md', 'markdown'),
+          artifact('architecture', 'ADRS.md', 'markdown'),
+        ],
       };
     },
 

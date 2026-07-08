@@ -35,6 +35,18 @@ export interface ProjectContract {
 
 export type ArtifactSource = 'llm' | 'scaffold' | 'skip' | 'mock';
 
+export type AgentDomainContractKind =
+  | 'frontend-design'
+  | 'backend-api'
+  | 'database-model'
+  | 'architecture-review';
+
+export interface AgentDomainContract {
+  kind: AgentDomainContractKind;
+  version: 'v1';
+  summary: string;
+}
+
 /**
  * A single agent's retry instruction emitted by the validator: which code agent
  * to re-run and the validation feedback scoped to that agent's own failures.
@@ -94,6 +106,7 @@ export interface GeneratedArtifact {
   content: string;
   language: string;
   source?: ArtifactSource;
+  domainContract?: AgentDomainContract;
 }
 
 export function mergeArtifactsByPath(

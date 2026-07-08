@@ -260,5 +260,124 @@ describe('OutputValidationService', () => {
       expect(errors.filter(e => e.agentType === 'frontend').map(e => e.message).join('\n')).toContain('error state');
       expect(errors.filter(e => e.agentType === 'frontend').map(e => e.message).join('\n')).toContain('empty state');
     });
+
+    it('accepts valid domain contract artifacts', () => {
+      const artifacts: GeneratedArtifact[] = [
+        {
+          agentType: 'frontend',
+          filePath: 'DESIGN.md',
+          content: '# DESIGN.md\n\n## Color\nBlack cockpit.\n\n## Components\nTables and forms.',
+          language: 'markdown',
+          source: 'scaffold',
+          domainContract: {
+            kind: 'frontend-design',
+            version: 'v1',
+            summary: 'visual contract',
+          },
+        },
+        {
+          agentType: 'backend',
+          filePath: 'API_CONTRACT.json',
+          content: JSON.stringify({ kind: 'backend-api', version: 'v1', routes: [] }),
+          language: 'json',
+          source: 'scaffold',
+          domainContract: {
+            kind: 'backend-api',
+            version: 'v1',
+            summary: 'api contract',
+          },
+        },
+        {
+          agentType: 'database',
+          filePath: 'DATA_MODEL.json',
+          content: JSON.stringify({ kind: 'database-model', version: 'v1', entities: [] }),
+          language: 'json',
+          source: 'scaffold',
+          domainContract: {
+            kind: 'database-model',
+            version: 'v1',
+            summary: 'data contract',
+          },
+        },
+        {
+          agentType: 'architecture',
+          filePath: 'ARCHITECTURE_REVIEW.md',
+          content: '# Architecture Review Contract\n\nReview source contracts before writing docs.',
+          language: 'markdown',
+          source: 'scaffold',
+          domainContract: {
+            kind: 'architecture-review',
+            version: 'v1',
+            summary: 'architecture review',
+          },
+        },
+      ];
+
+      const errors = service.validateBatch(artifacts, 'proj-1');
+      expect(errors).toHaveLength(0);
+    });
+
+    it('rejects malformed domain contract artifacts', () => {
+      const artifacts: GeneratedArtifact[] = [
+        {
+          agentType: 'backend',
+          filePath: 'API_CONTRACT.json',
+          content: '{not-json',
+          language: 'json',
+          source: 'scaffold',
+        },
+      ];
+
+      const errors = service.validateBatch(artifacts, 'proj-1');
+      expect(errors.some(e => e.agentType === 'backend' && e.message.includes('valid JSON'))).toBe(true);
+    });
+
+    it('reports API and data model contract drift to the owning agents', () => {
+      process.env.ORCHESTRATION_TYPECHECK = 'false';
+      try {
+        const artifacts: GeneratedArtifact[] = [
+          {
+            agentType: 'backend',
+            filePath: 'API_CONTRACT.json',
+            content: JSON.stringify({
+              kind: 'backend-api',
+              version: 'v1',
+              routes: [{ method: 'GET', path: '/api/invoices' }],
+            }),
+            language: 'json',
+            source: 'scaffold',
+          },
+          {
+            agentType: 'backend',
+            filePath: 'src/orders.controller.ts',
+            content: 'export class OrdersController { list(): string { return "orders"; } }',
+            language: 'typescript',
+          },
+          {
+            agentType: 'database',
+            filePath: 'DATA_MODEL.json',
+            content: JSON.stringify({
+              kind: 'database-model',
+              version: 'v1',
+              entities: [{ name: 'Invoice' }],
+            }),
+            language: 'json',
+            source: 'scaffold',
+          },
+          {
+            agentType: 'database',
+            filePath: 'prisma/schema.prisma',
+            content: 'model Order {\n  id String @id @default(cuid())\n}',
+            language: 'prisma',
+          },
+        ];
+
+        const errors = service.validateBatch(artifacts, 'proj-1');
+        expect(errors.some(e => e.agentType === 'backend' && e.message.includes('invoices'))).toBe(true);
+        expect(errors.some(e => e.agentType === 'database' && e.message.includes('Invoice'))).toBe(true);
+      } finally {
+        delete process.env.ORCHESTRATION_TYPECHECK;
+      }
+    });
   });
 });
