@@ -18,6 +18,48 @@ const row = (overrides: Record<string, unknown> = {}) => ({
   progress: null,
   metadata: {},
   hash: 'hash-1',
+  status: 'active',
+  pinned: false,
+  expiresAt: null,
+  archivedAt: null,
+  lastAccessedAt: null,
+  accessCount: 0,
+  embedding: null,
+  createdAt: now,
+  ...overrides,
+});
+
+const handoffRow = (overrides: Record<string, unknown> = {}) => ({
+  id: 'handoff-1',
+  projectId: 'project-1',
+  runId: 'run-1',
+  fromAgent: 'frontend',
+  toAgent: 'backend',
+  title: 'Frontend needs artifact language',
+  content: 'Frontend expects artifact responses to include language and source fields.',
+  artifact: { path: 'src/shared/api/devflow-api.ts', kind: 'api-contract' },
+  status: 'open',
+  acknowledgedAt: null,
+  resolvedAt: null,
+  createdAt: now,
+  updatedAt: now,
+  ...overrides,
+});
+
+const snapshotRow = (overrides: Record<string, unknown> = {}) => ({
+  id: 'snapshot-1',
+  projectId: 'project-1',
+  runId: 'run-1',
+  agentType: 'backend',
+  taskHash: 'hash-task',
+  task: 'Implement artifact API with Supabase project authorization guards',
+  text: '# MEMORY CONTEXT PACK',
+  includedEventIds: ['mem-1'],
+  sourceEventMaxCreatedAt: now,
+  sourceEventCount: 1,
+  retrievalMode: 'hybrid',
+  stalenessMs: 0,
+  metadata: {},
   createdAt: now,
   ...overrides,
 });
@@ -64,7 +106,9 @@ describe('ContextMemoryService', () => {
   });
 
   it('builds a budgeted context pack with decisions, handoffs, errors, artifacts, and progress', async () => {
-    prisma.$queryRaw.mockResolvedValueOnce([
+    prisma.$queryRaw
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
       row(),
       row({
         id: 'mem-2',
@@ -97,7 +141,9 @@ describe('ContextMemoryService', () => {
         content: 'Backend agent is generating service methods.',
         progress: { status: 'running', node: 'backend_agent', percent: 45 },
       }),
-    ]);
+      ])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([snapshotRow()]);
 
     const pack = await service.buildContextPack({
       projectId: 'project-1',
@@ -114,7 +160,138 @@ describe('ContextMemoryService', () => {
     expect(pack.text).toContain('Errors To Avoid');
     expect(pack.text).toContain('Artifacts');
     expect(pack.text).toContain('Live Progress');
+    expect(pack.freshness.retrievalMode).toBe('hybrid');
+    expect(pack.snapshotId).toBe('snapshot-1');
     expect(pack.included.error).toContain('mem-3');
+  });
+
+  it('uses a fresh cached snapshot when no newer memory exists', async () => {
+    prisma.$queryRaw.mockResolvedValueOnce([
+      snapshotRow({
+        sourceEventCount: 7,
+        sourceEventMaxCreatedAt: now,
+        stalenessMs: 10,
+      }),
+    ]);
+
+    const pack = await service.buildContextPack({
+      projectId: 'project-1',
+      runId: 'run-1',
+      agentType: 'backend',
+      task: 'Implement artifact API with Supabase project authorization guards',
+      maxChars: 2000,
+      allowCached: true,
+    });
+
+    expect(pack.cacheHit).toBe(true);
+    expect(pack.snapshotId).toBe('snapshot-1');
+    expect(pack.freshness.includedEventCount).toBe(7);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('filters archived and expired memory out of retrieval', async () => {
+    prisma.$queryRaw.mockResolvedValueOnce([
+      row({ id: 'active-memory', title: 'Active guard decision' }),
+    ]);
+
+    const results = await service.search({
+      projectId: 'project-1',
+      query: 'guard decision',
+      limit: 5,
+    });
+
+    expect(results.map((result) => result.record.id)).toEqual(['active-memory']);
+  });
+
+  it('injects open handoffs addressed to the current agent into the context pack', async () => {
+    prisma.$queryRaw
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([row({ id: 'mem-1' })])
+      .mockResolvedValueOnce([handoffRow()])
+      .mockResolvedValueOnce([snapshotRow({
+        includedEventIds: ['mem-1', 'handoff:handoff-1'],
+      })]);
+
+    const pack = await service.buildContextPack({
+      projectId: 'project-1',
+      runId: 'run-1',
+      agentType: 'backend',
+      task: 'Implement artifact API',
+      maxChars: 2000,
+    });
+
+    expect(pack.text).toContain('Frontend needs artifact language');
+    expect(pack.included.handoff).toContain('handoff:handoff-1');
+  });
+
+  it('ranks semantically similar records with local free embeddings', async () => {
+    prisma.$queryRaw.mockResolvedValueOnce([
+      row({
+        id: 'semantic-match',
+        title: 'Protect project files',
+        content: 'Every artifact endpoint must verify project membership before returning source files.',
+        tags: [],
+      }),
+      row({
+        id: 'weak-match',
+        title: 'Dashboard spacing',
+        content: 'Adjust visual spacing in dashboard cards.',
+        tags: [],
+      }),
+    ]);
+
+    const results = await service.search({
+      projectId: 'project-1',
+      agentType: 'backend',
+      query: 'authorization guard for artifacts',
+      limit: 2,
+    });
+
+    expect(results[0].record.id).toBe('semantic-match');
+    expect(results[0].reason.semanticScore).toBeGreaterThan(0);
+  });
+
+  it('creates, acknowledges, and resolves handoffs', async () => {
+    prisma.$queryRaw
+      .mockResolvedValueOnce([handoffRow()])
+      .mockResolvedValueOnce([handoffRow({ status: 'acknowledged', acknowledgedAt: now })])
+      .mockResolvedValueOnce([handoffRow({ status: 'resolved', acknowledgedAt: now, resolvedAt: now })]);
+
+    await expect(service.createHandoff({
+      projectId: 'project-1',
+      runId: 'run-1',
+      fromAgent: 'frontend',
+      toAgent: 'backend',
+      title: 'Frontend needs artifact language',
+      content: 'Frontend expects artifact responses to include language and source fields.',
+      artifact: { path: 'src/shared/api/devflow-api.ts', kind: 'api-contract' },
+    })).resolves.toMatchObject({ id: 'handoff-1', status: 'open' });
+
+    await expect(service.acknowledgeHandoff('handoff-1')).resolves.toMatchObject({ status: 'acknowledged' });
+    await expect(service.resolveHandoff('handoff-1')).resolves.toMatchObject({ status: 'resolved' });
+  });
+
+  it('compacts old run memory into a project summary event', async () => {
+    prisma.$queryRaw
+      .mockResolvedValueOnce([
+        row({ id: 'mem-1', type: 'decision', title: 'Decision A', content: 'Use Supabase auth.' }),
+        row({ id: 'mem-2', type: 'error', title: 'Error B', content: 'Avoid missing membership checks.' }),
+      ])
+      .mockResolvedValueOnce([row({
+        id: 'summary-1',
+        type: 'project_memory',
+        title: 'Run memory summary',
+        content: 'Compacted summary',
+      })]);
+
+    const result = await service.compactProjectMemory({
+      projectId: 'project-1',
+      runId: 'run-1',
+      maxEvents: 20,
+    });
+
+    expect(result.summary.type).toBe('project_memory');
+    expect(result.compactedEventCount).toBe(2);
   });
 
   it('searches project memory using deterministic ranking', async () => {
@@ -158,6 +335,12 @@ describe('ContextMemoryController', () => {
       buildContextPack: vi.fn().mockResolvedValue({ text: '# MEMORY CONTEXT PACK' }),
       search: vi.fn().mockResolvedValue([]),
       list: vi.fn().mockResolvedValue([]),
+      createHandoff: vi.fn().mockResolvedValue(handoffRow()),
+      acknowledgeHandoff: vi.fn().mockResolvedValue(handoffRow({ status: 'acknowledged' })),
+      resolveHandoff: vi.fn().mockResolvedValue(handoffRow({ status: 'resolved' })),
+      listHandoffs: vi.fn().mockResolvedValue([]),
+      listSnapshots: vi.fn().mockResolvedValue([]),
+      compactProjectMemory: vi.fn().mockResolvedValue({ compactedEventCount: 0 }),
     };
     const idempotency = {
       requestHash: vi.fn(),
@@ -184,10 +367,31 @@ describe('ContextMemoryController', () => {
     });
 
     await controller.listProjectEvents('project-1', { limit: 10 });
+    await controller.createHandoff({
+      projectId: 'project-1',
+      fromAgent: 'frontend',
+      toAgent: 'backend',
+      title: 'Need API contract',
+      content: 'Return artifact source.',
+    });
+    await controller.acknowledgeHandoff('handoff-1');
+    await controller.resolveHandoff('handoff-1');
+    await controller.listProjectHandoffs('project-1', {});
+    await controller.listProjectSnapshots('project-1', {});
+    await controller.compactProjectMemory({
+      projectId: 'project-1',
+      runId: 'run-1',
+    });
 
     expect(service.record).toHaveBeenCalledTimes(1);
     expect(service.buildContextPack).toHaveBeenCalledTimes(1);
     expect(service.search).toHaveBeenCalledTimes(1);
     expect(service.list).toHaveBeenCalledWith({ projectId: 'project-1', limit: 10 });
+    expect(service.createHandoff).toHaveBeenCalledTimes(1);
+    expect(service.acknowledgeHandoff).toHaveBeenCalledWith('handoff-1');
+    expect(service.resolveHandoff).toHaveBeenCalledWith('handoff-1');
+    expect(service.listHandoffs).toHaveBeenCalledWith({ projectId: 'project-1' });
+    expect(service.listSnapshots).toHaveBeenCalledWith({ projectId: 'project-1' });
+    expect(service.compactProjectMemory).toHaveBeenCalledTimes(1);
   });
 });

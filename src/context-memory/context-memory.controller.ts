@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -22,6 +23,10 @@ import { executeIdempotentCommand } from '../shared/idempotency/idempotent-comma
 import { IdempotencyService } from '../shared/idempotency/idempotency.service';
 import {
   BuildContextPackDto,
+  CompactContextMemoryDto,
+  CreateContextHandoffDto,
+  ListContextHandoffsDto,
+  ListContextSnapshotsDto,
   RecordContextMemoryDto,
   SearchContextMemoryDto,
 } from './dto/context-memory.dto';
@@ -104,6 +109,72 @@ export class ContextMemoryController {
     );
   }
 
+  @Post('handoffs')
+  @HttpCode(HttpStatus.CREATED)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }))
+  createHandoff(
+    @Body() dto: CreateContextHandoffDto,
+    @CurrentUser() user?: AuthUser,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.runIdempotent(
+      idempotencyKey,
+      `user:${user?.id ?? 'system'}:POST:/memory/handoffs`,
+      dto,
+      HttpStatus.CREATED,
+      () => this.contextMemory.createHandoff(dto),
+    );
+  }
+
+  @Patch('handoffs/:handoffId/ack')
+  @HttpCode(HttpStatus.OK)
+  acknowledgeHandoff(
+    @Param('handoffId') handoffId: string,
+    @CurrentUser() user?: AuthUser,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.runIdempotent(
+      idempotencyKey,
+      `user:${user?.id ?? 'system'}:PATCH:/memory/handoffs/:handoffId/ack`,
+      { handoffId },
+      HttpStatus.OK,
+      () => this.contextMemory.acknowledgeHandoff(handoffId),
+    );
+  }
+
+  @Patch('handoffs/:handoffId/resolve')
+  @HttpCode(HttpStatus.OK)
+  resolveHandoff(
+    @Param('handoffId') handoffId: string,
+    @CurrentUser() user?: AuthUser,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.runIdempotent(
+      idempotencyKey,
+      `user:${user?.id ?? 'system'}:PATCH:/memory/handoffs/:handoffId/resolve`,
+      { handoffId },
+      HttpStatus.OK,
+      () => this.contextMemory.resolveHandoff(handoffId),
+    );
+  }
+
+  @Post('compact')
+  @HttpCode(HttpStatus.OK)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }))
+  compactProjectMemory(
+    @Body() dto: CompactContextMemoryDto,
+    @CurrentUser() user?: AuthUser,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.runIdempotent(
+      idempotencyKey,
+      `user:${user?.id ?? 'system'}:POST:/memory/compact`,
+      dto,
+      HttpStatus.OK,
+      () => this.contextMemory.compactProjectMemory(dto),
+    );
+  }
+
   @Get('projects/:projectId/events')
   listProjectEvents(
     @Param('projectId') projectId: string,
@@ -121,6 +192,28 @@ export class ContextMemoryController {
     @Query() query: Omit<SearchContextMemoryDto, 'projectId'>,
   ) {
     return this.contextMemory.list({
+      ...query,
+      projectId,
+    });
+  }
+
+  @Get('projects/:projectId/handoffs')
+  listProjectHandoffs(
+    @Param('projectId') projectId: string,
+    @Query() query: ListContextHandoffsDto,
+  ) {
+    return this.contextMemory.listHandoffs({
+      ...query,
+      projectId,
+    });
+  }
+
+  @Get('projects/:projectId/snapshots')
+  listProjectSnapshots(
+    @Param('projectId') projectId: string,
+    @Query() query: ListContextSnapshotsDto,
+  ) {
+    return this.contextMemory.listSnapshots({
       ...query,
       projectId,
     });

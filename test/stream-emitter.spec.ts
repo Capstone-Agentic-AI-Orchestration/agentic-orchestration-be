@@ -121,4 +121,25 @@ describe('StreamEmitter', () => {
       }).not.toThrow();
     });
   });
+
+  describe('context memory progress', () => {
+    it('records progress checkpoints when context memory is wired', () => {
+      const contextMemory = {
+        record: vi.fn().mockResolvedValue({ id: 'mem-1' }),
+      };
+      const memoryEmitter = new StreamEmitter(mockGateway, null, contextMemory as never);
+
+      memoryEmitter.progress('proj-1', 'backend_agent', 'run-1', 55, 'Generating service methods');
+
+      expect(contextMemory.record).toHaveBeenCalledWith(expect.objectContaining({
+        projectId: 'proj-1',
+        runId: 'run-1',
+        agentType: 'backend_agent',
+        type: 'progress_event',
+        title: 'backend_agent progress',
+        content: 'Generating service methods',
+        progress: { status: 'running', node: 'backend_agent', percent: 55 },
+      }));
+    });
+  });
 });

@@ -229,7 +229,16 @@ export const serviceBoundaries: ServiceBoundaryDefinition[] = [
   },
   {
     name: 'orchestration',
-    owns: ['orchestration_runs', 'work_order_executions', 'event_logs', 'run_budgets', 'agent_memories', 'memory_context_events'],
+    owns: [
+      'orchestration_runs',
+      'work_order_executions',
+      'event_logs',
+      'run_budgets',
+      'agent_memories',
+      'memory_context_events',
+      'memory_context_handoffs',
+      'memory_context_snapshots',
+    ],
     publishes: [],
     dependsOn: ['identity', 'project-delivery', 'notifications', 'admin'],
     extractionReadiness: 'internal-module',

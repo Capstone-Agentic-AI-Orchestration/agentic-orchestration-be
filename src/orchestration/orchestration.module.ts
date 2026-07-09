@@ -1,5 +1,6 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { GithubModule } from '../github/github.module';
+import { ContextMemoryModule } from '../context-memory/context-memory.module';
 import { MemoryModule } from '../memory/memory.module';
 import { SupervisorModule } from '../supervisor/supervisor.module';
 import { GatewayModule } from '../gateway/gateway.module';
@@ -34,6 +35,7 @@ import { OutputValidationService } from './output-validation/output-validation.s
   imports: [
     // PrismaModule is global — no import needed
     GithubModule,
+    ContextMemoryModule,
     MemoryModule,
     // SupervisorModule exports EventLogService, which all agent nodes inject.
     forwardRef(() => SupervisorModule),

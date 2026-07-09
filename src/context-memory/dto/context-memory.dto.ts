@@ -1,6 +1,7 @@
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsNumber,
@@ -121,6 +122,10 @@ export class BuildContextPackDto {
   @Min(1000)
   @Max(80000)
   maxChars?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  allowCached?: boolean;
 }
 
 export class SearchContextMemoryDto {
@@ -157,4 +162,85 @@ export class SearchContextMemoryDto {
   @Min(1)
   @Max(100)
   limit?: number;
+}
+
+export class CreateContextHandoffDto {
+  @IsString()
+  projectId!: string;
+
+  @IsOptional()
+  @IsString()
+  runId?: string;
+
+  @IsString()
+  fromAgent!: string;
+
+  @IsString()
+  toAgent!: string;
+
+  @IsString()
+  title!: string;
+
+  @IsString()
+  content!: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ContextMemoryArtifactDto)
+  artifact?: ContextMemoryArtifactDto;
+
+  @IsOptional()
+  @IsObject()
+  metadata?: Record<string, unknown>;
+}
+
+export class ListContextHandoffsDto {
+  @IsOptional()
+  @IsString()
+  runId?: string;
+
+  @IsOptional()
+  @IsString()
+  toAgent?: string;
+
+  @IsOptional()
+  @IsIn(['open', 'acknowledged', 'resolved'])
+  status?: 'open' | 'acknowledged' | 'resolved';
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
+}
+
+export class ListContextSnapshotsDto {
+  @IsOptional()
+  @IsString()
+  runId?: string;
+
+  @IsOptional()
+  @IsString()
+  agentType?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(50)
+  limit?: number;
+}
+
+export class CompactContextMemoryDto {
+  @IsString()
+  projectId!: string;
+
+  @IsOptional()
+  @IsString()
+  runId?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(500)
+  maxEvents?: number;
 }
