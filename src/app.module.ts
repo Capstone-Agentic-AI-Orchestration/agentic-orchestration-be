@@ -23,6 +23,7 @@ import { ReportsModule } from './reports/reports.module';
 import { DevelopersModule } from './developers/developers.module';
 import { SharedKernelModule } from './shared/shared-kernel.module';
 import { HealthModule } from './health/health.module';
+import { ContextMemoryModule } from './context-memory/context-memory.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { HealthModule } from './health/health.module';
     SharedKernelModule,
     PrismaModule,
     HealthModule,
+    ContextMemoryModule,
     AuthModule,
     GithubModule,
     // Phase 2E — WebSocket gateway (must be before OrchestrationModule so
