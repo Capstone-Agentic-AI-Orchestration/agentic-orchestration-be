@@ -164,6 +164,37 @@ describe('CollaborationService', () => {
     });
   });
 
+  it('scopes developer conversations to shared team threads', async () => {
+    await service.listConversations('project-1', devUser);
+
+    expect(prisma.projectConversation.findMany).toHaveBeenCalledWith({
+      where: {
+        projectId: 'project-1',
+        visibility: { in: [CollaborationVisibility.TEAM] },
+      },
+      include: expect.any(Object),
+      orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }],
+    });
+  });
+
+  it('counts only messages newer than the current user read timestamp', async () => {
+    const lastReadAt = new Date('2026-05-28T02:00:00.000Z');
+    prisma.projectConversation.findMany.mockResolvedValue([
+      makeConversation({
+        visibility: CollaborationVisibility.TEAM,
+        reads: [{ lastReadAt }],
+      }),
+    ]);
+    prisma.projectMessage.findMany.mockResolvedValue([
+      { conversationId: 'conversation-1', createdAt: new Date('2026-05-28T01:00:00.000Z') },
+      { conversationId: 'conversation-1', createdAt: new Date('2026-05-28T03:00:00.000Z') },
+    ]);
+
+    await expect(service.listConversations('project-1', devUser)).resolves.toEqual([
+      expect.objectContaining({ id: 'conversation-1', unreadCount: 1 }),
+    ]);
+  });
+
   it('returns a cursor page for conversations when pagination is requested', async () => {
     prisma.projectConversation.findMany.mockResolvedValue([
       makeConversation({ id: 'conversation-1', updatedAt: new Date('2026-05-28T03:00:00.000Z') }),

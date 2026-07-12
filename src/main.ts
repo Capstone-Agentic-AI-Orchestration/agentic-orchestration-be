@@ -12,8 +12,23 @@ async function bootstrap(): Promise<void> {
   // Must be registered before app.listen() so the /devflow namespace is mounted.
   app.useWebSocketAdapter(new IoAdapter(app));
 
+  const configuredCorsOrigin = process.env.CORS_ORIGIN ?? '*';
+  const configuredCorsOrigins = configuredCorsOrigin
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  const corsOrigin = configuredCorsOrigin === '*'
+    ? '*'
+    : process.env.NODE_ENV === 'production'
+      ? configuredCorsOrigins
+      : [...new Set([
+          ...configuredCorsOrigins,
+          'http://localhost:3000',
+          'http://127.0.0.1:3000',
+        ])];
+
   app.enableCors({
-    origin: process.env.CORS_ORIGIN ?? '*',
+    origin: corsOrigin,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
   });

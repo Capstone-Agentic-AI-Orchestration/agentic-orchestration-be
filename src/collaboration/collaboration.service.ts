@@ -105,26 +105,26 @@ export class CollaborationService {
     });
 
     const visibleConversations = paged ? toCursorPage(conversations, page).items : conversations;
-    const conversationIds = visibleConversations.map((c) => c.id);
-    const unreadCounts = conversationIds.length
-      ? await this.prisma.projectMessage.groupBy({
-          by: ['conversationId'],
+    const conversationIds = visibleConversations.map((conversation) => conversation.id);
+    const unreadCandidates = conversationIds.length
+      ? await this.prisma.projectMessage.findMany({
           where: {
             conversationId: { in: conversationIds },
             authorId: { not: user.id },
           },
-          _count: { conversationId: true },
+          select: { conversationId: true, createdAt: true },
         })
       : [];
 
-    const unreadMap = new Map(unreadCounts.map((u) => [u.conversationId, u._count.conversationId]));
-
     const items = visibleConversations.map((conversation) => {
       const lastReadAt = conversation.reads[0]?.lastReadAt;
-      const totalUnread = unreadMap.get(conversation.id) ?? 0;
+      const unreadCount = unreadCandidates.filter((message) => (
+        message.conversationId === conversation.id &&
+        (!lastReadAt || message.createdAt > lastReadAt)
+      )).length;
       return {
         ...conversation,
-        unreadCount: lastReadAt ? Math.max(0, totalUnread) : totalUnread,
+        unreadCount,
       };
     });
 
