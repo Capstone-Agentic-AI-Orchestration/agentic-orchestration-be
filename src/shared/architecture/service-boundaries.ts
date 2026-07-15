@@ -162,7 +162,7 @@ export interface IntegrationEventRegistryViolation {
 
 export const serviceBoundarySourceDirectories: Record<ServiceBoundary, string[]> = {
   identity: ['auth', 'profiles', 'developers'],
-  intake: ['inquiries', 'client-invites'],
+  intake: ['inquiries', 'client-invites', 'intake'],
   'project-delivery': ['projects', 'reports', 'schedule'],
   collaboration: ['collaboration'],
   notifications: ['notifications'],
@@ -189,7 +189,7 @@ export const serviceBoundaries: ServiceBoundaryDefinition[] = [
   },
   {
     name: 'intake',
-    owns: ['client_inquiries', 'client_invites', 'project kickoffs from approved inquiries'],
+    owns: ['client_inquiries', 'client_invites', 'project_intakes', 'project_intake_snapshots', 'document_extractions', 'project kickoffs from approved inquiries'],
     publishes: [
       IntegrationEvents.inquirySubmitted,
       IntegrationEvents.inquiryApproved,
@@ -240,7 +240,7 @@ export const serviceBoundaries: ServiceBoundaryDefinition[] = [
       'memory_context_snapshots',
     ],
     publishes: [],
-    dependsOn: ['identity', 'project-delivery', 'notifications', 'admin'],
+    dependsOn: ['identity', 'intake', 'project-delivery', 'notifications', 'admin'],
     extractionReadiness: 'internal-module',
   },
   {
@@ -269,6 +269,10 @@ export const prismaModelOwners: Record<string, PrismaModelOwner> = {
   project: 'project-delivery',
   clientInquiry: 'intake',
   clientInvite: 'intake',
+  projectIntake: 'intake',
+  projectIntakeComment: 'intake',
+  projectIntakeSnapshot: 'intake',
+  documentExtraction: 'intake',
   projectKickoff: 'project-delivery',
   gateEvent: 'orchestration',
   artifact: 'project-delivery',
@@ -303,6 +307,10 @@ export const prismaModelSchemas: Record<string, string> = {
   project: 'projects',
   clientInquiry: 'intake',
   clientInvite: 'intake',
+  projectIntake: 'intake',
+  projectIntakeComment: 'intake',
+  projectIntakeSnapshot: 'intake',
+  documentExtraction: 'intake',
   projectKickoff: 'projects',
   gateEvent: 'projects',
   artifact: 'projects',

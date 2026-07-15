@@ -28,6 +28,7 @@ import { CreateWorkOrderDto, UpdateWorkOrderDto } from './dto/work-order.dto';
 import { UpdateProjectKickoffDto } from './dto/project-kickoff.dto';
 import { ControlOrchestrationDto } from './dto/control-orchestration.dto';
 import { NotificationsService } from '../notifications/notifications.service';
+import { IntakeService } from '../intake/intake.service';
 import {
   CursorPage,
   CursorPageInput,
@@ -334,6 +335,7 @@ export class ProjectsService {
     private readonly prisma: PrismaService,
     private readonly orchestration: OrchestrationService,
     private readonly notifications: NotificationsService,
+    private readonly intake?: IntakeService,
   ) {}
 
   async create(dto: CreateProjectDto, user: AuthUser): Promise<Project> {
@@ -368,6 +370,7 @@ export class ProjectsService {
         companyName: true,
         brief: true,
         stackKey: true,
+        createdById: true,
         runId: true,
         kickoff: {
           select: {
@@ -401,13 +404,18 @@ export class ProjectsService {
       throw new BadRequestException('At least one READY work order with instructions is required before orchestration can start');
     }
 
-    const runId = await this.orchestration.startRun(
-      project.id,
-      project.brief,
-      project.stackKey,
-      project.companyName,
-      user.id,
-    );
+    const intakeContext = this.intake ? await this.intake.contextForStart(project, user.id) : undefined;
+    const runId = intakeContext
+      ? await this.orchestration.startRun(
+        project.id,
+        project.brief,
+        project.stackKey,
+        project.companyName,
+        user.id,
+        OrchestrationRunTrigger.START,
+        intakeContext,
+      )
+      : await this.orchestration.startRun(project.id, project.brief, project.stackKey, project.companyName, user.id);
 
     return { accepted: true, runId };
   }
@@ -417,6 +425,7 @@ export class ProjectsService {
     user: AuthUser,
   ): Promise<{ accepted: boolean; runId: string }> {
     const project = await this.findRunnableProject(id, user);
+    const intakeContext = this.intake ? await this.intake.contextForStart(project, user.id) : undefined;
     const runId = await this.orchestration.startRun(
       project.id,
       project.brief,
@@ -424,6 +433,7 @@ export class ProjectsService {
       project.companyName,
       user.id,
       OrchestrationRunTrigger.RERUN_READY_WORK_ORDERS,
+      intakeContext,
     );
 
     return { accepted: true, runId };
@@ -2514,9 +2524,10 @@ export class ProjectsService {
     user: AuthUser,
     approved: boolean,
     notes?: string,
+    acceptOpenQuestions?: boolean,
   ): Promise<{ accepted: boolean }> {
     await this.assertAccessible(id, user);
-    await this.orchestration.resumeGate1(id, approved, notes);
+    await this.orchestration.resumeGate1(id, approved, notes, acceptOpenQuestions);
     return { accepted: true };
   }
 
@@ -2736,6 +2747,7 @@ export class ProjectsService {
     companyName: string;
     brief: string;
     stackKey: string;
+    createdById: string | null;
   }> {
     const project = await this.prisma.project.findFirst({
       where: this.projectAccessWhere(user, id),
@@ -2744,6 +2756,7 @@ export class ProjectsService {
         companyName: true,
         brief: true,
         stackKey: true,
+        createdById: true,
         kickoff: {
           select: { status: true },
         },

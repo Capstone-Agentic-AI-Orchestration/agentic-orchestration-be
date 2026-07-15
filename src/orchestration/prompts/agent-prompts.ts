@@ -28,7 +28,10 @@ Required shape:
     "styling": string
   },
   "complexity": "simple" | "medium" | "complex",
-  "estimatedFiles": number
+  "estimatedFiles": number,
+  "assumptions": string[],
+  "openQuestions": string[],
+  "evidence": [{ "documentId": string, "locator"?: string, "supports": string }]
 }
 
 Rules:
@@ -36,6 +39,13 @@ Rules:
 - Map techStack from the brief or stackKey; if a category is missing, infer from the project type but flag it as inferred.
 - complexity: "simple" (< 5 features, single page), "medium" (5-10 features, 2-3 pages), "complex" (multi-module, auth, external integrations).
 - estimatedFiles: count must be realistic — typical min 1 file per feature + 1 config file.`;
+/*
+- When a locked intake package is supplied, it is the source of truth. Preserve its explicit exclusions and future-phase items.
+- Do not invent a requirement. Record missing or conflicting information in openQuestions.
+- Link material requirements to supplied source document IDs in evidence. Assumptions must be explicit.`;
+*/
+
+export const REQUIREMENTS_PARSER_INTAKE_RULES = `When a locked intake package is supplied, it is the source of truth. Preserve explicit exclusions and future-phase items. Do not invent requirements: record missing or conflicting information in openQuestions, and link material requirements to supplied source document IDs in evidence. Keep assumptions explicit.`;
 
 export const CONTRACT_NEGOTIATOR_SYSTEM = `You are a senior software architect producing a detailed project contract.
 You respond ONLY with a valid JSON object — no markdown fences, no prose outside the JSON.

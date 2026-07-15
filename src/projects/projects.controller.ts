@@ -693,7 +693,9 @@ export class ProjectsController {
       `user:${user.id}:POST:/projects/${id}/gates/architecture`,
       dto,
       HttpStatus.OK,
-      () => this.projectsService.approveGate1(id, user, dto.approved, dto.notes),
+      () => dto.acceptOpenQuestions === undefined
+        ? this.projectsService.approveGate1(id, user, dto.approved, dto.notes)
+        : this.projectsService.approveGate1(id, user, dto.approved, dto.notes, dto.acceptOpenQuestions),
     );
   }
 

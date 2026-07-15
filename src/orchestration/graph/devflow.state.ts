@@ -8,6 +8,8 @@
 
 // ─── Domain Types ─────────────────────────────────────────────────────────────
 
+import type { IntakeContextPackage, RequirementEvidence } from '../../intake/intake.types';
+
 export interface TechStack {
   frontend: string;
   backend: string;
@@ -21,6 +23,9 @@ export interface RequirementsDocument {
   techStack: TechStack;
   complexity: 'simple' | 'medium' | 'complex';
   estimatedFiles: number;
+  assumptions?: string[];
+  openQuestions?: string[];
+  evidence?: RequirementEvidence[];
 }
 
 export interface ProjectContract {
@@ -79,6 +84,7 @@ export interface DevFlowStateType {
   brief: string;
   stackKey: string;
   companyName: string;
+  intakeContext: IntakeContextPackage | null;
   requirements: RequirementsDocument | null;
   contract: ProjectContract | null;
   artifacts: GeneratedArtifact[];
@@ -108,6 +114,9 @@ export interface DevFlowStateType {
   contractSummary: string;
   /** Self-critique feedback from the review node, addressed before formal validation. */
   selfCritique: string;
+  requirementsAssumptions: string[];
+  openQuestions: string[];
+  requirementsEvidence: RequirementEvidence[];
 }
 
 /** Field defaults — the explicit equivalent of the old Annotation `default` factories. */
@@ -120,6 +129,7 @@ export function createInitialDevFlowState(
     brief: seed.brief ?? '',
     stackKey: seed.stackKey ?? '',
     companyName: seed.companyName ?? '',
+    intakeContext: seed.intakeContext ?? null,
     requirements: seed.requirements ?? null,
     contract: seed.contract ?? null,
     artifacts: seed.artifacts ?? [],
@@ -135,6 +145,9 @@ export function createInitialDevFlowState(
     retryPlan: seed.retryPlan ?? [],
     contractSummary: seed.contractSummary ?? '',
     selfCritique: seed.selfCritique ?? '',
+    requirementsAssumptions: seed.requirementsAssumptions ?? [],
+    openQuestions: seed.openQuestions ?? [],
+    requirementsEvidence: seed.requirementsEvidence ?? [],
   };
 }
 

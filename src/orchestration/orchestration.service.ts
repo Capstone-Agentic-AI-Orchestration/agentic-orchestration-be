@@ -45,6 +45,7 @@ import {
 } from './providers/graph-llm.provider';
 import { OrchestrationEmitter } from './streaming/orchestration-emitter.service';
 import { OrchestrationRunDispatcher } from './run-dispatcher.service';
+import type { IntakeContextPackage } from '../intake/intake.types';
 import { AgentProviderMode, AgentProviderStatus } from './providers/agent-provider.types';
 import {
   agentArtifactContractFor,
@@ -439,6 +440,7 @@ Rough idea: ${input.brief}`;
     companyName: string,
     actorId?: string,
     trigger: OrchestrationRunTrigger = OrchestrationRunTrigger.START,
+    intakeContext?: IntakeContextPackage,
   ): Promise<string> {
     const runId = createId();
     this.agentProviderRegistry.getActiveProviderOrThrow();
@@ -471,6 +473,7 @@ Rough idea: ${input.brief}`;
           ? MOCK_NODE.LOAD_READY_WORK_ORDERS
           : 'parse_requirements',
         actorId: actorId ?? null,
+        intakeSnapshotId: intakeContext?.intakeSnapshotId ?? null,
         readyWorkOrders,
       },
     });
@@ -525,9 +528,10 @@ Rough idea: ${input.brief}`;
       const simulationState = createInitialDevFlowState({
         projectId,
         runId,
-        brief,
+        brief: intakeContext?.canonicalBrief || brief,
         stackKey,
         companyName,
+        intakeContext,
         gate1Approved: true,
         gate2Approved: true,
       });
@@ -545,9 +549,10 @@ Rough idea: ${input.brief}`;
     const initialState = createInitialDevFlowState({
       projectId,
       runId,
-      brief,
+      brief: intakeContext?.canonicalBrief || brief,
       stackKey,
       companyName,
+      intakeContext,
     });
 
     // Drive the pipeline via the dispatcher. Errors are handled inside driveRun
@@ -582,6 +587,7 @@ Rough idea: ${input.brief}`;
     projectId: string,
     approved: boolean,
     notes?: string,
+    acceptOpenQuestions = false,
   ): Promise<void> {
     this.logger.log(
       `Resuming gate 1 for project ${projectId}: approved=${approved}`,
@@ -589,6 +595,12 @@ Rough idea: ${input.brief}`;
 
     const runId = await this.getRunId(projectId);
     const state = await this.loadCheckpointState(runId);
+
+    if (approved && state?.openQuestions?.length && !acceptOpenQuestions) {
+      throw new BadRequestException(
+        'This intake has unresolved requirement questions. Resolve them or set acceptOpenQuestions to true with an approval note.',
+      );
+    }
 
     if (!approved) {
       await Promise.all([
@@ -663,7 +675,7 @@ Rough idea: ${input.brief}`;
     }
     const resumedState = applyDevFlowPartial(state, {
       gate1Approved: true,
-      gate1Notes: notes ?? '',
+      gate1Notes: [notes ?? '', state.openQuestions?.length && acceptOpenQuestions ? `Accepted open questions: ${state.openQuestions.join('; ')}` : ''].filter(Boolean).join('\n'),
     });
 
     // Notify subscribers that code generation has begun after Gate 1 approval

@@ -7,4 +7,8 @@ export class ApproveGateDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  acceptOpenQuestions?: boolean;
 }

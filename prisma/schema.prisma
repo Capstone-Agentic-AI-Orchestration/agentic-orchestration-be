@@ -37,6 +37,8 @@ model Project {
   clientInvites ClientInvite[]
   kickoff     ProjectKickoff?
   deliveryReview ProjectDeliveryReview?
+  intake       ProjectIntake?
+  intakeSnapshots ProjectIntakeSnapshot[]
   orchestrationRuns OrchestrationRun[]
   workOrderExecutions WorkOrderExecution[]
   scheduleEvents ScheduleEvent[]
@@ -120,6 +122,95 @@ model ClientInvite {
   @@index([createdById])
   @@index([acceptedById])
   @@map("client_invites")
+  @@schema("intake")
+}
+
+enum ProjectIntakeStatus {
+  DRAFT
+  SUBMITTED
+  CHANGES_REQUESTED
+  READY
+  LOCKED
+  SUPERSEDED
+
+  @@schema("intake")
+}
+
+enum DocumentExtractionStatus {
+  PENDING
+  EXTRACTING
+  READY
+  FAILED
+
+  @@schema("intake")
+}
+
+model ProjectIntake {
+  id            String              @id @default(cuid())
+  projectId     String              @unique
+  project       Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  payload       Json                @default("{}")
+  status        ProjectIntakeStatus @default(DRAFT)
+  createdById   String?             @db.Uuid
+  createdBy     Profile?            @relation("ProjectIntakeCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  submittedById String?             @db.Uuid
+  submittedBy   Profile?            @relation("ProjectIntakeSubmitter", fields: [submittedById], references: [id], onDelete: SetNull)
+  submittedAt   DateTime?
+  reviewedById  String?             @db.Uuid
+  reviewedBy    Profile?            @relation("ProjectIntakeReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewNote    String?             @db.Text
+  reviewedAt    DateTime?
+  version       Int                 @default(1)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  comments      ProjectIntakeComment[]
+  snapshots     ProjectIntakeSnapshot[]
+
+  @@index([status, updatedAt])
+  @@index([createdById])
+  @@index([submittedById])
+  @@index([reviewedById])
+  @@map("project_intakes")
+  @@schema("intake")
+}
+
+model ProjectIntakeComment {
+  id          String         @id @default(cuid())
+  intakeId    String
+  intake      ProjectIntake  @relation(fields: [intakeId], references: [id], onDelete: Cascade)
+  section     String
+  message     String         @db.Text
+  resolvedAt  DateTime?
+  createdById String?        @db.Uuid
+  createdBy   Profile?       @relation("ProjectIntakeCommentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime       @default(now())
+
+  @@index([intakeId, createdAt])
+  @@index([createdById])
+  @@map("project_intake_comments")
+  @@schema("intake")
+}
+
+model ProjectIntakeSnapshot {
+  id             String              @id @default(cuid())
+  projectId      String
+  project        Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  intakeId       String
+  intake         ProjectIntake       @relation(fields: [intakeId], references: [id], onDelete: Cascade)
+  version        Int
+  payload        Json
+  contextPackage Json
+  pmNotes        String?             @db.Text
+  lockedById     String?             @db.Uuid
+  lockedBy       Profile?            @relation("ProjectIntakeLocker", fields: [lockedById], references: [id], onDelete: SetNull)
+  lockedAt       DateTime            @default(now())
+  createdAt      DateTime            @default(now())
+  orchestrationRuns OrchestrationRun[]
+
+  @@unique([projectId, version])
+  @@index([intakeId, createdAt])
+  @@index([lockedById])
+  @@map("project_intake_snapshots")
   @@schema("intake")
 }
 
@@ -336,6 +427,11 @@ model Profile {
   messageReads    ConversationRead[]
   uploadedDocuments CollaborationDocument[] @relation("DocumentUploader")
   reviewedDocuments CollaborationDocument[] @relation("DocumentReviewer")
+  createdIntakes ProjectIntake[] @relation("ProjectIntakeCreator")
+  submittedIntakes ProjectIntake[] @relation("ProjectIntakeSubmitter")
+  reviewedIntakes ProjectIntake[] @relation("ProjectIntakeReviewer")
+  intakeComments ProjectIntakeComment[] @relation("ProjectIntakeCommentCreator")
+  lockedIntakeSnapshots ProjectIntakeSnapshot[] @relation("ProjectIntakeLocker")
   reviewedInquiries ClientInquiry[] @relation("InquiryReviewer")
   createdClientInvites ClientInvite[] @relation("InviteCreator")
   acceptedClientInvites ClientInvite[] @relation("InviteAcceptor")
@@ -483,6 +579,10 @@ enum NotificationType {
   COLLAB_MESSAGE_SENT
   COLLAB_DOCUMENT_UPLOADED
   COLLAB_DOCUMENT_REVIEWED
+  INTAKE_SUBMITTED
+  INTAKE_CHANGES_REQUESTED
+  INTAKE_READY
+  INTAKE_LOCKED
 
   @@schema("notifications")
 }
@@ -515,6 +615,10 @@ enum ProjectTimelineEventType {
   COLLAB_MESSAGE_SENT
   COLLAB_DOCUMENT_UPLOADED
   COLLAB_DOCUMENT_REVIEWED
+  INTAKE_SUBMITTED
+  INTAKE_CHANGES_REQUESTED
+  INTAKE_READY
+  INTAKE_LOCKED
 
   @@schema("projects")
 }
@@ -655,6 +759,10 @@ model CollaborationDocument {
   description    String?                     @db.Text
   fileName       String?
   externalUrl    String?
+  storageKey     String?
+  mimeType       String?
+  sizeBytes      Int?
+  sha256         String?
   kind           CollaborationDocumentKind   @default(GENERAL)
   status         CollaborationDocumentStatus @default(UPLOADED)
   clientVisible  Boolean                     @default(false)
@@ -667,6 +775,7 @@ model CollaborationDocument {
   version        Int                         @default(1)
   createdAt      DateTime                    @default(now())
   updatedAt      DateTime                    @updatedAt
+  extraction     DocumentExtraction?
 
   @@index([projectId, clientVisible, status])
   @@index([id, version])
@@ -674,6 +783,24 @@ model CollaborationDocument {
   @@index([reviewedById])
   @@map("collaboration_documents")
   @@schema("collaboration")
+}
+
+model DocumentExtraction {
+  id              String                   @id @default(cuid())
+  documentId      String                   @unique
+  document        CollaborationDocument    @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  status          DocumentExtractionStatus @default(PENDING)
+  extractedText   String?                  @db.Text
+  sourceLocations Json                     @default("[]")
+  error           String?                  @db.Text
+  attempts        Int                      @default(0)
+  extractedAt     DateTime?
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  @@index([status, updatedAt])
+  @@map("document_extractions")
+  @@schema("intake")
 }
 
 enum WorkOrderAgentType {
@@ -788,6 +915,8 @@ model OrchestrationRun {
   checkpointState Json?
   error           String?                 @db.Text
   actorId         String?                 @db.Uuid
+  intakeSnapshotId String?
+  intakeSnapshot   ProjectIntakeSnapshot? @relation(fields: [intakeSnapshotId], references: [id], onDelete: SetNull)
   readyWorkOrders Int                     @default(0)
   completedWorkOrders Int                 @default(0)
   failedWorkOrders Int                    @default(0)
@@ -801,6 +930,7 @@ model OrchestrationRun {
   @@index([projectId, createdAt])
   @@index([projectId, status])
   @@index([actorId])
+  @@index([intakeSnapshotId])
   @@map("orchestration_runs")
   @@schema("orchestration")
 }

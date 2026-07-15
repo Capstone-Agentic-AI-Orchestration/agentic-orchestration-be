@@ -24,6 +24,7 @@ import { DevelopersModule } from './developers/developers.module';
 import { SharedKernelModule } from './shared/shared-kernel.module';
 import { HealthModule } from './health/health.module';
 import { ContextMemoryModule } from './context-memory/context-memory.module';
+import { IntakeModule } from './intake/intake.module';
 
 @Module({
   imports: [
@@ -51,6 +52,7 @@ import { ContextMemoryModule } from './context-memory/context-memory.module';
     NotificationsModule,
     CollaborationModule,
     InquiriesModule,
+    IntakeModule,
     ClientInvitesModule,
     AdminModule,
     DevFlowScheduleModule,

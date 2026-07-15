@@ -146,8 +146,16 @@ Project ID: ${state.projectId}
 Original Brief:
 ${state.brief}
 
+Locked Intake Context:
+${state.intakeContext ? JSON.stringify(state.intakeContext, null, 2) : 'No locked intake package is available.'}
+
 Parsed Requirements:
 ${requirementsSummary}
+
+Open Questions:
+${state.openQuestions.length ? state.openQuestions.map((question) => `- ${question}`).join('\n') : 'None'}
+
+Treat the locked intake and its explicit exclusions as authoritative. Do not add features that are only future-phase or out-of-scope.
 
 Produce a fileManifest that lists every file that will be generated (frontend, backend, database files, and architecture docs).
 Include 8–20 files depending on complexity. Use realistic relative paths (e.g. "src/app/page.tsx", "src/modules/users/users.service.ts").
