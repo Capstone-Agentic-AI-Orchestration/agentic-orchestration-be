@@ -377,15 +377,27 @@ describe('DevFlowState artifact reducer', () => {
 });
 
 describe('LangGraph GitHub delivery node', () => {
-  it('creates a repository, commits generated artifacts, injects CI, and persists repoUrl', async () => {
+  it('creates a plain repository, commits generated artifacts, and persists repoUrl', async () => {
     const github = {
       buildRepoName: vi.fn().mockReturnValue('acme-project-1'),
-      createRepo: vi.fn().mockResolvedValue('https://github.com/acme/project-1.git'),
+      createPlainRepository: vi.fn().mockResolvedValue({
+        name: 'acme-project-1',
+        fullName: 'acme/acme-project-1',
+        htmlUrl: 'https://github.com/acme/project-1',
+        cloneUrl: 'https://github.com/acme/project-1.git',
+        defaultBranch: 'main',
+        visibility: 'private',
+      }),
       commitFiles: vi.fn().mockResolvedValue(undefined),
-      injectCiWorkflow: vi.fn().mockResolvedValue(undefined),
     };
     const prisma = {
       project: {
+        findUnique: vi.fn().mockResolvedValue({
+          createdById: null,
+          groupId: null,
+          repoUrl: null,
+          repository: null,
+        }),
         update: vi.fn().mockResolvedValue({}),
       },
       artifact: {
@@ -414,8 +426,11 @@ describe('LangGraph GitHub delivery node', () => {
       ],
     } as DevFlowStateType);
 
-    expect(result).toEqual({ repoUrl: 'https://github.com/acme/project-1.git' });
-    expect(github.createRepo).toHaveBeenCalledWith('acme-project-1');
+    expect(result).toEqual({ repoUrl: 'https://github.com/acme/project-1' });
+    expect(github.createPlainRepository).toHaveBeenCalledWith(
+      'acme-project-1',
+      'Acme workspace created by DevFlow',
+    );
     expect(github.commitFiles).toHaveBeenCalledWith(
       'acme-project-1',
       [
@@ -430,10 +445,9 @@ describe('LangGraph GitHub delivery node', () => {
       ],
       'feat: initial scaffold by DevFlow [run:run-1]',
     );
-    expect(github.injectCiWorkflow).toHaveBeenCalledWith('acme-project-1');
     expect(prisma.project.update).toHaveBeenCalledWith({
       where: { id: 'project-1' },
-      data: { repoUrl: 'https://github.com/acme/project-1.git' },
+      data: { repoUrl: 'https://github.com/acme/project-1' },
     });
   });
 });

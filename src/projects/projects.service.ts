@@ -29,6 +29,8 @@ import { UpdateProjectKickoffDto } from './dto/project-kickoff.dto';
 import { ControlOrchestrationDto } from './dto/control-orchestration.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { IntakeService } from '../intake/intake.service';
+import { GroupsService } from '../groups/groups.service';
+import { RepositoriesService } from '../repositories/repositories.service';
 import {
   CursorPage,
   CursorPageInput,
@@ -336,15 +338,25 @@ export class ProjectsService {
     private readonly orchestration: OrchestrationService,
     private readonly notifications: NotificationsService,
     private readonly intake?: IntakeService,
+    private readonly groups?: GroupsService,
+    private readonly repositories?: RepositoriesService,
   ) {}
 
   async create(dto: CreateProjectDto, user: AuthUser): Promise<Project> {
+    if (dto.groupId) {
+      if (!this.groups) throw new BadRequestException('Group management is unavailable');
+      await this.groups.assertManager(dto.groupId, user);
+    }
+    if (dto.repositoryName && !dto.groupId) {
+      throw new BadRequestException('groupId is required when creating a repository');
+    }
     const project = await this.prisma.project.create({
       data: {
         companyName: dto.companyName,
         brief: dto.brief,
         stackKey: dto.stackKey,
         createdById: user.id,
+        groupId: dto.groupId,
       },
     });
 
@@ -356,6 +368,16 @@ export class ProjectsService {
       body: project.companyName,
       metadata: { status: project.status, stackKey: project.stackKey },
     });
+    if (dto.groupId && dto.repositoryName) {
+      if (!this.repositories) throw new BadRequestException('Repository provisioning is unavailable');
+      await this.repositories.create({
+        groupId: dto.groupId,
+        projectId: project.id,
+        name: dto.repositoryName,
+        description: dto.repositoryDescription,
+      }, user);
+      return this.prisma.project.findUniqueOrThrow({ where: { id: project.id } });
+    }
     return project;
   }
 
@@ -3419,11 +3441,25 @@ export class ProjectsService {
       return where;
     }
 
+    const groupAccess: Prisma.ProjectWhereInput[] =
+      user.role === UserRole.PM || user.role === UserRole.DEV
+        ? [
+            {
+              group: {
+                members: {
+                  some: { userId: user.id, status: 'ACTIVE' },
+                },
+              },
+            },
+          ]
+        : [];
+
     return {
       ...where,
       OR: [
         { createdById: user.id },
         { members: { some: { userId: user.id } } },
+        ...groupAccess,
       ],
     };
   }

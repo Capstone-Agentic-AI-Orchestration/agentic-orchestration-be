@@ -24,29 +24,14 @@ export interface GithubDeliveryVerification {
   reason: string | null;
 }
 
-const CI_WORKFLOW_CONTENT = `name: CI
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install dependencies
-        run: npm ci
-      - name: Build
-        run: npm run build --if-present
-      - name: Test
-        run: npm test --if-present
-`;
+export interface GithubRepository {
+  name: string;
+  fullName: string;
+  htmlUrl: string;
+  cloneUrl: string;
+  defaultBranch: string;
+  visibility: string;
+}
 
 @Injectable()
 export class GithubService implements OnModuleInit {
@@ -138,9 +123,12 @@ export class GithubService implements OnModuleInit {
     return this.ownerLogin;
   }
 
-  async createRepo(name: string): Promise<string> {
+  async createPlainRepository(
+    name: string,
+    description = 'Created by DevFlow',
+  ): Promise<GithubRepository> {
     this.assertConfigured();
-    this.logger.log(`Creating repository: ${name}`);
+    this.logger.log(`Creating plain repository: ${name}`);
     const owner = await this.getOwner();
 
     if (this.hasToken) {
@@ -158,16 +146,25 @@ export class GithubService implements OnModuleInit {
           name,
           private: true,
           auto_init: true,
-          description: `Scaffolded by DevFlow`,
+          description,
         }),
       });
       if (!response.ok) {
         const body = await response.text();
         throw new Error(`GitHub repo creation failed (${response.status}): ${body.slice(0, 300)}`);
       }
-      const data = await response.json();
-      this.logger.log(`Repository created: ${data.clone_url}`);
-      return data.clone_url;
+      const data = await response.json() as {
+        name: string;
+        full_name: string;
+        html_url: string;
+        clone_url: string;
+        default_branch: string;
+        visibility?: string;
+        private?: boolean;
+      };
+      const repository = this.toRepository(data);
+      this.logger.log(`Plain repository created: ${repository.htmlUrl}`);
+      return repository;
     }
 
     // No PAT — try via GitHub App installation (org accounts only).
@@ -185,11 +182,92 @@ export class GithubService implements OnModuleInit {
       org: owner,
       name,
       private: true,
-      description: `Scaffolded by DevFlow`,
+      auto_init: true,
+      description,
     });
 
-    this.logger.log(`Repository created: ${data.clone_url}`);
-    return data.clone_url;
+    const repository = this.toRepository(data);
+    this.logger.log(`Plain repository created: ${repository.htmlUrl}`);
+    return repository;
+  }
+
+  /** Backward-compatible wrapper. All callers still receive a plain repository with no CI/CD. */
+  async createRepo(name: string): Promise<string> {
+    return (await this.createPlainRepository(name)).cloneUrl;
+  }
+
+  getInstallUrl(): string | null {
+    const slug = this.configService.get<string>('github.appSlug')?.trim();
+    return slug ? `https://github.com/apps/${encodeURIComponent(slug)}/installations/new` : null;
+  }
+
+  getConfiguredInstallationId(): number | null {
+    return this.installationId || null;
+  }
+
+  async verifyInstallation(installationId: number) {
+    this.assertConfigured();
+    if (!Number.isInteger(installationId) || installationId <= 0) {
+      throw new ServiceUnavailableException('A valid GitHub installation id is required');
+    }
+    if (this.hasToken) {
+      return { installationId, accountLogin: await this.getOwner(), accountType: 'Organization' };
+    }
+    const { data } = await this.octokit.apps.getInstallation({ installation_id: installationId });
+    const accountLogin = data.account && 'login' in data.account ? data.account.login : null;
+    const accountType = data.account && 'type' in data.account ? data.account.type : null;
+    if (this.installationId && installationId !== this.installationId) {
+      throw new ServiceUnavailableException(
+        `Installation ${installationId} is not the installation configured for this DevFlow environment`,
+      );
+    }
+    return { installationId, accountLogin, accountType };
+  }
+
+  async listVisibleRepositories() {
+    this.assertConfigured();
+    const owner = await this.getOwner();
+    if (this.hasToken) {
+      const { data } = await this.octokit.repos.listForOrg({ org: owner, per_page: 100, sort: 'updated' });
+      return data.map((repository) => ({
+        id: String(repository.id),
+        name: repository.name,
+        fullName: repository.full_name,
+        htmlUrl: repository.html_url,
+        private: repository.private,
+        defaultBranch: repository.default_branch,
+      }));
+    }
+    const { data } = await this.octokit.request('GET /installation/repositories', { per_page: 100 });
+    return data.repositories.map((repository) => ({
+      id: String(repository.id),
+      name: repository.name,
+      fullName: repository.full_name,
+      htmlUrl: repository.html_url,
+      private: repository.private,
+      defaultBranch: repository.default_branch,
+    }));
+  }
+
+  async addRepositoryCollaborator(repoName: string, githubLogin: string): Promise<void> {
+    this.assertConfigured();
+    const owner = await this.getOwner();
+    await this.octokit.repos.addCollaborator({
+      owner,
+      repo: repoName,
+      username: githubLogin,
+      permission: 'push',
+    });
+  }
+
+  async removeRepositoryCollaborator(repoName: string, githubLogin: string): Promise<void> {
+    this.assertConfigured();
+    const owner = await this.getOwner();
+    await this.octokit.repos.removeCollaborator({
+      owner,
+      repo: repoName,
+      username: githubLogin,
+    });
   }
 
   async verifyDeliveryAccess(): Promise<GithubDeliveryVerification> {
@@ -370,19 +448,6 @@ export class GithubService implements OnModuleInit {
     this.logger.log(`Committed ${artifacts.length} files to ${repoName}`);
   }
 
-  async injectCiWorkflow(repoName: string): Promise<void> {
-    await this.commitFiles(
-      repoName,
-      [
-        {
-          filePath: '.github/workflows/ci.yml',
-          content: CI_WORKFLOW_CONTENT,
-        },
-      ],
-      'ci: add GitHub Actions workflow',
-    );
-  }
-
   private assertConfigured(): void {
     const missingRequirements = this.missingRequirements();
     if (missingRequirements.length > 0) {
@@ -415,5 +480,24 @@ export class GithubService implements OnModuleInit {
     } catch {
       return false;
     }
+  }
+
+  private toRepository(data: {
+    name: string;
+    full_name: string;
+    html_url: string;
+    clone_url: string;
+    default_branch: string;
+    visibility?: string | null;
+    private?: boolean;
+  }): GithubRepository {
+    return {
+      name: data.name,
+      fullName: data.full_name,
+      htmlUrl: data.html_url,
+      cloneUrl: data.clone_url,
+      defaultBranch: data.default_branch || 'main',
+      visibility: data.visibility ?? (data.private ? 'private' : 'public'),
+    };
   }
 }

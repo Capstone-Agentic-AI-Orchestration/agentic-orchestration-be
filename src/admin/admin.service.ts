@@ -443,17 +443,29 @@ export class AdminService {
       project.companyName,
       project.id,
     );
-    const cloneUrl = await this.githubService.createRepo(repoName);
+    const repository = await this.githubService.createPlainRepository(
+      repoName,
+      `${project.companyName} workspace created by DevFlow`,
+    );
 
-    await this.githubService.injectCiWorkflow(repoName).catch((err) => {
-      this.logger.warn(
-        `[${projectId}] CI workflow injection failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
-      );
-    });
+    await this.githubService.commitFiles(
+      repository.name,
+      [
+        {
+          filePath: 'README.md',
+          content: `# ${project.companyName}\n\nPlain repository initialized by DevFlow. CI/CD is intentionally not configured.\n`,
+        },
+        {
+          filePath: 'docs/README.md',
+          content: '# Project documentation\n\nArchitecture and delivery notes belong here.\n',
+        },
+      ],
+      'chore: initialize DevFlow repository structure',
+    );
 
     await this.prisma.project.update({
       where: { id: projectId },
-      data: { repoUrl: cloneUrl },
+      data: { repoUrl: repository.htmlUrl },
     });
 
     this.audit(
@@ -462,10 +474,10 @@ export class AdminService {
       'project',
       projectId,
       `Created GitHub repository for ${project.companyName}`,
-      { repoUrl: cloneUrl },
+      { repoUrl: repository.htmlUrl, ciCdConfigured: false },
     ).catch(() => {});
 
-    return { repoUrl: cloneUrl };
+    return { repoUrl: repository.htmlUrl };
   }
 
   private async findProfile(id: string) {

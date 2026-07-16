@@ -25,16 +25,66 @@ export class GithubCommitNode {
         data: { status: 'COMMITTING' },
       });
 
-      const repoName = this.github.buildRepoName(
-        state.companyName,
-        state.projectId,
-      );
+      const project = await this.prisma.project.findUnique({
+        where: { id: state.projectId },
+        select: {
+          createdById: true,
+          groupId: true,
+          repoUrl: true,
+          repository: {
+            select: { id: true, name: true, htmlUrl: true, cloneUrl: true, status: true },
+          },
+        },
+      });
+      if (!project) throw new Error(`Project ${state.projectId} not found`);
 
-      // 1. Create the repository
-      const repoUrl = await this.github.createRepo(repoName);
-      this.logger.log(`[${state.projectId}] Repository created: ${repoUrl}`);
+      let repoName = project.repository?.name;
+      let repoUrl = project.repository?.htmlUrl ?? project.repository?.cloneUrl ?? project.repoUrl;
 
-      // 2. Commit all generated artifacts
+      // Reuse the plain repository created by the PM flow. Older projects can
+      // still be provisioned here, but no CI/CD files are ever added.
+      if (!repoName || !repoUrl) {
+        repoName = this.github.buildRepoName(state.companyName, state.projectId);
+        const remote = await this.github.createPlainRepository(
+          repoName,
+          `${state.companyName} workspace created by DevFlow`,
+        );
+        repoUrl = remote.htmlUrl;
+        if (project.groupId && project.createdById) {
+          await this.prisma.repository.upsert({
+            where: { projectId: state.projectId },
+            update: {
+              name: remote.name,
+              fullName: remote.fullName,
+              htmlUrl: remote.htmlUrl,
+              cloneUrl: remote.cloneUrl,
+              defaultBranch: remote.defaultBranch,
+              visibility: remote.visibility,
+              status: 'ACTIVE',
+              lastError: null,
+              provisionedAt: new Date(),
+            },
+            create: {
+              projectId: state.projectId,
+              groupId: project.groupId,
+              createdById: project.createdById,
+              name: remote.name,
+              fullName: remote.fullName,
+              htmlUrl: remote.htmlUrl,
+              cloneUrl: remote.cloneUrl,
+              defaultBranch: remote.defaultBranch,
+              visibility: remote.visibility,
+              status: 'ACTIVE',
+              provisionedAt: new Date(),
+            },
+          });
+        }
+        this.logger.log(`[${state.projectId}] Plain repository created: ${repoUrl}`);
+      } else {
+        this.logger.log(`[${state.projectId}] Reusing repository: ${repoUrl}`);
+      }
+
+      // Commit generated artifacts into the existing plain repository.
       const commitMessage = `feat: initial scaffold by DevFlow [run:${state.runId}]`;
       await this.github.commitFiles(
         repoName,
@@ -48,13 +98,7 @@ export class GithubCommitNode {
         `[${state.projectId}] Committed ${state.artifacts.length} files`,
       );
 
-      // 3. Inject CI workflow (non-fatal)
-      await this.github.injectCiWorkflow(repoName).catch((err: unknown) => {
-        this.logger.warn(`[${state.projectId}] CI workflow injection skipped: ${err instanceof Error ? err.message : err}`);
-      });
-      this.logger.log(`[${state.projectId}] CI workflow injected`);
-
-      // 4. Persist artifacts to DB
+      // Persist artifacts to DB.
       if (state.artifacts.length > 0) {
         await this.prisma.artifact.createMany({
           data: state.artifacts.map((a) => ({
@@ -67,7 +111,7 @@ export class GithubCommitNode {
         });
       }
 
-      // 5. Update project with repo URL
+      // Update project with repository URL.
       await this.prisma.project.update({
         where: { id: state.projectId },
         data: { repoUrl },

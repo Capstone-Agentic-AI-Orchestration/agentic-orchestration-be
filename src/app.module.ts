@@ -25,6 +25,8 @@ import { SharedKernelModule } from './shared/shared-kernel.module';
 import { HealthModule } from './health/health.module';
 import { ContextMemoryModule } from './context-memory/context-memory.module';
 import { IntakeModule } from './intake/intake.module';
+import { GroupsModule } from './groups/groups.module';
+import { RepositoriesModule } from './repositories/repositories.module';
 
 @Module({
   imports: [
@@ -53,6 +55,8 @@ import { IntakeModule } from './intake/intake.module';
     CollaborationModule,
     InquiriesModule,
     IntakeModule,
+    GroupsModule,
+    RepositoriesModule,
     ClientInvitesModule,
     AdminModule,
     DevFlowScheduleModule,

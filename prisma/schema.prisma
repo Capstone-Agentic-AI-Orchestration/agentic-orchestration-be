@@ -19,6 +19,9 @@ model Project {
   status      ProjectStatus   @default(PENDING)
   runId       String?         @unique
   repoUrl     String?
+  groupId     String?
+  group       Group?          @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  repository  Repository?
   createdById String?         @db.Uuid
   createdBy   Profile?        @relation("ProjectCreatedBy", fields: [createdById], references: [id])
   version     Int             @default(1)
@@ -44,6 +47,7 @@ model Project {
   scheduleEvents ScheduleEvent[]
 
   @@index([createdById])
+  @@index([groupId])
   @@index([id, version])
   @@schema("projects")
 }
@@ -408,6 +412,8 @@ model Profile {
   id              String          @id @db.Uuid
   email           String?         @unique
   fullName        String?
+  githubLogin     String?         @unique
+  avatarUrl       String?
   role            UserRole        @default(CLIENT)
   status          ProfileStatus   @default(ACTIVE)
   preferences     Json            @default("{}")
@@ -443,6 +449,14 @@ model Profile {
   scheduleEvents ScheduleEvent[] @relation("ScheduleOwner")
   developerProfile DeveloperProfile?
   adminAuditLogs AdminAuditLog[] @relation("AdminAuditActor")
+  ownedGroups Group[] @relation("GroupOwner")
+  groupMemberships GroupMember[] @relation("GroupMembershipUser")
+  groupInvitations GroupInvitation[] @relation("GroupInvitationRecipient")
+  sentGroupInvitations GroupInvitation[] @relation("GroupInvitationSender")
+  createdRepositories Repository[] @relation("RepositoryCreator")
+  repositoryAssignments RepositoryAssignment[] @relation("RepositoryAssignmentUser")
+  assignedRepositoryAccess RepositoryAssignment[] @relation("RepositoryAssignmentActor")
+  groupActivityEvents GroupActivityEvent[] @relation("GroupActivityActor")
 
   @@index([role])
   @@index([status])
@@ -500,6 +514,198 @@ model ProjectMember {
   @@index([userId])
   @@index([projectId, role])
   @@map("project_members")
+  @@schema("projects")
+}
+
+enum GroupRole {
+  LEAD
+  DELEGATED_LEAD
+  MEMBER
+  VIEWER
+
+  @@schema("projects")
+}
+
+enum GroupLifecycleStatus {
+  ACTIVE
+  ARCHIVED
+
+  @@schema("projects")
+}
+
+enum GroupMemberStatus {
+  ACTIVE
+  REMOVED
+
+  @@schema("projects")
+}
+
+enum GroupInvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  REVOKED
+
+  @@schema("projects")
+}
+
+enum RepositoryStatus {
+  PENDING
+  ACTIVE
+  FAILED
+  ARCHIVED
+
+  @@schema("projects")
+}
+
+enum RepositoryAssignmentDesiredState {
+  ASSIGNED
+  UNASSIGNED
+
+  @@schema("projects")
+}
+
+enum RepositoryAssignmentEffectiveState {
+  PENDING
+  ACTIVE
+  REVOKING
+  REVOKED
+  FAILED
+
+  @@schema("projects")
+}
+
+model Group {
+  id                   String               @id @default(cuid())
+  name                 String
+  description          String?              @db.Text
+  businessUnit         String?
+  status               GroupLifecycleStatus @default(ACTIVE)
+  ownerId              String               @db.Uuid
+  owner                Profile              @relation("GroupOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  githubInstallationId String?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  members              GroupMember[]
+  invitations          GroupInvitation[]
+  projects             Project[]
+  repositories         Repository[]
+  activityEvents       GroupActivityEvent[]
+
+  @@index([ownerId, status])
+  @@index([githubInstallationId])
+  @@map("groups")
+  @@schema("projects")
+}
+
+model GroupMember {
+  id        String            @id @default(cuid())
+  groupId   String
+  group     Group             @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userId    String            @db.Uuid
+  user      Profile           @relation("GroupMembershipUser", fields: [userId], references: [id], onDelete: Cascade)
+  role      GroupRole         @default(MEMBER)
+  status    GroupMemberStatus @default(ACTIVE)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  @@unique([groupId, userId])
+  @@index([userId, status])
+  @@index([groupId, role, status])
+  @@map("group_members")
+  @@schema("projects")
+}
+
+model GroupInvitation {
+  id            String                @id @default(cuid())
+  groupId       String
+  group         Group                 @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  invitedUserId String                @db.Uuid
+  invitedUser   Profile               @relation("GroupInvitationRecipient", fields: [invitedUserId], references: [id], onDelete: Cascade)
+  invitedById   String                @db.Uuid
+  invitedBy     Profile               @relation("GroupInvitationSender", fields: [invitedById], references: [id], onDelete: Cascade)
+  role          GroupRole             @default(MEMBER)
+  status        GroupInvitationStatus @default(PENDING)
+  respondedAt   DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  @@unique([groupId, invitedUserId])
+  @@index([invitedUserId, status, createdAt])
+  @@index([invitedById])
+  @@index([groupId, status])
+  @@map("group_invitations")
+  @@schema("projects")
+}
+
+model Repository {
+  id            String                 @id @default(cuid())
+  groupId       String
+  group         Group                  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  projectId     String                 @unique
+  project       Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name          String
+  fullName      String?                @unique
+  htmlUrl       String?
+  cloneUrl      String?
+  defaultBranch String                 @default("main")
+  visibility    String                 @default("private")
+  status        RepositoryStatus       @default(PENDING)
+  lastError     String?                @db.Text
+  createdById   String                 @db.Uuid
+  createdBy     Profile                @relation("RepositoryCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  provisionedAt DateTime?
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+  assignments   RepositoryAssignment[]
+
+  @@index([groupId, status])
+  @@index([createdById])
+  @@map("repositories")
+  @@schema("projects")
+}
+
+model RepositoryAssignment {
+  id             String                             @id @default(cuid())
+  repositoryId   String
+  repository     Repository                         @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  userId         String                             @db.Uuid
+  user           Profile                            @relation("RepositoryAssignmentUser", fields: [userId], references: [id], onDelete: Cascade)
+  assignedById   String                             @db.Uuid
+  assignedBy     Profile                            @relation("RepositoryAssignmentActor", fields: [assignedById], references: [id], onDelete: Restrict)
+  desiredState   RepositoryAssignmentDesiredState   @default(ASSIGNED)
+  effectiveState RepositoryAssignmentEffectiveState @default(PENDING)
+  githubTeamSlug String?
+  lastError      String?                            @db.Text
+  lastSyncedAt   DateTime?
+  createdAt      DateTime                           @default(now())
+  updatedAt      DateTime                           @updatedAt
+
+  @@unique([repositoryId, userId])
+  @@index([userId, desiredState, effectiveState])
+  @@index([assignedById])
+  @@index([repositoryId, desiredState])
+  @@map("repository_assignments")
+  @@schema("projects")
+}
+
+model GroupActivityEvent {
+  id         String   @id @default(cuid())
+  groupId    String
+  group      Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  actorId    String?  @db.Uuid
+  actor      Profile? @relation("GroupActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+  eventCode  String
+  targetType String
+  targetId   String?
+  message    String
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  @@index([groupId, createdAt])
+  @@index([actorId])
+  @@index([eventCode, createdAt])
+  @@map("group_activity_events")
   @@schema("projects")
 }
 

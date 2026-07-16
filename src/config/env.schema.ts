@@ -49,10 +49,12 @@ export const envSchema = z.object({
   GEMINI_FALLBACK_MODEL: z.string().optional().default(''),
   OPENAI_API_KEY: z.string().optional().default(''),
   GITHUB_APP_ID: z.string().optional().default(''),
+  GITHUB_APP_SLUG: z.string().optional().default(''),
   GITHUB_PRIVATE_KEY: z.string().optional().default(''),
   GITHUB_INSTALLATION_ID: z.string().optional().default(''),
   GITHUB_ORG: z.string().optional().default(''),
   GITHUB_TOKEN: z.string().optional().default(''),
+  GITHUB_WEBHOOK_SECRET: z.string().optional().default(''),
   PORT: z
     .string()
     .optional()

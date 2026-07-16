@@ -106,20 +106,32 @@ export class SupabaseAuthService implements OnModuleInit {
     const email = this.getEmail(payload);
     const fullName = this.getFullName(payload);
     const authProvider = this.getAuthProvider(payload);
+    const githubLogin = this.getGithubLogin(payload);
+    const avatarUrl = this.getAvatarUrl(payload);
 
     const existing = await this.prisma.profile.findUnique({
       where: { id: userId },
-      select: { id: true, email: true, fullName: true, role: true, status: true },
+      select: { id: true, email: true, fullName: true, githubLogin: true, avatarUrl: true, role: true, status: true },
     });
 
-    let profile: { id: string; email: string | null; fullName: string | null; role: UserRole; status: ProfileStatus };
+    let profile: { id: string; email: string | null; fullName: string | null; githubLogin: string | null; avatarUrl: string | null; role: UserRole; status: ProfileStatus };
 
     if (existing) {
-      if (existing.email !== email || (fullName && existing.fullName !== fullName)) {
+      if (
+        existing.email !== email ||
+        (fullName && existing.fullName !== fullName) ||
+        (githubLogin && existing.githubLogin !== githubLogin) ||
+        (avatarUrl && existing.avatarUrl !== avatarUrl)
+      ) {
         profile = await this.prisma.profile.update({
           where: { id: userId },
-          data: { email, ...(fullName ? { fullName } : {}) },
-          select: { id: true, email: true, fullName: true, role: true, status: true },
+          data: {
+            email,
+            ...(fullName ? { fullName } : {}),
+            ...(githubLogin ? { githubLogin } : {}),
+            ...(avatarUrl ? { avatarUrl } : {}),
+          },
+          select: { id: true, email: true, fullName: true, githubLogin: true, avatarUrl: true, role: true, status: true },
         });
       } else {
         profile = existing;
@@ -130,9 +142,11 @@ export class SupabaseAuthService implements OnModuleInit {
           id: userId,
           email,
           fullName,
+          githubLogin,
+          avatarUrl,
           role: UserRole.CLIENT,
         },
-        select: { id: true, email: true, fullName: true, role: true, status: true },
+        select: { id: true, email: true, fullName: true, githubLogin: true, avatarUrl: true, role: true, status: true },
       });
     }
 
@@ -168,6 +182,26 @@ export class SupabaseAuthService implements OnModuleInit {
     return typeof candidate === 'string'
       ? candidate.trim()
       : null;
+  }
+
+  private getGithubLogin(payload: JWTPayload): string | null {
+    const metadata = payload.user_metadata;
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+    const values = metadata as Record<string, unknown>;
+    const candidate = [values.user_name, values.preferred_username, values.login].find(
+      (value) => typeof value === 'string' && value.trim(),
+    );
+    return typeof candidate === 'string' ? candidate.trim() : null;
+  }
+
+  private getAvatarUrl(payload: JWTPayload): string | null {
+    const metadata = payload.user_metadata;
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+    const values = metadata as Record<string, unknown>;
+    const candidate = [values.avatar_url, values.picture].find(
+      (value) => typeof value === 'string' && value.trim(),
+    );
+    return typeof candidate === 'string' ? candidate.trim() : null;
   }
 
   private assertAllowedProvider(payload: JWTPayload): void {

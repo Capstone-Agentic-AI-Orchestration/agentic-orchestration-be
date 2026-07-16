@@ -458,6 +458,7 @@ describe('ProjectsService', () => {
         OR: [
           { createdById: pmUser.id },
           { members: { some: { userId: pmUser.id } } },
+          { group: { members: { some: { userId: pmUser.id, status: 'ACTIVE' } } } },
         ],
       },
       select: {
@@ -638,6 +639,7 @@ describe('ProjectsService', () => {
         OR: [
           { createdById: pmUser.id },
           { members: { some: { userId: pmUser.id } } },
+          { group: { members: { some: { userId: pmUser.id, status: 'ACTIVE' } } } },
         ],
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -665,6 +667,7 @@ describe('ProjectsService', () => {
         OR: [
           { createdById: devUser.id },
           { members: { some: { userId: devUser.id } } },
+          { group: { members: { some: { userId: devUser.id, status: 'ACTIVE' } } } },
         ],
       },
       include: expect.any(Object),

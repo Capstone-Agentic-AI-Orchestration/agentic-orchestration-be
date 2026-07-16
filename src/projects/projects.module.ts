@@ -5,9 +5,11 @@ import { OrchestrationModule } from '../orchestration/orchestration.module';
 import { AuthModule } from '../auth/auth.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { IntakeModule } from '../intake/intake.module';
+import { GroupsModule } from '../groups/groups.module';
+import { RepositoriesModule } from '../repositories/repositories.module';
 
 @Module({
-  imports: [AuthModule, OrchestrationModule, NotificationsModule, IntakeModule],
+  imports: [AuthModule, OrchestrationModule, NotificationsModule, IntakeModule, GroupsModule, RepositoriesModule],
   controllers: [ProjectsController],
   providers: [ProjectsService],
   exports: [ProjectsService],

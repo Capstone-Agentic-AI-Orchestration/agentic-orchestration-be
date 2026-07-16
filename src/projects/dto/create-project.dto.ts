@@ -1,4 +1,4 @@
-import { IsString, MinLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength, MinLength, ValidateIf } from 'class-validator';
 
 export class CreateProjectDto {
   @IsString()
@@ -12,4 +12,20 @@ export class CreateProjectDto {
   @IsString()
   @MinLength(1, { message: 'stackKey must not be empty' })
   stackKey!: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  groupId?: string;
+
+  @ValidateIf((input: CreateProjectDto) => Boolean(input.groupId) || Boolean(input.repositoryName))
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  repositoryName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(350)
+  repositoryDescription?: string;
 }

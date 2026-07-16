@@ -78,7 +78,8 @@ describe('GithubService', () => {
       org: 'capstone-org',
       name: 'acme-project',
       private: true,
-      description: 'Scaffolded by DevFlow',
+      auto_init: true,
+      description: 'Created by DevFlow',
     });
     expect(service.getDeliveryStatus()).toEqual(expect.objectContaining({
       configured: true,
