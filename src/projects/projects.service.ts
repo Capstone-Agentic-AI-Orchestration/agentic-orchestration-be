@@ -13,7 +13,7 @@ import {
   OrchestrationStatus,
 } from '../orchestration/orchestration.service';
 import { CreateProjectDto } from './dto/create-project.dto';
-import { ArtifactOutputReviewStatus, ArtifactReviewStatus, ArtifactValidationStatus, ClientInviteStatus, CollaborationDocumentStatus, NotificationType, OrchestrationRunTrigger, ProjectDeliveryReview, ProjectDeliveryReviewStatus, ProjectStatus, ProjectTimelineEvent, ProjectTimelineEventType, ProjectTimelineVisibility, ProjectTaskActivity, ProjectTaskActivityType, ProjectTaskStatus, Project, GateEvent, Artifact, EventLog, Prisma, ProjectKickoff, ProjectKickoffStatus, ProjectTask, UserRole, WorkOrder, WorkOrderAgentType, WorkOrderPriority, WorkOrderStatus } from '@prisma/client';
+import { ArtifactOutputReviewStatus, ArtifactReviewStatus, ArtifactValidationStatus, ClientInviteStatus, CollaborationDocumentStatus, NotificationType, OrchestrationRunTrigger, ProjectDeliveryReview, ProjectDeliveryReviewStatus, ProjectStatus, ProjectTimelineEvent, ProjectTimelineEventType, ProjectTimelineVisibility, ProjectTaskActivity, ProjectTaskActivityType, ProjectTaskStatus, Project, GateEvent, Artifact, EventLog, Prisma, ProjectKickoff, ProjectKickoffStatus, ProjectTask, RepositoryStatus, UserRole, WorkOrder, WorkOrderAgentType, WorkOrderPriority, WorkOrderStatus } from '@prisma/client';
 import { AuthUser } from '../auth/auth.types';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { AddProjectMemberDto } from './dto/project-member.dto';
@@ -142,7 +142,7 @@ type DeliveryReadinessSummary = {
   };
 };
 
-type ProjectListItem = Pick<Project, 'id' | 'companyName' | 'status' | 'createdAt' | 'updatedAt'> & {
+type ProjectListItem = Pick<Project, 'id' | 'companyName' | 'status' | 'createdAt' | 'updatedAt' | 'groupId'> & {
   lifecycle: ProjectLifecycleSummary;
 };
 
@@ -442,6 +442,60 @@ export class ProjectsService {
     return { accepted: true, runId };
   }
 
+  /**
+   * Developer-initiated orchestration start. Unlike {@link startOrchestration}
+   * (which requires a completed PM kickoff + READY work orders), this only needs
+   * the project's GitHub repository to be provisioned. The developer's prompt
+   * becomes the run brief, so the AI agents build against that repo from it.
+   */
+  async startOrchestrationFromPrompt(
+    id: string,
+    prompt: string,
+    user: AuthUser,
+  ): Promise<{ accepted: boolean; runId: string }> {
+    const project = await this.prisma.project.findFirst({
+      where: this.projectAccessWhere(user, id),
+      select: {
+        id: true,
+        companyName: true,
+        stackKey: true,
+        runId: true,
+        repository: { select: { status: true } },
+      },
+    });
+
+    if (!project) {
+      throw new NotFoundException(`Project ${id} not found`);
+    }
+    if (project.runId) {
+      return { accepted: true, runId: project.runId };
+    }
+    if (!project.repository || project.repository.status !== RepositoryStatus.ACTIVE) {
+      throw new BadRequestException(
+        'The project repository must be fully provisioned before orchestration can start',
+      );
+    }
+
+    const brief = (prompt ?? '').trim();
+    if (brief.length < 10) {
+      throw new BadRequestException('Describe what to build in at least 10 characters');
+    }
+
+    // Persist the prompt as the project brief so the run and its agents build from it.
+    await this.prisma.project.update({ where: { id: project.id }, data: { brief } });
+
+    const runId = await this.orchestration.startRun(
+      project.id,
+      brief,
+      project.stackKey,
+      project.companyName,
+      user.id,
+      OrchestrationRunTrigger.START,
+    );
+
+    return { accepted: true, runId };
+  }
+
   async rerunReadyWorkOrders(
     id: string,
     user: AuthUser,
@@ -611,6 +665,7 @@ export class ProjectsService {
         status: true,
         createdAt: true,
         updatedAt: true,
+        groupId: true,
         runId: true,
         kickoff: {
           select: {
@@ -657,6 +712,7 @@ export class ProjectsService {
       status: project.status,
       createdAt: project.createdAt,
       updatedAt: project.updatedAt,
+      groupId: project.groupId,
       lifecycle: this.deriveProjectLifecycle(project),
     });
 
