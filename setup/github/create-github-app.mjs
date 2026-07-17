@@ -32,7 +32,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const CONFIG = JSON.parse(readFileSync(join(HERE, 'environments.json'), 'utf8'));
 const CRED_DIR = join(HERE, 'credentials');
 
-const VALID_ENVS = ['test', 'uat', 'main'];
+const VALID_ENVS = ['local', 'test', 'uat', 'main'];
 
 function die(msg) {
   console.error(`\n  ✗ ${msg}\n`);
