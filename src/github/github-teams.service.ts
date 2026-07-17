@@ -5,6 +5,12 @@ import { createAppAuth } from '@octokit/auth-app';
 import { createPrivateKey } from 'node:crypto';
 import { UserRole } from '@prisma/client';
 
+export interface RoleTeamMember {
+  githubLogin: string;
+  role: UserRole;
+  avatarUrl: string | null;
+}
+
 /**
  * Resolves a GitHub login to a DevFlow role from org **team membership**.
  *
@@ -78,6 +84,49 @@ export class GithubTeamsService implements OnModuleInit {
       return UserRole.DEV;
     }
     return null;
+  }
+
+  /**
+   * Lists the org's dev + PM team members as a role-annotated roster. PM outranks
+   * DEV when someone is in both (matches {@link resolveRoleFromTeams} precedence).
+   * Returns [] when team mapping is disabled. Lets a PM see the full GitHub org
+   * roster — including people who have not signed into DevFlow yet.
+   */
+  async listRoleTeamMembers(): Promise<RoleTeamMember[]> {
+    if (!this.octokit) return [];
+    const byLogin = new Map<string, RoleTeamMember>();
+    // DEV first, then PM, so PM overwrites on overlap (PM precedence).
+    if (this.devTeam) await this.collectTeam(this.devTeam, UserRole.DEV, byLogin);
+    if (this.pmTeam) await this.collectTeam(this.pmTeam, UserRole.PM, byLogin);
+    return [...byLogin.values()];
+  }
+
+  private async collectTeam(
+    teamSlug: string,
+    role: UserRole,
+    out: Map<string, RoleTeamMember>,
+  ): Promise<void> {
+    try {
+      const { data } = await this.octokit!.rest.teams.listMembersInOrg({
+        org: this.org,
+        team_slug: teamSlug,
+        per_page: 100,
+      });
+      for (const m of data) {
+        if (!m.login) continue;
+        out.set(m.login.toLowerCase(), {
+          githubLogin: m.login,
+          role,
+          avatarUrl: m.avatar_url ?? null,
+        });
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to list members of ${this.org}/${teamSlug}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   private async isActiveMember(teamSlug: string, username: string): Promise<boolean> {

@@ -790,6 +790,7 @@ enum NotificationType {
   INTAKE_CHANGES_REQUESTED
   INTAKE_READY
   INTAKE_LOCKED
+  GROUP_INVITATION_SENT
 
   @@schema("notifications")
 }

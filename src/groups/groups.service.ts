@@ -10,12 +10,15 @@ import {
   GroupLifecycleStatus,
   GroupMemberStatus,
   GroupRole,
+  NotificationType,
   Prisma,
   ProfileStatus,
   UserRole,
 } from '@prisma/client';
 import { AuthUser } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
+import { GithubTeamsService } from '../github/github-teams.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   CreateGroupDto,
   CreateGroupInvitationDto,
@@ -62,9 +65,25 @@ const groupInclude = {
   },
 } satisfies Prisma.GroupInclude;
 
+export interface EligiblePerson {
+  /** DevFlow profile id — null when the person has not signed into DevFlow yet. */
+  id: string | null;
+  email: string | null;
+  fullName: string | null;
+  role: UserRole;
+  githubLogin: string | null;
+  avatarUrl: string | null;
+  /** True when they have a DevFlow profile and can be invited directly. */
+  onSystem: boolean;
+}
+
 @Injectable()
 export class GroupsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly githubTeams: GithubTeamsService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   async create(dto: CreateGroupDto, user: AuthUser) {
     this.assertPersona(user);
@@ -242,7 +261,9 @@ export class GroupsService {
       where: { groupId, status: GroupMemberStatus.ACTIVE },
       select: { userId: true },
     });
-    return this.prisma.profile.findMany({
+
+    // DevFlow PM/DEV users already on the system — directly invitable.
+    const profiles = await this.prisma.profile.findMany({
       where: {
         id: { notIn: members.map((member) => member.userId) },
         role: { in: [UserRole.PM, UserRole.DEV] },
@@ -252,6 +273,38 @@ export class GroupsService {
       orderBy: [{ role: 'asc' }, { fullName: 'asc' }],
       take: 200,
     });
+
+    const onSystem: EligiblePerson[] = profiles.map((p) => ({
+      id: p.id,
+      email: p.email,
+      fullName: p.fullName,
+      role: p.role,
+      githubLogin: p.githubLogin,
+      avatarUrl: p.avatarUrl,
+      onSystem: true,
+    }));
+
+    // GitHub org dev/PM roster — surface members who have NOT signed into DevFlow
+    // yet so a PM can see them (shown as "not on the system", not yet invitable).
+    const knownLogins = new Set(
+      profiles
+        .map((p) => p.githubLogin?.toLowerCase())
+        .filter((login): login is string => Boolean(login)),
+    );
+    const roster = await this.githubTeams.listRoleTeamMembers();
+    const notOnSystem: EligiblePerson[] = roster
+      .filter((m) => !knownLogins.has(m.githubLogin.toLowerCase()))
+      .map((m) => ({
+        id: null,
+        email: null,
+        fullName: null,
+        role: m.role,
+        githubLogin: m.githubLogin,
+        avatarUrl: m.avatarUrl,
+        onSystem: false,
+      }));
+
+    return [...onSystem, ...notOnSystem];
   }
 
   async invite(groupId: string, dto: CreateGroupInvitationDto, user: AuthUser) {
@@ -303,6 +356,23 @@ export class GroupsService {
       dto.userId,
       `Invited ${target.fullName ?? target.email ?? target.id} as ${dto.role}`,
     );
+
+    // Push a system notification to the invited member (their bell + list).
+    const group = await this.prisma.group.findUnique({
+      where: { id: groupId },
+      select: { name: true },
+    });
+    const inviterName =
+      invitation.invitedBy.fullName ?? invitation.invitedBy.email ?? 'A project manager';
+    await this.notifications.notify({
+      recipientIds: [dto.userId],
+      actorId: user.id,
+      type: NotificationType.GROUP_INVITATION_SENT,
+      title: `Invitation to join ${group?.name ?? 'a group'}`,
+      body: `${inviterName} invited you to join as ${dto.role}.`,
+      metadata: { groupId, invitationId: invitation.id, role: dto.role },
+    });
+
     return invitation;
   }
 
