@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { createRemoteJWKSet, jwtVerify, JWTPayload } from 'jose';
 import { ClientInviteStatus, ProfileStatus, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { GithubTeamsService } from '../github/github-teams.service';
 import { AuthUser } from './auth.types';
 
 const INVITE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
@@ -18,6 +19,7 @@ export class SupabaseAuthService implements OnModuleInit {
   constructor(
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly githubTeams: GithubTeamsService,
   ) {
     const supabaseUrl = this.configService.get<string>('supabase.url');
     if (supabaseUrl) {
@@ -137,6 +139,10 @@ export class SupabaseAuthService implements OnModuleInit {
         profile = existing;
       }
     } else {
+      // New sign-in: derive the role from GitHub org team membership when
+      // configured (github-teams.service.ts); fall back to CLIENT otherwise.
+      const provisionedRole =
+        (await this.githubTeams.resolveRoleFromTeams(githubLogin)) ?? UserRole.CLIENT;
       profile = await this.prisma.profile.create({
         data: {
           id: userId,
@@ -144,7 +150,7 @@ export class SupabaseAuthService implements OnModuleInit {
           fullName,
           githubLogin,
           avatarUrl,
-          role: UserRole.CLIENT,
+          role: provisionedRole,
         },
         select: { id: true, email: true, fullName: true, githubLogin: true, avatarUrl: true, role: true, status: true },
       });
@@ -156,11 +162,43 @@ export class SupabaseAuthService implements OnModuleInit {
 
     const lastCheck = this.lastInviteCheck.get(userId) ?? 0;
     if (Date.now() - lastCheck > INVITE_CHECK_INTERVAL_MS) {
+      profile = await this.promoteFromTeamsIfNeeded(profile, githubLogin);
       await this.acceptPendingClientInvites(profile);
       this.lastInviteCheck.set(userId, Date.now());
     }
 
     return { ...profile, authProvider };
+  }
+
+  /**
+   * Upgrades an existing CLIENT to DEV/PM when their GitHub login is (now) in a
+   * mapped org team. Only ever promotes — never auto-demotes — so manual/admin
+   * role changes are preserved. No-op unless team mapping is enabled.
+   */
+  private async promoteFromTeamsIfNeeded(
+    profile: {
+      id: string;
+      email: string | null;
+      fullName: string | null;
+      githubLogin: string | null;
+      avatarUrl: string | null;
+      role: UserRole;
+      status: ProfileStatus;
+    },
+    githubLogin: string | null,
+  ) {
+    if (profile.role !== UserRole.CLIENT || !githubLogin || !this.githubTeams.isEnabled()) {
+      return profile;
+    }
+
+    const teamRole = await this.githubTeams.resolveRoleFromTeams(githubLogin);
+    if (!teamRole || teamRole === UserRole.CLIENT) return profile;
+
+    return this.prisma.profile.update({
+      where: { id: profile.id },
+      data: { role: teamRole },
+      select: { id: true, email: true, fullName: true, githubLogin: true, avatarUrl: true, role: true, status: true },
+    });
   }
 
   private getEmail(payload: JWTPayload): string | null {

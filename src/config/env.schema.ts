@@ -53,6 +53,11 @@ export const envSchema = z.object({
   GITHUB_PRIVATE_KEY: z.string().optional().default(''),
   GITHUB_INSTALLATION_ID: z.string().optional().default(''),
   GITHUB_ORG: z.string().optional().default(''),
+  // Org team slugs that map a GitHub login to a DevFlow role at first sign-in.
+  // Empty = feature disabled (GitHub logins stay CLIENT). Requires the GitHub App
+  // to have `Members: read` org permission. See github-teams.service.ts.
+  GITHUB_DEV_TEAM: z.string().optional().default(''),
+  GITHUB_PM_TEAM: z.string().optional().default(''),
   GITHUB_TOKEN: z.string().optional().default(''),
   GITHUB_WEBHOOK_SECRET: z.string().optional().default(''),
   PORT: z

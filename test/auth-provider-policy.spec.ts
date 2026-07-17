@@ -12,6 +12,7 @@ function serviceWithProviders(providers: string[]) {
       },
     } as never,
     {} as never,
+    { resolveRoleFromTeams: async () => null, isEnabled: () => false } as never,
   );
 }
 

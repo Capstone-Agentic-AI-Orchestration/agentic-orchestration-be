@@ -101,6 +101,8 @@ export default () => {
         ? parseInt(env.data.GITHUB_INSTALLATION_ID, 10)
         : undefined,
       org: env.data.GITHUB_ORG || undefined,
+      devTeam: env.data.GITHUB_DEV_TEAM || undefined,
+      pmTeam: env.data.GITHUB_PM_TEAM || undefined,
       token: env.data.GITHUB_TOKEN || undefined,
       webhookSecret: env.data.GITHUB_WEBHOOK_SECRET || undefined,
     },
