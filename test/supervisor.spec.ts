@@ -262,6 +262,30 @@ describe('RunSupervisorService', () => {
     await expect(service.supervisorTick()).resolves.toBeUndefined();
   });
 
+  it('does not start an overlapping tick while the previous scan is running', async () => {
+    let finishScan!: (rows: unknown[]) => void;
+    prisma.$queryRaw.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishScan = resolve;
+        }),
+    );
+
+    const firstTick = service.supervisorTick();
+    await vi.waitFor(() => {
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    });
+
+    await service.supervisorTick();
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+
+    finishScan([]);
+    await firstTick;
+
+    await service.supervisorTick();
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+  });
+
   it('does nothing when no stuck projects are found', async () => {
     // $queryRaw already returns [] by default from makePrismaMock
     await service.supervisorTick();

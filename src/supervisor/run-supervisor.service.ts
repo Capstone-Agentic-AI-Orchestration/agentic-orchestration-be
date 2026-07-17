@@ -55,6 +55,7 @@ const SUPERVISOR_NODE = 'supervisor';
 @Injectable()
 export class RunSupervisorService {
   private readonly logger = new Logger(RunSupervisorService.name);
+  private tickInProgress = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -71,6 +72,15 @@ export class RunSupervisorService {
    */
   @Interval(POLL_INTERVAL_MS)
   async supervisorTick(): Promise<void> {
+    if (this.tickInProgress) {
+      this.logger.warn(
+        'Skipping supervisor tick because the previous tick is still running.',
+      );
+      return;
+    }
+
+    this.tickInProgress = true;
+
     try {
       const stuckProjects = await this.findStuckProjects();
 
@@ -82,14 +92,24 @@ export class RunSupervisorService {
         `Supervisor detected ${stuckProjects.length} stuck run(s): [${stuckProjects.map((p) => p.id).join(', ')}]`,
       );
 
-      // Process all stuck projects in parallel; individual failures are isolated.
-      await Promise.allSettled(
-        stuckProjects.map((project) => this.handleStuckProject(project)),
-      );
+      // Recovery can fan out into several database writes and an orchestration
+      // run. Process projects sequentially so a small Prisma pool is not flooded
+      // and so the next scheduled tick cannot overlap this one.
+      for (const project of stuckProjects) {
+        try {
+          await this.handleStuckProject(project);
+        } catch (err) {
+          this.logger.error(
+            `[${project.id}] Supervisor recovery failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
     } catch (err) {
       this.logger.error(
         `Supervisor tick failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+    } finally {
+      this.tickInProgress = false;
     }
   }
 
