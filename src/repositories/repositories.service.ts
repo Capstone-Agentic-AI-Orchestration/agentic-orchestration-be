@@ -10,6 +10,7 @@ import {
   Prisma,
   RepositoryAssignmentDesiredState,
   RepositoryAssignmentEffectiveState,
+  RepositoryKind,
   RepositoryStatus,
   UserRole,
 } from '@prisma/client';
@@ -17,6 +18,7 @@ import { AuthUser } from '../auth/auth.types';
 import { GithubService } from '../github/github.service';
 import { GroupsService } from '../groups/groups.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { scaffoldFilesFor } from './scaffold/repo-scaffold';
 import { CreateRepositoryDto } from './dto/repositories.dto';
 
 const repositoryInclude = {
@@ -47,6 +49,7 @@ export class RepositoriesService {
       throw new ForbiddenException('Only project managers and admins can create repositories');
     }
     await this.groups.assertManager(dto.groupId, user);
+    const kind = dto.kind ?? RepositoryKind.BACKEND;
     const project = await this.prisma.project.findUnique({
       where: { id: dto.projectId },
       select: {
@@ -54,15 +57,15 @@ export class RepositoriesService {
         companyName: true,
         stackKey: true,
         groupId: true,
-        repository: { select: { id: true, status: true } },
+        repositories: { select: { id: true, status: true, kind: true } },
       },
     });
     if (!project) throw new NotFoundException(`Project ${dto.projectId} not found`);
     if (project.groupId && project.groupId !== dto.groupId) {
       throw new BadRequestException('Project belongs to a different group');
     }
-    if (project.repository) {
-      throw new ConflictException('This project already has a repository record');
+    if (project.repositories.some((repo) => repo.kind === kind)) {
+      throw new ConflictException(`This project already has a ${kind} repository`);
     }
 
     const name = this.normalizeRepositoryName(dto.name);
@@ -70,6 +73,7 @@ export class RepositoriesService {
       data: {
         groupId: dto.groupId,
         projectId: project.id,
+        kind,
         name,
         createdById: user.id,
       },
@@ -257,10 +261,13 @@ export class RepositoriesService {
         },
       });
 
+      const slug =
+        record.project.companyName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') ||
+        'app';
       await this.github.commitFiles(
         remote.name,
-        this.plainStructure(record.project.companyName, record.project.stackKey),
-        'chore: initialize DevFlow repository structure',
+        scaffoldFilesFor(record.kind, { slug, companyName: record.project.companyName }),
+        `chore: initialize ${record.kind.toLowerCase()} repository (DevFlow scaffold)`,
       );
 
       const updated = await this.prisma.$transaction(async (tx) => {

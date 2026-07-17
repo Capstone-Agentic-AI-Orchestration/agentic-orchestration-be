@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MaxLength, MinLength, ValidateIf } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, MaxLength, MinLength, ValidateIf } from 'class-validator';
 
 export class CreateProjectDto {
   @IsString()
@@ -28,4 +28,9 @@ export class CreateProjectDto {
   @IsString()
   @MaxLength(350)
   repositoryDescription?: string;
+
+  /** When true, also provision a mobile (Expo/React Native) repository. Default: backend + frontend only. */
+  @IsOptional()
+  @IsBoolean()
+  includeMobile?: boolean;
 }

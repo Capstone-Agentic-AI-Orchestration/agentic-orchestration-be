@@ -1,4 +1,5 @@
 import {
+  IsEnum,
   IsOptional,
   IsString,
   IsUUID,
@@ -6,6 +7,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { RepositoryKind } from '@prisma/client';
 
 export class CreateRepositoryDto {
   @IsUUID()
@@ -14,6 +16,10 @@ export class CreateRepositoryDto {
   @IsString()
   @MinLength(1)
   projectId!: string;
+
+  @IsOptional()
+  @IsEnum(RepositoryKind)
+  kind?: RepositoryKind;
 
   @IsString()
   @MinLength(1)

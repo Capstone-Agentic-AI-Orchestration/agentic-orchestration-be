@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { RepositoryKind } from '@prisma/client';
 import { GithubService } from '../../github/github.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { DevFlowStateType } from '../graph/devflow.state';
@@ -31,72 +32,53 @@ export class GithubCommitNode {
           createdById: true,
           groupId: true,
           repoUrl: true,
-          repository: {
-            select: { id: true, name: true, htmlUrl: true, cloneUrl: true, status: true },
+          repositories: {
+            select: { id: true, name: true, htmlUrl: true, cloneUrl: true, status: true, kind: true },
           },
         },
       });
       if (!project) throw new Error(`Project ${state.projectId} not found`);
 
-      let repoName = project.repository?.name;
-      let repoUrl = project.repository?.htmlUrl ?? project.repository?.cloneUrl ?? project.repoUrl;
-
-      // Reuse the plain repository created by the PM flow. Older projects can
-      // still be provisioned here, but no CI/CD files are ever added.
-      if (!repoName || !repoUrl) {
-        repoName = this.github.buildRepoName(state.companyName, state.projectId);
-        const remote = await this.github.createPlainRepository(
-          repoName,
-          `${state.companyName} workspace created by DevFlow`,
+      // Repos are provisioned deterministically at project creation (with the
+      // .gitignore + config + MVVM scaffold). We never create a repo here — the
+      // agents only produce feature code, which we route to the matching repo.
+      if (project.repositories.length === 0) {
+        throw new Error(
+          `Project ${state.projectId} has no provisioned repositories; create the project's repositories first.`,
         );
-        repoUrl = remote.htmlUrl;
-        if (project.groupId && project.createdById) {
-          await this.prisma.repository.upsert({
-            where: { projectId: state.projectId },
-            update: {
-              name: remote.name,
-              fullName: remote.fullName,
-              htmlUrl: remote.htmlUrl,
-              cloneUrl: remote.cloneUrl,
-              defaultBranch: remote.defaultBranch,
-              visibility: remote.visibility,
-              status: 'ACTIVE',
-              lastError: null,
-              provisionedAt: new Date(),
-            },
-            create: {
-              projectId: state.projectId,
-              groupId: project.groupId,
-              createdById: project.createdById,
-              name: remote.name,
-              fullName: remote.fullName,
-              htmlUrl: remote.htmlUrl,
-              cloneUrl: remote.cloneUrl,
-              defaultBranch: remote.defaultBranch,
-              visibility: remote.visibility,
-              status: 'ACTIVE',
-              provisionedAt: new Date(),
-            },
-          });
-        }
-        this.logger.log(`[${state.projectId}] Plain repository created: ${repoUrl}`);
-      } else {
-        this.logger.log(`[${state.projectId}] Reusing repository: ${repoUrl}`);
+      }
+      const repoByKind = new Map(project.repositories.map((repo) => [repo.kind, repo]));
+
+      // Frontend code -> frontend repo; everything else -> backend repo. Fall
+      // back to backend when a kind's repo wasn't provisioned.
+      const targetKind = (agentType: string): RepositoryKind => {
+        const wanted = agentType === 'frontend' ? RepositoryKind.FRONTEND : RepositoryKind.BACKEND;
+        return repoByKind.has(wanted) ? wanted : RepositoryKind.BACKEND;
+      };
+
+      const byRepo = new Map<RepositoryKind, typeof state.artifacts>();
+      for (const artifact of state.artifacts) {
+        const kind = targetKind(artifact.agentType);
+        if (!repoByKind.has(kind)) continue;
+        const list = byRepo.get(kind) ?? [];
+        list.push(artifact);
+        byRepo.set(kind, list);
       }
 
-      // Commit generated artifacts into the existing plain repository.
-      const commitMessage = `feat: initial scaffold by DevFlow [run:${state.runId}]`;
-      await this.github.commitFiles(
-        repoName,
-        state.artifacts.map((a) => ({
-          filePath: a.filePath,
-          content: a.content,
-        })),
-        commitMessage,
-      );
-      this.logger.log(
-        `[${state.projectId}] Committed ${state.artifacts.length} files`,
-      );
+      const commitMessage = `feat: generated code by DevFlow [run:${state.runId}]`;
+      for (const [kind, artifacts] of byRepo) {
+        const repo = repoByKind.get(kind)!;
+        await this.github.commitFiles(
+          repo.name,
+          artifacts.map((a) => ({ filePath: a.filePath, content: a.content })),
+          commitMessage,
+        );
+        this.logger.log(`[${state.projectId}] Committed ${artifacts.length} files to ${repo.name} (${kind})`);
+      }
+
+      const primaryRepo =
+        repoByKind.get(RepositoryKind.BACKEND) ?? project.repositories[0];
+      const repoUrl = primaryRepo?.htmlUrl ?? primaryRepo?.cloneUrl ?? project.repoUrl;
 
       // Persist artifacts to DB.
       if (state.artifacts.length > 0) {

@@ -13,7 +13,7 @@ import {
   OrchestrationStatus,
 } from '../orchestration/orchestration.service';
 import { CreateProjectDto } from './dto/create-project.dto';
-import { ArtifactOutputReviewStatus, ArtifactReviewStatus, ArtifactValidationStatus, ClientInviteStatus, CollaborationDocumentStatus, NotificationType, OrchestrationRunTrigger, ProjectDeliveryReview, ProjectDeliveryReviewStatus, ProjectStatus, ProjectTimelineEvent, ProjectTimelineEventType, ProjectTimelineVisibility, ProjectTaskActivity, ProjectTaskActivityType, ProjectTaskStatus, Project, GateEvent, Artifact, EventLog, Prisma, ProjectKickoff, ProjectKickoffStatus, ProjectTask, RepositoryStatus, UserRole, WorkOrder, WorkOrderAgentType, WorkOrderPriority, WorkOrderStatus } from '@prisma/client';
+import { ArtifactOutputReviewStatus, ArtifactReviewStatus, ArtifactValidationStatus, ClientInviteStatus, CollaborationDocumentStatus, NotificationType, OrchestrationRunTrigger, ProjectDeliveryReview, ProjectDeliveryReviewStatus, ProjectStatus, ProjectTimelineEvent, ProjectTimelineEventType, ProjectTimelineVisibility, ProjectTaskActivity, ProjectTaskActivityType, ProjectTaskStatus, Project, GateEvent, Artifact, EventLog, Prisma, ProjectKickoff, ProjectKickoffStatus, ProjectTask, RepositoryKind, RepositoryStatus, UserRole, WorkOrder, WorkOrderAgentType, WorkOrderPriority, WorkOrderStatus } from '@prisma/client';
 import { AuthUser } from '../auth/auth.types';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { AddProjectMemberDto } from './dto/project-member.dto';
@@ -370,12 +370,27 @@ export class ProjectsService {
     });
     if (dto.groupId && dto.repositoryName) {
       if (!this.repositories) throw new BadRequestException('Repository provisioning is unavailable');
-      await this.repositories.create({
-        groupId: dto.groupId,
-        projectId: project.id,
-        name: dto.repositoryName,
-        description: dto.repositoryDescription,
-      }, user);
+      // Provision separate backend + frontend repos by default (+ mobile when opted in).
+      const base = dto.repositoryName.replace(/-(be|fe|backend|frontend|mobile|api|web)$/i, '');
+      const repos: Array<{ kind: RepositoryKind; name: string }> = [
+        { kind: RepositoryKind.BACKEND, name: `${base}-be` },
+        { kind: RepositoryKind.FRONTEND, name: `${base}-fe` },
+      ];
+      if (dto.includeMobile) {
+        repos.push({ kind: RepositoryKind.MOBILE, name: `${base}-mobile` });
+      }
+      for (const repo of repos) {
+        await this.repositories.create(
+          {
+            groupId: dto.groupId,
+            projectId: project.id,
+            kind: repo.kind,
+            name: repo.name,
+            description: dto.repositoryDescription,
+          },
+          user,
+        );
+      }
       return this.prisma.project.findUniqueOrThrow({ where: { id: project.id } });
     }
     return project;
@@ -460,7 +475,7 @@ export class ProjectsService {
         companyName: true,
         stackKey: true,
         runId: true,
-        repository: { select: { status: true } },
+        repositories: { select: { status: true } },
       },
     });
 
@@ -470,9 +485,12 @@ export class ProjectsService {
     if (project.runId) {
       return { accepted: true, runId: project.runId };
     }
-    if (!project.repository || project.repository.status !== RepositoryStatus.ACTIVE) {
+    if (
+      project.repositories.length === 0 ||
+      !project.repositories.some((repo) => repo.status === RepositoryStatus.ACTIVE)
+    ) {
       throw new BadRequestException(
-        'The project repository must be fully provisioned before orchestration can start',
+        'The project repositories must be provisioned before orchestration can start',
       );
     }
 

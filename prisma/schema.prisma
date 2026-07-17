@@ -22,7 +22,7 @@ model Project {
   repoUrl     String?
   groupId     String?
   group       Group?          @relation(fields: [groupId], references: [id], onDelete: SetNull)
-  repository  Repository?
+  repositories Repository[]
   createdById String?         @db.Uuid
   createdBy   Profile?        @relation("ProjectCreatedBy", fields: [createdById], references: [id])
   version     Int             @default(1)
@@ -559,6 +559,14 @@ enum RepositoryStatus {
   @@schema("projects")
 }
 
+enum RepositoryKind {
+  BACKEND
+  FRONTEND
+  MOBILE
+
+  @@schema("projects")
+}
+
 enum RepositoryAssignmentDesiredState {
   ASSIGNED
   UNASSIGNED
@@ -643,8 +651,9 @@ model Repository {
   id            String                 @id @default(cuid())
   groupId       String
   group         Group                  @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  projectId     String                 @unique
+  projectId     String
   project       Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  kind          RepositoryKind         @default(BACKEND)
   name          String
   fullName      String?                @unique
   htmlUrl       String?
@@ -660,6 +669,7 @@ model Repository {
   updatedAt     DateTime               @updatedAt
   assignments   RepositoryAssignment[]
 
+  @@unique([projectId, kind])
   @@index([groupId, status])
   @@index([createdById])
   @@map("repositories")
