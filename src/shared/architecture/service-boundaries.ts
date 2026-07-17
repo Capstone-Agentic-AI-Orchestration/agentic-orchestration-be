@@ -166,7 +166,7 @@ export const serviceBoundarySourceDirectories: Record<ServiceBoundary, string[]>
   'project-delivery': ['projects', 'reports', 'schedule', 'groups', 'repositories'],
   collaboration: ['collaboration'],
   notifications: ['notifications'],
-  orchestration: ['orchestration', 'supervisor', 'memory', 'context-memory', 'gateway'],
+  orchestration: ['orchestration', 'supervisor', 'memory', 'context-memory', 'gateway', 'rag'],
   admin: ['admin'],
 };
 
@@ -244,9 +244,10 @@ export const serviceBoundaries: ServiceBoundaryDefinition[] = [
       'memory_context_events',
       'memory_context_handoffs',
       'memory_context_snapshots',
+      'rag_chunks',
     ],
     publishes: [],
-    dependsOn: ['identity', 'intake', 'project-delivery', 'notifications', 'admin'],
+    dependsOn: ['identity', 'intake', 'project-delivery', 'collaboration', 'notifications', 'admin'],
     extractionReadiness: 'internal-module',
   },
   {
@@ -308,6 +309,7 @@ export const prismaModelOwners: Record<string, PrismaModelOwner> = {
   agentProfile: 'orchestration',
   eventLog: 'orchestration',
   runBudget: 'orchestration',
+  ragChunk: 'orchestration',
   adminDomain: 'admin',
   adminAuditLog: 'admin',
   platformSetting: 'admin',
@@ -352,6 +354,7 @@ export const prismaModelSchemas: Record<string, string> = {
   agentProfile: 'memory',
   eventLog: 'orchestration',
   runBudget: 'orchestration',
+  ragChunk: 'memory',
   adminDomain: 'admin',
   adminAuditLog: 'admin',
   platformSetting: 'admin',
@@ -394,6 +397,7 @@ export const allowedCrossBoundaryPrismaModels: Partial<Record<ServiceBoundary, C
   ],
   orchestration: [
     crossBoundaryPrismaException('artifact', 'Orchestration writes generated delivery artifacts.', 'Project delivery artifact command API.'),
+    crossBoundaryPrismaException('collaborationDocument', 'RAG indexes safe extracted project documents before agent execution.', 'Collaboration document read model.'),
     crossBoundaryPrismaException('project', 'Orchestration advances project execution state.', 'Project delivery orchestration callback API.'),
     crossBoundaryPrismaException('repository', 'Orchestration reuses the PM-provisioned repository for artifact delivery.', 'Project delivery repository read model.'),
     crossBoundaryPrismaException('projectTask', 'Orchestration updates task execution status.', 'Project delivery task command API.'),

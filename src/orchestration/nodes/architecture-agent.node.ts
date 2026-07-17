@@ -11,6 +11,7 @@ import { ARCHITECTURE_AGENT_SYSTEM, buildAgentSystemPrompt, buildStructuredMemor
 import { resolveModelForNode } from '../providers/base-llm.provider';
 import { ProjectScaffolderService } from '../scaffolding/project-scaffolder.service';
 import { OutputValidationService } from '../output-validation/output-validation.service';
+import { ContextEngineService } from '../../rag/context-engine.service';
 
 @Injectable()
 export class ArchitectureAgentNode {
@@ -24,6 +25,7 @@ export class ArchitectureAgentNode {
     private readonly streamEmitter: StreamEmitter,
     private readonly scaffolder: ProjectScaffolderService,
     private readonly outputValidation: OutputValidationService,
+    private readonly contextEngine?: ContextEngineService,
   ) {}
 
   async execute(
@@ -143,6 +145,10 @@ export class ArchitectureAgentNode {
       const combinedFeedback = [feedbackContext, selfCritiqueFeedback]
         .filter(Boolean)
         .join('\n\n');
+      const ragPrompt = await this.contextEngine?.buildPromptContextSafe({
+        projectId, runId, agentName: 'architecture', query: memoryQuery,
+        currentTask: `${state.contract.projectName} ${state.contract.description}`,
+      }) ?? '';
 
       const systemPrompt = buildAgentSystemPrompt(
         ARCHITECTURE_AGENT_SYSTEM,
@@ -160,7 +166,7 @@ export class ArchitectureAgentNode {
         agentName: resolveModelForNode('architecture_agent', 'architecture_agent'),
         subagent: 'architecture',
         onToken: (delta) => this.streamEmitter.emit(projectId, 'architecture_agent', runId ?? '', 'token', delta),
-        systemPrompt,
+        systemPrompt: [systemPrompt, ragPrompt].filter(Boolean).join('\n\n'),
         userPrompt: `Generate architecture documentation for this project:
 
 Project: ${state.contract.projectName}

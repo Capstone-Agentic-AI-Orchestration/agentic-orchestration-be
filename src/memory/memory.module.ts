@@ -7,6 +7,6 @@ import { ContextMemoryModule } from '../context-memory/context-memory.module';
 @Module({
   imports: [PrismaModule, ContextMemoryModule],
   providers: [EmbeddingService, MemoryService],
-  exports: [MemoryService],
+  exports: [MemoryService, EmbeddingService],
 })
 export class MemoryModule {}

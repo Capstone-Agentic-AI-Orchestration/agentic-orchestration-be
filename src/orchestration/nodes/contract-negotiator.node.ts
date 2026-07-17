@@ -9,6 +9,7 @@ import { StreamEmitter } from '../streaming/stream-emitter.service';
 import { humanReadableError } from './human-readable-error';
 import { CONTRACT_NEGOTIATOR_SYSTEM, buildAgentSystemPrompt } from '../prompts/agent-prompts';
 import { resolveModelForNode } from '../providers/base-llm.provider';
+import { ContextEngineService } from '../../rag/context-engine.service';
 
 // ─── Node ─────────────────────────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ export class ContractNegotiatorNode {
     private readonly eventLog: EventLogService,
     private readonly llm: AgentLlmRouter,
     private readonly streamEmitter: StreamEmitter,
+    private readonly contextEngine?: ContextEngineService,
   ) {}
 
   async execute(
@@ -68,6 +70,10 @@ export class ContractNegotiatorNode {
         query: memoryQuery,
       });
       const memoryContext = memoryBundle.context;
+      const ragPrompt = await this.contextEngine?.buildPromptContextSafe({
+        projectId, runId, agentName: 'contract', query: memoryQuery,
+        currentTask: `Negotiate the contract for ${state.companyName}: ${state.brief}`,
+      }) ?? '';
 
       // ── 1a. Skip-generation: reuse a similar approved contract ──────────────
       const skipCandidate = await this.memory.findSkipCandidate(
@@ -130,7 +136,7 @@ export class ContractNegotiatorNode {
       // ── 2. LLM call ───────────────────────────────────────────────────────
       const systemPrompt = buildAgentSystemPrompt(
         CONTRACT_NEGOTIATOR_SYSTEM,
-        memoryContext,
+        [memoryContext, ragPrompt].filter(Boolean).join('\n\n'),
       );
 
       const result = await this.llm.generateJson<Record<string, unknown>>({

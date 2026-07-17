@@ -10,8 +10,16 @@ export const envSchema = z.object({
   // service ('eve', canonical) or the in-process raw-fetch provider ('graph', fallback).
   // 'eve' is the default; AgentLlmRouter automatically falls back to 'graph' when EVE_SERVICE_URL
   // is unset/unreachable, so this is safe before the Eve service is deployed.
-  ORCHESTRATION_LLM_ENGINE: z.enum(['graph', 'eve']).optional().default('eve'),
-  ORCHESTRATION_DISPATCHER_MODE: z.enum(['in-process']).optional().default('in-process'),
+  ORCHESTRATION_LLM_ENGINE: z
+    .enum(['graph', 'eve', 'direct'])
+    .optional()
+    .default('eve')
+    .transform((value) => (value === 'direct' ? 'graph' : value)),
+  ORCHESTRATION_DISPATCHER_MODE: z
+    .enum(['in-process', 'db-lease'])
+    .optional()
+    .default('in-process')
+    .transform((value) => (value === 'db-lease' ? 'in-process' : value)),
   EVE_SERVICE_URL: z.string().url().optional(),
   EVE_SERVICE_TOKEN: z.string().optional().default(''),
   LLM_PROVIDER: z.enum(['openrouter', 'openai', 'anthropic', 'opencode', 'gemini']).optional().default('openrouter'),
@@ -48,6 +56,13 @@ export const envSchema = z.object({
   GEMINI_MODEL: z.string().optional().default('gemini-3.5-flash'),
   GEMINI_FALLBACK_MODEL: z.string().optional().default(''),
   OPENAI_API_KEY: z.string().optional().default(''),
+  // RAG/AgentMemory vector columns are vector(1536); reject a mismatched
+  // configuration at startup rather than corrupting similarity search.
+  OPENAI_EMBEDDING_MODEL: z.string().optional().default('text-embedding-3-small'),
+  OPENAI_EMBEDDING_DIMENSIONS: z.string().optional().default('1536').refine(
+    (value) => value === '1536',
+    'OPENAI_EMBEDDING_DIMENSIONS must be 1536 for the current pgvector columns',
+  ),
   GITHUB_APP_ID: z.string().optional().default(''),
   GITHUB_APP_SLUG: z.string().optional().default(''),
   GITHUB_PRIVATE_KEY: z.string().optional().default(''),

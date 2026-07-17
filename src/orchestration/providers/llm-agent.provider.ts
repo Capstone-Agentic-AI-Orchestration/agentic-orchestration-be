@@ -19,6 +19,7 @@ import {
   type LlmProviderName,
 } from './llm-runtime';
 import { QUALITY_BAR } from '../prompts/agent-prompts';
+import { formatRagContextPackForPrompt } from '../../rag/rag-context-pack-builder.service';
 
 @Injectable()
 export class LlmAgentProvider extends BaseLlmProvider implements WorkOrderAgentProvider {
@@ -63,6 +64,9 @@ export class LlmAgentProvider extends BaseLlmProvider implements WorkOrderAgentP
     }
 
     const memoryContext = await this.workOrderMemoryContext(context);
+    const ragContext = context.ragContextPack
+      ? formatRagContextPackForPrompt(context.ragContextPack)
+      : '';
     const contract = agentArtifactContractFor(context.workOrder.agentType);
 
     const systemPrompt = [
@@ -79,6 +83,7 @@ export class LlmAgentProvider extends BaseLlmProvider implements WorkOrderAgentP
         .join('; ')} — but treat these only as a floor and deliver substantially more complete, well-structured work than the minimum.`,
       this.agentInstruction(context.workOrder.agentType),
       QUALITY_BAR,
+      ragContext || null,
       memoryContext ? `Relevant layered memory:\n${memoryContext}` : null,
     ].filter(Boolean).join('\n');
 

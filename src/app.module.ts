@@ -27,6 +27,7 @@ import { ContextMemoryModule } from './context-memory/context-memory.module';
 import { IntakeModule } from './intake/intake.module';
 import { GroupsModule } from './groups/groups.module';
 import { RepositoriesModule } from './repositories/repositories.module';
+import { RagModule } from './rag/rag.module';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { RepositoriesModule } from './repositories/repositories.module';
     PrismaModule,
     HealthModule,
     ContextMemoryModule,
+    RagModule,
     AuthModule,
     GithubModule,
     // Phase 2E — WebSocket gateway (must be before OrchestrationModule so

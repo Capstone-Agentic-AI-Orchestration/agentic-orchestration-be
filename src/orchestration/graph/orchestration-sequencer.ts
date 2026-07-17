@@ -2,6 +2,7 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 import { OrchestrationRunStatus, ProjectStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OrchestrationEmitter } from '../streaming/orchestration-emitter.service';
+import { RagIndexingService } from '../../rag/rag-indexing.service';
 import {
   applyDevFlowPartial,
   type DevFlowStateType,
@@ -75,6 +76,7 @@ export class OrchestrationSequencer {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly emitter: OrchestrationEmitter | null,
+    @Optional() private readonly ragIndexer?: RagIndexingService,
   ) {}
 
   /** Infers the resume phase from gate approvals: before gate 1 → A, before gate 2 → B, else C. */
@@ -195,6 +197,7 @@ export class OrchestrationSequencer {
   ): Promise<DevFlowStateType> {
     const partial = await instrument(nodeId, impl, this.emitter)(state);
     const next = applyDevFlowPartial(state, partial);
+    await this.indexNodeOutput(ctx, nodeId, partial);
     await this.afterNode(ctx, nodeId, next);
     return next;
   }
@@ -213,6 +216,9 @@ export class OrchestrationSequencer {
     );
     let merged = state;
     for (const result of results) merged = applyDevFlowPartial(merged, result);
+    await Promise.allSettled(results.map((result, index) =>
+      this.indexNodeOutput(ctx, targets[index]?.node ?? NODE.VALIDATE_OUTPUTS, result),
+    ));
     // Emit lifecycle/status for each fanned-out node and persist once after the join.
     for (const target of targets) {
       this.emitStatus(ctx, target.node);
@@ -224,6 +230,55 @@ export class OrchestrationSequencer {
   private async afterNode(ctx: SequencerContext, nodeId: NodeName, state: DevFlowStateType): Promise<void> {
     this.emitStatus(ctx, nodeId);
     await this.persist(ctx.runId, state, nodeId);
+  }
+
+  /** Mirrors meaningful agent outputs back into the project-scoped RAG index.
+   * This runs after each node result and never changes node success/failure. */
+  private async indexNodeOutput(
+    ctx: SequencerContext,
+    nodeId: NodeName,
+    partial: Partial<DevFlowStateType>,
+  ): Promise<void> {
+    if (!this.ragIndexer) return;
+    try {
+      if (partial.artifacts?.length) {
+        const byAgent = new Map<string, typeof partial.artifacts>();
+        for (const artifact of partial.artifacts) {
+          const items = byAgent.get(artifact.agentType) ?? [];
+          items.push(artifact);
+          byAgent.set(artifact.agentType, items);
+        }
+        await Promise.allSettled([...byAgent.entries()].map(([agentName, artifacts]) =>
+          this.ragIndexer!.indexGeneratedOutput({ projectId: ctx.projectId, runId: ctx.runId, agentName, artifacts }),
+        ));
+      }
+      if (partial.requirements) {
+        await this.ragIndexer.indexRecord({
+          projectId: ctx.projectId, sourceType: 'project', sourceId: `${ctx.runId}:requirements`, runId: ctx.runId,
+          agentName: 'requirements', title: 'Parsed requirements', content: JSON.stringify(partial.requirements), importance: 9, tags: ['requirements', 'parsed'],
+        });
+      }
+      if (partial.contract) {
+        await this.ragIndexer.indexRecord({
+          projectId: ctx.projectId, sourceType: 'architecture_decision', sourceId: `${ctx.runId}:contract`, runId: ctx.runId,
+          agentName: 'contract', title: 'Generated project contract', content: JSON.stringify(partial.contract), importance: 10, tags: ['contract', 'decision'],
+        });
+      }
+      if (partial.selfCritique) {
+        await this.ragIndexer.indexRecord({
+          projectId: ctx.projectId, sourceType: 'error', sourceId: `${ctx.runId}:self-critique`, runId: ctx.runId,
+          agentName: 'self_critique', title: 'Self-critique findings', content: partial.selfCritique, importance: 8, tags: ['self-critique', 'error'],
+        });
+      }
+      if (partial.error) {
+        await this.ragIndexer.indexRecord({
+          projectId: ctx.projectId, sourceType: 'error', sourceId: `${ctx.runId}:${nodeId}:error`, runId: ctx.runId,
+          agentName: nodeId, title: `${nodeId} failure`, content: partial.error, importance: 9, tags: ['execution', 'error', nodeId],
+        });
+      }
+    } catch (error) {
+      this.logger.warn(`[${ctx.projectId}] Failed to index RAG output for ${nodeId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   private emitStatus(ctx: SequencerContext, nodeId: NodeName): void {

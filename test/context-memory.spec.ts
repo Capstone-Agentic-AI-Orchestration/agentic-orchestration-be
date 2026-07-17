@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ContextMemoryModule } from '../src/context-memory/context-memory.module';
 import { ContextMemoryController } from '../src/context-memory/context-memory.controller';
 import { ContextMemoryService } from '../src/context-memory/context-memory.service';
+import { AuthModule } from '../src/auth/auth.module';
 
 const now = new Date('2026-07-09T08:00:00.000Z');
 
@@ -393,5 +395,13 @@ describe('ContextMemoryController', () => {
     expect(service.listHandoffs).toHaveBeenCalledWith({ projectId: 'project-1' });
     expect(service.listSnapshots).toHaveBeenCalledWith({ projectId: 'project-1' });
     expect(service.compactProjectMemory).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ContextMemoryModule', () => {
+  it('imports AuthModule for guards used by the memory controller', () => {
+    const imports = Reflect.getMetadata('imports', ContextMemoryModule) as unknown[];
+
+    expect(imports).toContain(AuthModule);
   });
 });

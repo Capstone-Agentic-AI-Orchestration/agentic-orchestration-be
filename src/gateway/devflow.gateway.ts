@@ -163,6 +163,32 @@ export class DevFlowGateway implements OnGatewayConnection, OnGatewayDisconnect 
     this.server.to(projectId).emit(ORCHESTRATION_EVENT_CHANNEL, event);
   }
 
+  /** RAG lifecycle telemetry deliberately carries counts and identifiers only,
+   * never the context content, prompts, credentials, or provider messages. */
+  emitRagContextCreated(projectId: string, payload: {
+    runId?: string;
+    workOrderId?: string;
+    workOrderExecutionId?: string;
+    agentName: string;
+    retrievalMode: 'keyword' | 'vector' | 'hybrid';
+    chunksRetrieved: number;
+    chunksUsed: number;
+    contextChars: number;
+  }): void {
+    this.server.to(projectId).emit('orchestration:rag-context-created', { projectId, ...payload, timestamp: Date.now() });
+  }
+
+  emitRagMemoryUpdated(projectId: string, payload: {
+    runId?: string;
+    workOrderId?: string;
+    workOrderExecutionId?: string;
+    agentName?: string;
+    sourceType: string;
+    chunks: number;
+  }): void {
+    this.server.to(projectId).emit('orchestration:rag-memory-updated', { projectId, ...payload, timestamp: Date.now() });
+  }
+
   /**
    * Emits batched agent stream chunks to subscribed clients.
    * Called by StreamEmitter on batch flush.

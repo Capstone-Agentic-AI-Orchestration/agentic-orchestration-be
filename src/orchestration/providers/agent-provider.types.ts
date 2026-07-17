@@ -1,4 +1,5 @@
 import { Prisma, WorkOrderAgentType, WorkOrderPriority } from '@prisma/client';
+import type { RagContextPack } from '../../rag/rag.types';
 
 export type AgentProviderMode = 'mock' | 'llm' | 'simulation';
 
@@ -26,6 +27,8 @@ export interface WorkOrderAgentContext {
     content: string;
   } | null;
   executionRunId: string;
+  /** Fresh project-scoped context built immediately before provider execution. */
+  ragContextPack?: RagContextPack;
 }
 
 export interface GeneratedWorkOrderOutput {

@@ -11,6 +11,7 @@ import { StreamEmitter } from '../streaming/stream-emitter.service';
 import { humanReadableError } from './human-readable-error';
 import { REQUIREMENTS_PARSER_INTAKE_RULES, REQUIREMENTS_PARSER_SYSTEM } from '../prompts/agent-prompts';
 import { resolveModelForNode } from '../providers/base-llm.provider';
+import { ContextEngineService } from '../../rag/context-engine.service';
 
 // ─── Node ─────────────────────────────────────────────────────────────────────
 
@@ -23,6 +24,7 @@ export class RequirementsParserNode {
     private readonly memory: MemoryService,
     private readonly llm: AgentLlmRouter,
     private readonly streamEmitter: StreamEmitter,
+    private readonly contextEngine?: ContextEngineService,
   ) {}
 
   async execute(
@@ -55,6 +57,9 @@ export class RequirementsParserNode {
         projectId: state.projectId,
         query: memoryQuery,
       });
+      const ragPrompt = await this.contextEngine?.buildPromptContextSafe({
+        projectId, runId, agentName: 'requirements', query: memoryQuery, currentTask: state.brief,
+      }) ?? '';
 
       const intakeBlock = state.intakeContext
         ? `Locked Client Intake (authoritative; do not invent beyond this package):\n${JSON.stringify(state.intakeContext, null, 2)}`
@@ -73,7 +78,9 @@ ${REQUIREMENTS_PARSER_INTAKE_RULES}
 
 ${intakeBlock}
 
-${memoryBundle.context ? `Context from similar past requirements:\n${memoryBundle.context}` : ''}`;
+${memoryBundle.context ? `Context from similar past requirements:\n${memoryBundle.context}` : ''}
+
+${ragPrompt}`;
 
       // Mock Mode bypass
       if (process.env.MOCK_MODE === 'true') {

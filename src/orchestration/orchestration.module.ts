@@ -30,6 +30,7 @@ import { OrchestrationEmitter } from './streaming/orchestration-emitter.service'
 import { OrchestrationRunDispatcher } from './run-dispatcher.service';
 import { ProjectScaffolderService } from './scaffolding/project-scaffolder.service';
 import { OutputValidationService } from './output-validation/output-validation.service';
+import { RagModule } from '../rag/rag.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { OutputValidationService } from './output-validation/output-validation.s
     GithubModule,
     ContextMemoryModule,
     MemoryModule,
+    RagModule,
     // SupervisorModule exports EventLogService, which all agent nodes inject.
     forwardRef(() => SupervisorModule),
     // Phase 2E — import GatewayModule so DevFlowGateway can be injected

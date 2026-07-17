@@ -39,6 +39,8 @@ import {
 import { AgentProviderRegistry } from './providers/agent-provider.registry';
 import { ArtifactContractValidator } from './providers/artifact-contract.validator';
 import { OutputValidationService } from './output-validation/output-validation.service';
+import { ContextEngineService } from '../rag/context-engine.service';
+import { RagIndexingService } from '../rag/rag-indexing.service';
 import {
   GraphLlmProvider,
   GraphLlmProviderVerification,
@@ -202,6 +204,8 @@ export class OrchestrationService implements OnModuleInit {
     @Optional() private readonly emitter: OrchestrationEmitter | null,
     @Optional()
     private readonly runDispatcher: OrchestrationRunDispatcher = new OrchestrationRunDispatcher(),
+    @Optional() private readonly contextEngine?: ContextEngineService,
+    @Optional() private readonly ragIndexer?: RagIndexingService,
   ) {}
 
   getProviderStatus(): OrchestrationProviderStatus {
@@ -977,7 +981,7 @@ Rough idea: ${input.brief}`;
       },
     });
 
-    await this.prisma.workOrderExecution.create({
+    const workOrderExecution = await this.prisma.workOrderExecution.create({
       data: {
         projectId,
         orchestrationRunId: orchestrationRun.id,
@@ -1049,6 +1053,18 @@ Rough idea: ${input.brief}`;
 
     try {
       const completedAt = new Date();
+      const ragContextPack = await this.contextEngine?.buildContextPack({
+        projectId,
+        runId: orchestrationRun.runId,
+        workOrderId,
+        workOrderExecutionId: workOrderExecution.id,
+        agentName: workOrder.agentType.toLowerCase(),
+        query: [workOrder.title, workOrder.instructions, workOrder.task?.title, workOrder.task?.description, workOrder.project.brief].filter(Boolean).join('\n'),
+        currentTask: workOrder.task?.description ?? workOrder.instructions ?? workOrder.title,
+      }).catch((error: unknown) => {
+        this.logger.warn(`RAG context pack unavailable for work order ${workOrderId}; continuing with keyword/layered-memory fallback: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+      });
       const agentContext = {
         project: workOrder.project,
         workOrder: {
@@ -1061,6 +1077,7 @@ Rough idea: ${input.brief}`;
         task: workOrder.task,
         sourceArtifact: workOrder.artifact,
         executionRunId,
+        ragContextPack,
       };
       const output = await provider.generateWorkOrderOutput(agentContext);
       const validation = this.outputValidation.validate(output, agentContext);
@@ -1205,6 +1222,11 @@ Rough idea: ${input.brief}`;
         ]);
       }
 
+      await Promise.allSettled([
+        this.ragIndexer?.indexArtifact(projectId, artifact.id, orchestrationRun.runId, workOrderId, workOrderExecution.id),
+        this.ragIndexer?.indexExecution(projectId, workOrderExecution.id),
+      ].filter((task): task is Promise<number> => Boolean(task)));
+
       this.gateway?.emitStatusUpdate(projectId, 'AWAITING_GATE_2', nodeName);
       return { executionRunId, artifactId: artifact.id };
     } catch (error) {
@@ -1261,6 +1283,9 @@ Rough idea: ${input.brief}`;
           completeRun: !options.parentRunId,
         }),
       ]);
+      await this.ragIndexer?.indexExecution(projectId, workOrderExecution.id).catch((indexError: unknown) => {
+        this.logger.warn(`Could not index failed work order execution ${workOrderExecution.id}: ${indexError instanceof Error ? indexError.message : String(indexError)}`);
+      });
       this.gateway?.emitStatusUpdate(projectId, 'FAILED', nodeName, message);
       throw error;
     }
@@ -1951,7 +1976,7 @@ Rough idea: ${input.brief}`;
       actorId?: string;
       currentNode: string;
     },
-  ): Promise<{ id: string }> {
+  ): Promise<{ id: string; runId: string }> {
     const existing = await this.prisma.orchestrationRun.findUnique({
       where: { runId: input.runId },
       select: { id: true },
@@ -1965,10 +1990,10 @@ Rough idea: ${input.brief}`;
           status: OrchestrationRunStatus.RUNNING,
         },
       });
-      return existing;
+      return { ...existing, runId: input.runId };
     }
 
-    return this.prisma.orchestrationRun.create({
+    const created = await this.prisma.orchestrationRun.create({
       data: {
         projectId,
         runId: input.runId,
@@ -1981,6 +2006,7 @@ Rough idea: ${input.brief}`;
       },
       select: { id: true },
     });
+    return { ...created, runId: input.runId };
   }
 
   private async updateRunProgress(

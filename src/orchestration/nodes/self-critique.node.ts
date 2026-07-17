@@ -6,6 +6,7 @@ import { AgentLlmRouter } from '../providers/agent-llm.router';
 import { resolveModelForNode } from '../providers/base-llm.provider';
 import { buildContractSummary } from '../prompts/agent-prompts';
 import { humanReadableError } from './human-readable-error';
+import { ContextEngineService } from '../../rag/context-engine.service';
 
 const SELF_CRITIQUE_SYSTEM = `You are a senior code reviewer. You will receive a set of generated artifacts and the project contract.
 Your job is to review the artifacts against the contract's acceptance criteria and identify quality issues.
@@ -33,6 +34,7 @@ export class SelfCritiqueNode {
   constructor(
     private readonly streamEmitter: StreamEmitter,
     private readonly llm: AgentLlmRouter,
+    private readonly contextEngine?: ContextEngineService,
   ) {}
 
   async execute(
@@ -79,6 +81,11 @@ export class SelfCritiqueNode {
       const acceptanceCriteria = state.contract.acceptanceCriteria
         .map((c, i) => `${i + 1}. ${c}`)
         .join('\n');
+      const ragPrompt = await this.contextEngine?.buildPromptContextSafe({
+        projectId, runId, agentName: 'self_critique',
+        query: `${state.contract.projectName} ${state.contract.description} ${state.contract.acceptanceCriteria.join(' ')}`,
+        currentTask: 'Review generated artifacts against the current acceptance criteria.',
+      }) ?? '';
 
       const userPrompt = `## Contract
 Project: ${state.contract.projectName}
@@ -102,7 +109,7 @@ Review these artifacts against the acceptance criteria. Return your verdict as J
       }>({
         agentName: resolveModelForNode('self_critique', 'self_critique'),
         subagent: 'self-critique',
-        systemPrompt: SELF_CRITIQUE_SYSTEM,
+        systemPrompt: [SELF_CRITIQUE_SYSTEM, ragPrompt].filter(Boolean).join('\n\n'),
         userPrompt,
         expectedShape: 'object',
       });

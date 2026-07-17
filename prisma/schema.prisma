@@ -45,6 +45,7 @@ model Project {
   orchestrationRuns OrchestrationRun[]
   workOrderExecutions WorkOrderExecution[]
   scheduleEvents ScheduleEvent[]
+  ragChunks      RagChunk[]
 
   @@index([createdById])
   @@index([groupId])
@@ -1280,6 +1281,48 @@ model AgentProfile {
 
   @@index([agentType, active])
   @@map("agent_profiles")
+  @@schema("memory")
+}
+
+/// Project-scoped RAG index.  AgentMemory remains the specialised layered-memory
+/// store; RagChunk is the cross-source retrieval index used to assemble a fresh
+/// context pack for each orchestration turn.
+model RagChunk {
+  id                   String   @id @default(cuid())
+  projectId            String
+  project              Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  runId                String?
+  workOrderId          String?
+  workOrderExecutionId String?
+  agentName            String?
+  sourceType           String
+  sourceId             String
+  title                String?
+  content              String   @db.Text
+  summary              String?  @db.Text
+  chunkIndex           Int      @default(0)
+  tags                 String[] @default([])
+  importance           Int      @default(3)
+  confidence           Float    @default(1)
+  isSuperseded         Boolean  @default(false)
+  /// Nullable so keyword-only RAG works without an embedding provider.
+  embedding            Unsupported("vector(1536)")?
+  searchVector         Unsupported("tsvector")?
+  contentHash          String
+  metadata             Json     @default("{}")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  lastAccessedAt       DateTime?
+
+  @@unique([projectId, sourceType, sourceId, chunkIndex])
+  @@index([projectId, runId])
+  @@index([projectId, workOrderId])
+  @@index([projectId, workOrderExecutionId])
+  @@index([projectId, sourceType])
+  @@index([projectId, agentName])
+  @@index([projectId, createdAt])
+  @@index([projectId, isSuperseded, createdAt])
+  @@map("rag_chunks")
   @@schema("memory")
 }
 

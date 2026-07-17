@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -31,6 +32,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { IntakeService } from '../intake/intake.service';
 import { GroupsService } from '../groups/groups.service';
 import { RepositoriesService } from '../repositories/repositories.service';
+import { RagIndexingService } from '../rag/rag-indexing.service';
 import {
   CursorPage,
   CursorPageInput,
@@ -340,6 +342,7 @@ export class ProjectsService {
     private readonly intake?: IntakeService,
     private readonly groups?: GroupsService,
     private readonly repositories?: RepositoriesService,
+    @Optional() private readonly ragIndexer?: RagIndexingService,
   ) {}
 
   async create(dto: CreateProjectDto, user: AuthUser): Promise<Project> {
@@ -368,6 +371,7 @@ export class ProjectsService {
       body: project.companyName,
       metadata: { status: project.status, stackKey: project.stackKey },
     });
+    this.scheduleRagIndex(project.id, () => this.ragIndexer!.indexProjectDetails(project.id));
     if (dto.groupId && dto.repositoryName) {
       if (!this.repositories) throw new BadRequestException('Repository provisioning is unavailable');
       await this.repositories.create({
@@ -893,6 +897,7 @@ export class ProjectsService {
         repoUrl: dto.repoUrl,
       },
     });
+    this.scheduleRagIndex(id, () => this.ragIndexer!.indexProjectDetails(id));
 
     return this.findOne(id, user);
   }
@@ -1940,6 +1945,7 @@ export class ProjectsService {
       });
     }
 
+    this.scheduleRagIndex(id, () => this.ragIndexer!.indexTask(id, task.id));
     return task;
   }
 
@@ -2069,6 +2075,7 @@ export class ProjectsService {
       });
     }
 
+    this.scheduleRagIndex(id, () => this.ragIndexer!.indexTask(id, updated.id));
     return updated;
   }
 
@@ -2174,6 +2181,7 @@ export class ProjectsService {
       metadata: { taskTitle: task?.title },
     });
 
+    this.scheduleRagIndex(id, () => this.ragIndexer!.indexTaskActivity(id, activity.id));
     return activity;
   }
 
@@ -2274,6 +2282,8 @@ export class ProjectsService {
       });
     }
 
+    this.scheduleRagIndex(id, () => this.ragIndexer!.indexWorkOrder(id, workOrder.id));
+
     return workOrder;
   }
 
@@ -2333,6 +2343,8 @@ export class ProjectsService {
 
       await this.notifyWorkOrderStakeholders(id, user, updated, NotificationType.WORK_ORDER_STATUS_CHANGED, 'Work order status changed');
     }
+
+    this.scheduleRagIndex(id, () => this.ragIndexer!.indexWorkOrder(id, updated.id));
 
     return updated;
   }
@@ -3223,6 +3235,13 @@ export class ProjectsService {
     if (!this.canManageProjects(user.role)) {
       throw new BadRequestException('Only PM or ADMIN users can manage this resource');
     }
+  }
+
+  private scheduleRagIndex(projectId: string, task: () => Promise<number>): void {
+    if (!this.ragIndexer) return;
+    void task().catch((error: unknown) => {
+      this.logger.warn(`RAG re-index failed for project ${projectId}: ${error instanceof Error ? error.message : String(error)}`);
+    });
   }
 
   private safeDownloadName(name: string): string {
