@@ -7,6 +7,7 @@ import configuration from './config/configuration';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProjectsModule } from './projects/projects.module';
 import { OrchestrationModule } from './orchestration/orchestration.module';
+import { AgentRepoModule } from './agent-repo/agent-repo.module';
 import { GithubModule } from './github/github.module';
 import { SupervisorModule } from './supervisor/supervisor.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
@@ -44,6 +45,7 @@ import { RepositoriesModule } from './repositories/repositories.module';
     ContextMemoryModule,
     AuthModule,
     GithubModule,
+    AgentRepoModule,
     // Phase 2E — WebSocket gateway (must be before OrchestrationModule so
     // GatewayModule is available for injection into OrchestrationService)
     GatewayModule,

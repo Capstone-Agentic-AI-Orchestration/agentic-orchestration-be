@@ -40,12 +40,12 @@ function makeService() {
     nodeTelemetry: vi.fn(),
   };
 
-  // Positional constructor args: prisma(1), 15 unused node/service deps (2-16), sequencer(17),
-  // graphLlmProvider(18=null), gateway(19=null), emitter(20).
+  // Positional constructor args: prisma(1), 17 unused node/service deps (2-18), sequencer(19),
+  // graphLlmProvider(20=null), gateway(21=null), emitter(22).
   const u = undefined as unknown as never;
   const service = new OrchestrationService(
     prisma as never,
-    u, u, u, u, u, u, u, u, u, u, u, u, u, u, u,
+    u, u, u, u, u, u, u, u, u, u, u, u, u, u, u, u, u,
     sequencer as never,
     null as never,
     null as never,

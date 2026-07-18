@@ -372,12 +372,12 @@ export class ProjectsService {
       if (!this.repositories) throw new BadRequestException('Repository provisioning is unavailable');
       // Provision separate backend + frontend repos by default (+ mobile when opted in).
       const base = dto.repositoryName.replace(/-(be|fe|backend|frontend|mobile|api|web)$/i, '');
-      const repos: Array<{ kind: RepositoryKind; name: string }> = [
-        { kind: RepositoryKind.BACKEND, name: `${base}-be` },
-        { kind: RepositoryKind.FRONTEND, name: `${base}-fe` },
+      const repos: Array<{ kind: RepositoryKind; name: string; stack?: string }> = [
+        { kind: RepositoryKind.BACKEND, name: `${base}-be`, stack: dto.backendStack },
+        { kind: RepositoryKind.FRONTEND, name: `${base}-fe`, stack: dto.frontendStack },
       ];
       if (dto.includeMobile) {
-        repos.push({ kind: RepositoryKind.MOBILE, name: `${base}-mobile` });
+        repos.push({ kind: RepositoryKind.MOBILE, name: `${base}-mobile`, stack: dto.mobileStack });
       }
       for (const repo of repos) {
         await this.repositories.create(
@@ -386,6 +386,7 @@ export class ProjectsService {
             projectId: project.id,
             kind: repo.kind,
             name: repo.name,
+            stack: repo.stack,
             description: dto.repositoryDescription,
           },
           user,

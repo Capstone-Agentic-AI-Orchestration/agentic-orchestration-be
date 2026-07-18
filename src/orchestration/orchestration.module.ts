@@ -9,6 +9,8 @@ import { OrchestrationService } from './orchestration.service';
 import { RequirementsParserNode } from './nodes/requirements-parser.node';
 import { ContractNegotiatorNode } from './nodes/contract-negotiator.node';
 import { FrontendAgentNode } from './nodes/frontend-agent.node';
+import { MobileAgentNode } from './nodes/mobile-agent.node';
+import { AgentRepoModule } from '../agent-repo/agent-repo.module';
 import { BackendAgentNode } from './nodes/backend-agent.node';
 import { DatabaseAgentNode } from './nodes/database-agent.node';
 import { ArchitectureAgentNode } from './nodes/architecture-agent.node';
@@ -43,12 +45,14 @@ import { OutputValidationService } from './output-validation/output-validation.s
     // into OrchestrationService via @Optional().
     GatewayModule,
     NotificationsModule,
+    AgentRepoModule,
   ],
   providers: [
     OrchestrationService,
     RequirementsParserNode,
     ContractNegotiatorNode,
     FrontendAgentNode,
+    MobileAgentNode,
     BackendAgentNode,
     DatabaseAgentNode,
     ArchitectureAgentNode,

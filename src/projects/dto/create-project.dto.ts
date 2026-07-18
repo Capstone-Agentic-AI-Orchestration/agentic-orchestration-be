@@ -33,4 +33,20 @@ export class CreateProjectDto {
   @IsOptional()
   @IsBoolean()
   includeMobile?: boolean;
+
+  /** Per-repo tech stack. Backend: nest|node. Frontend: next|react. Mobile: expo|react-native. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  backendStack?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  frontendStack?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  mobileStack?: string;
 }

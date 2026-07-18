@@ -15,6 +15,8 @@ export interface TechStack {
   backend: string;
   database: string;
   styling: string;
+  /** Only present for projects provisioned with a mobile repository. */
+  mobile?: string;
 }
 
 export interface RequirementsDocument {
@@ -45,12 +47,15 @@ export type ArtifactSource = 'llm' | 'scaffold' | 'skip' | 'mock';
  * to re-run and the validation feedback scoped to that agent's own failures.
  */
 export interface RetryDirective {
-  agentType: 'frontend' | 'backend' | 'database' | 'architecture';
+  agentType: CodeAgentType;
   feedback: string;
 }
 
+/** The agent kinds that can author artifacts. `mobile` only runs for projects with a mobile repo. */
+export type CodeAgentType = 'frontend' | 'backend' | 'database' | 'architecture' | 'mobile';
+
 export interface GeneratedArtifact {
-  agentType: 'frontend' | 'backend' | 'database' | 'architecture';
+  agentType: CodeAgentType;
   filePath: string;
   content: string;
   language: string;
@@ -117,6 +122,20 @@ export interface DevFlowStateType {
   requirementsAssumptions: string[];
   openQuestions: string[];
   requirementsEvidence: RequirementEvidence[];
+  /**
+   * Whether this project was provisioned with a MOBILE repository. The mobile agent is opt-in
+   * per project (the PM chooses it at creation), so the Gate 1 fan-out only dispatches it when
+   * there is a repo to commit its output to — a 2-repo project never pays for mobile tokens.
+   */
+  hasMobileRepo: boolean;
+  /**
+   * Capability token letting the external agent service read/write this project's repositories
+   * for the duration of the run. Null when repository access is disabled, in which case agents
+   * generate from the contract alone. Scope is resolved server-side from this token.
+   */
+  repoToken: string | null;
+  /** Branch every agent write and the final delivery commit land on. Never the default branch. */
+  repoBranch: string | null;
 }
 
 /** Field defaults — the explicit equivalent of the old Annotation `default` factories. */
@@ -148,6 +167,9 @@ export function createInitialDevFlowState(
     requirementsAssumptions: seed.requirementsAssumptions ?? [],
     openQuestions: seed.openQuestions ?? [],
     requirementsEvidence: seed.requirementsEvidence ?? [],
+    hasMobileRepo: seed.hasMobileRepo ?? false,
+    repoToken: seed.repoToken ?? null,
+    repoBranch: seed.repoBranch ?? null,
   };
 }
 

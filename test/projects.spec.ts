@@ -412,6 +412,7 @@ describe('ProjectsService', () => {
         status: true,
         createdAt: true,
         updatedAt: true,
+        groupId: true,
         runId: true,
         kickoff: {
           select: {
@@ -467,6 +468,7 @@ describe('ProjectsService', () => {
         status: true,
         createdAt: true,
         updatedAt: true,
+        groupId: true,
         runId: true,
         kickoff: {
           select: {

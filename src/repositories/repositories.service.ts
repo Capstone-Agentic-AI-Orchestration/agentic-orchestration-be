@@ -74,6 +74,7 @@ export class RepositoriesService {
         groupId: dto.groupId,
         projectId: project.id,
         kind,
+        stack: dto.stack ?? null,
         name,
         createdById: user.id,
       },
@@ -266,7 +267,7 @@ export class RepositoriesService {
         'app';
       await this.github.commitFiles(
         remote.name,
-        scaffoldFilesFor(record.kind, { slug, companyName: record.project.companyName }),
+        scaffoldFilesFor(record.kind, record.stack, { slug, companyName: record.project.companyName }),
         `chore: initialize ${record.kind.toLowerCase()} repository (DevFlow scaffold)`,
       );
 

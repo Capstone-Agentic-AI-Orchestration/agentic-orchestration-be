@@ -59,6 +59,12 @@ export interface BoundaryDefinitionViolation {
 
 export interface MutationRouteIdempotencyOptions {
   ignoredRouteFragments?: string[];
+  /**
+   * Source paths exempt from the idempotency rule. Reserved for internal service-to-service
+   * callbacks that are not user-issued commands — a retried agent read is harmless, and an
+   * agent write is already bounded by its capability token's call budget.
+   */
+  ignoredSourcePathFragments?: string[];
 }
 
 export interface MutationRouteIdempotencyViolation {
@@ -166,7 +172,7 @@ export const serviceBoundarySourceDirectories: Record<ServiceBoundary, string[]>
   'project-delivery': ['projects', 'reports', 'schedule', 'groups', 'repositories'],
   collaboration: ['collaboration'],
   notifications: ['notifications'],
-  orchestration: ['orchestration', 'supervisor', 'memory', 'context-memory', 'gateway'],
+  orchestration: ['orchestration', 'supervisor', 'memory', 'context-memory', 'gateway', 'agent-repo'],
   admin: ['admin'],
 };
 
@@ -237,6 +243,7 @@ export const serviceBoundaries: ServiceBoundaryDefinition[] = [
     name: 'orchestration',
     owns: [
       'orchestration_runs',
+      'agent_repo_sessions',
       'work_order_executions',
       'event_logs',
       'run_budgets',
@@ -268,6 +275,8 @@ const prismaModelAccessPattern = /\b(?:(?:this\.)?prisma|tx)\.(\w+)\b/gm;
 const integrationEventTypePattern = /^([a-z][a-z-]*)\.([a-z][a-z0-9_]*)\.([a-z][a-z0-9_]*)\.v([1-9]\d*)$/;
 const integrationEventAggregateTypePattern = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
 const defaultIgnoredMutationRouteFragments = ['orchestration'];
+/** Internal agent callback surface; authenticated by service secret, not a user command path. */
+const defaultIgnoredMutationSourcePathFragments = ['src/agent-repo/'];
 const allowedRawOffsetPaginationFiles = new Set([
   'src/shared/pagination/cursor-pagination.ts',
 ]);
@@ -301,6 +310,7 @@ export const prismaModelOwners: Record<string, PrismaModelOwner> = {
   collaborationDocument: 'collaboration',
   workOrder: 'project-delivery',
   orchestrationRun: 'orchestration',
+  agentRepoSession: 'orchestration',
   workOrderExecution: 'orchestration',
   projectTimelineEvent: 'project-delivery',
   notification: 'notifications',
@@ -345,6 +355,7 @@ export const prismaModelSchemas: Record<string, string> = {
   collaborationDocument: 'collaboration',
   workOrder: 'orchestration',
   orchestrationRun: 'orchestration',
+  agentRepoSession: 'orchestration',
   workOrderExecution: 'orchestration',
   projectTimelineEvent: 'projects',
   notification: 'notifications',
@@ -583,9 +594,16 @@ export function findMutationRouteIdempotencyViolations(
   options: MutationRouteIdempotencyOptions = {},
 ): MutationRouteIdempotencyViolation[] {
   const ignoredRouteFragments = options.ignoredRouteFragments ?? defaultIgnoredMutationRouteFragments;
+  const ignoredSourcePathFragments =
+    options.ignoredSourcePathFragments ?? defaultIgnoredMutationSourcePathFragments;
 
   return files.flatMap((file) => {
     const violations: MutationRouteIdempotencyViolation[] = [];
+
+    const normalizedPath = normalizePath(file.path);
+    if (ignoredSourcePathFragments.some((fragment) => normalizedPath.includes(fragment))) {
+      return violations;
+    }
 
     for (const routeMatch of file.text.matchAll(mutationRouteDecoratorPattern)) {
       const route = routeFromDecoratorArgument(routeMatch[2]);

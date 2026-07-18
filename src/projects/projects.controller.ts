@@ -674,14 +674,14 @@ export class ProjectsController {
   }
 
   @Post(':id/orchestration/rerun-ready')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.ACCEPTED)
   rerunReadyWorkOrders(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.projectsService.rerunReadyWorkOrders(id, user);
   }
 
   @Post(':id/orchestration/control')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   controlOrchestration(
@@ -693,7 +693,7 @@ export class ProjectsController {
   }
 
   @Post(':id/gates/architecture')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   approveGate1(
@@ -714,7 +714,7 @@ export class ProjectsController {
   }
 
   @Post(':id/gates/code')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   approveGate2(

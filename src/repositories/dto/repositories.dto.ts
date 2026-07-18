@@ -21,6 +21,11 @@ export class CreateRepositoryDto {
   @IsEnum(RepositoryKind)
   kind?: RepositoryKind;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  stack?: string;
+
   @IsString()
   @MinLength(1)
   @MaxLength(100)

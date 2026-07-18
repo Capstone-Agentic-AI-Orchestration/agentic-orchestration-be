@@ -377,17 +377,9 @@ describe('DevFlowState artifact reducer', () => {
 });
 
 describe('LangGraph GitHub delivery node', () => {
-  it('creates a plain repository, commits generated artifacts, and persists repoUrl', async () => {
+  it('routes artifacts to the matching repository by kind and persists the backend repoUrl', async () => {
     const github = {
       buildRepoName: vi.fn().mockReturnValue('acme-project-1'),
-      createPlainRepository: vi.fn().mockResolvedValue({
-        name: 'acme-project-1',
-        fullName: 'acme/acme-project-1',
-        htmlUrl: 'https://github.com/acme/project-1',
-        cloneUrl: 'https://github.com/acme/project-1.git',
-        defaultBranch: 'main',
-        visibility: 'private',
-      }),
       commitFiles: vi.fn().mockResolvedValue(undefined),
     };
     const prisma = {
@@ -396,12 +388,18 @@ describe('LangGraph GitHub delivery node', () => {
           createdById: null,
           groupId: null,
           repoUrl: null,
-          repository: null,
+          // Repos are provisioned deterministically at project creation; the node never
+          // creates one, it only routes generated code to the right repo.
+          repositories: [
+            { id: 'r1', name: 'acme-be', htmlUrl: 'https://github.com/acme/acme-be', cloneUrl: null, status: 'ACTIVE', kind: 'BACKEND' },
+            { id: 'r2', name: 'acme-fe', htmlUrl: 'https://github.com/acme/acme-fe', cloneUrl: null, status: 'ACTIVE', kind: 'FRONTEND' },
+            { id: 'r3', name: 'acme-mobile', htmlUrl: 'https://github.com/acme/acme-mobile', cloneUrl: null, status: 'ACTIVE', kind: 'MOBILE' },
+          ],
         }),
         update: vi.fn().mockResolvedValue({}),
       },
       artifact: {
-        createMany: vi.fn().mockResolvedValue({ count: 2 }),
+        createMany: vi.fn().mockResolvedValue({ count: 3 }),
       },
     };
     const node = new GithubCommitNode(github as never, prisma as never);
@@ -418,6 +416,12 @@ describe('LangGraph GitHub delivery node', () => {
           language: 'tsx',
         },
         {
+          agentType: 'mobile',
+          filePath: 'app/(tabs)/index.tsx',
+          content: "import { Text } from 'react-native'; export default function Home() { return <Text />; }",
+          language: 'tsx',
+        },
+        {
           agentType: 'architecture',
           filePath: 'ARCHITECTURE.md',
           content: '# Architecture',
@@ -426,29 +430,72 @@ describe('LangGraph GitHub delivery node', () => {
       ],
     } as DevFlowStateType);
 
-    expect(result).toEqual({ repoUrl: 'https://github.com/acme/project-1' });
-    expect(github.createPlainRepository).toHaveBeenCalledWith(
-      'acme-project-1',
-      'Acme workspace created by DevFlow',
+    // Backend repo is the project's canonical URL even though it received only the doc.
+    expect(result).toEqual({ repoUrl: 'https://github.com/acme/acme-be' });
+
+    const commitTargets = github.commitFiles.mock.calls.map((call) => [
+      call[0],
+      (call[1] as Array<{ filePath: string }>).map((f) => f.filePath),
+    ]);
+    expect(commitTargets).toEqual(
+      expect.arrayContaining([
+        ['acme-fe', ['src/app/page.tsx']],
+        ['acme-mobile', ['app/(tabs)/index.tsx']],
+        ['acme-be', ['ARCHITECTURE.md']],
+      ]),
     );
+    expect(github.commitFiles).toHaveBeenCalledTimes(3);
     expect(github.commitFiles).toHaveBeenCalledWith(
-      'acme-project-1',
-      [
-        {
-          filePath: 'src/app/page.tsx',
-          content: 'export default function Page() { return <div />; }',
-        },
-        {
-          filePath: 'ARCHITECTURE.md',
-          content: '# Architecture',
-        },
-      ],
-      'feat: initial scaffold by DevFlow [run:run-1]',
+      expect.any(String),
+      expect.any(Array),
+      'feat: generated code by DevFlow [run:run-1]',
     );
     expect(prisma.project.update).toHaveBeenCalledWith({
       where: { id: 'project-1' },
-      data: { repoUrl: 'https://github.com/acme/project-1' },
+      data: { repoUrl: 'https://github.com/acme/acme-be' },
     });
+  });
+
+  it('falls back to the backend repo when the project has no mobile repository', async () => {
+    const github = {
+      buildRepoName: vi.fn().mockReturnValue('acme-project-1'),
+      commitFiles: vi.fn().mockResolvedValue(undefined),
+    };
+    const prisma = {
+      project: {
+        findUnique: vi.fn().mockResolvedValue({
+          createdById: null,
+          groupId: null,
+          repoUrl: null,
+          repositories: [
+            { id: 'r1', name: 'acme-be', htmlUrl: 'https://github.com/acme/acme-be', cloneUrl: null, status: 'ACTIVE', kind: 'BACKEND' },
+          ],
+        }),
+        update: vi.fn().mockResolvedValue({}),
+      },
+      artifact: { createMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    };
+    const node = new GithubCommitNode(github as never, prisma as never);
+
+    await node.execute({
+      projectId: 'project-1',
+      runId: 'run-1',
+      companyName: 'Acme',
+      artifacts: [
+        {
+          agentType: 'mobile',
+          filePath: 'app/(tabs)/index.tsx',
+          content: "import { Text } from 'react-native'; export default function Home() { return <Text />; }",
+          language: 'tsx',
+        },
+      ],
+    } as DevFlowStateType);
+
+    expect(github.commitFiles).toHaveBeenCalledWith(
+      'acme-be',
+      [expect.objectContaining({ filePath: 'app/(tabs)/index.tsx' })],
+      expect.any(String),
+    );
   });
 });
 

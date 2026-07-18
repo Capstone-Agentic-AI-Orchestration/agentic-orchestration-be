@@ -23,6 +23,7 @@ model Project {
   groupId     String?
   group       Group?          @relation(fields: [groupId], references: [id], onDelete: SetNull)
   repositories Repository[]
+  agentRepoSessions AgentRepoSession[]
   createdById String?         @db.Uuid
   createdBy   Profile?        @relation("ProjectCreatedBy", fields: [createdById], references: [id])
   version     Int             @default(1)
@@ -654,6 +655,7 @@ model Repository {
   projectId     String
   project       Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
   kind          RepositoryKind         @default(BACKEND)
+  stack         String?
   name          String
   fullName      String?                @unique
   htmlUrl       String?
@@ -1024,6 +1026,7 @@ model DocumentExtraction {
 enum WorkOrderAgentType {
   FRONTEND
   BACKEND
+  MOBILE
   DATABASE
   ARCHITECTURE
   CONTRACT
@@ -1150,6 +1153,35 @@ model OrchestrationRun {
   @@index([actorId])
   @@index([intakeSnapshotId])
   @@map("orchestration_runs")
+  @@schema("orchestration")
+}
+
+/// A short-lived capability granting one agent turn read/write access to exactly one
+/// project's repositories.
+///
+/// The agent service (agentic-orchestration-ag) holds no GitHub credentials. It calls back
+/// into this backend with the opaque `token`, which resolves to a projectId here — so
+/// repository scope is enforced server-side against the database, never from a value the
+/// model produced. Tokens are single-run, time-boxed, and revocable.
+model AgentRepoSession {
+  id          String    @id @default(cuid())
+  token       String    @unique
+  runId       String
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// Branch every write from this turn lands on; never the default branch.
+  branch      String
+  agentType   String
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+  useCount    Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  @@index([projectId])
+  @@index([runId])
+  @@index([expiresAt])
+  @@map("agent_repo_sessions")
   @@schema("orchestration")
 }
 

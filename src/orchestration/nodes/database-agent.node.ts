@@ -7,7 +7,7 @@ import { AgentLlmRouter } from '../providers/agent-llm.router';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StreamEmitter } from '../streaming/stream-emitter.service';
 import { humanReadableError } from './human-readable-error';
-import { DATABASE_AGENT_SYSTEM, buildAgentSystemPrompt, buildStructuredMemoryContext } from '../prompts/agent-prompts';
+import { DATABASE_AGENT_SYSTEM, buildAgentSystemPrompt, buildRepoAccessBlock, buildStructuredMemoryContext } from '../prompts/agent-prompts';
 import { resolveModelForNode } from '../providers/base-llm.provider';
 import { ProjectScaffolderService } from '../scaffolding/project-scaffolder.service';
 import { OutputValidationService } from '../output-validation/output-validation.service';
@@ -158,6 +158,10 @@ export class DatabaseAgentNode {
         combinedFeedback || undefined,
       );
 
+      // Give the agent its repository capability so it can read the existing code before
+      // generating; empty string when repository access is disabled for this run.
+      const systemPromptWithRepo = systemPrompt + buildRepoAccessBlock(state.repoToken, 'backend');
+
       const result = await this.llm.generateJson<Array<{
         filePath: string;
         content: string;
@@ -166,7 +170,7 @@ export class DatabaseAgentNode {
         agentName: resolveModelForNode('database_agent', 'database_agent'),
         subagent: 'database',
         onToken: (delta) => this.streamEmitter.emit(projectId, 'database_agent', runId ?? '', 'token', delta),
-        systemPrompt,
+        systemPrompt: systemPromptWithRepo,
         userPrompt: `Generate database files for this project:
 
 Project: ${state.contract.projectName}

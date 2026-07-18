@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { WorkOrderAgentType } from '@prisma/client';
-import type { ProjectContract, GeneratedArtifact } from '../graph/devflow.state';
+import type { ProjectContract, GeneratedArtifact, CodeAgentType } from '../graph/devflow.state';
 import type { TemplateContext } from './templates/types';
 
 import { frontendPackageJson } from './templates/frontend/package.json';
@@ -97,7 +97,7 @@ export class ProjectScaffolderService {
   merge(
     llmArtifacts: GeneratedArtifact[],
     scaffoldFiles: ScaffoldedFile[],
-    agentType: 'frontend' | 'backend' | 'database' | 'architecture',
+    agentType: CodeAgentType,
   ): GeneratedArtifact[] {
     const scaffoldPaths = new Set(scaffoldFiles.map((f) => f.filePath));
     const artifactMap = new Map<string, GeneratedArtifact>();

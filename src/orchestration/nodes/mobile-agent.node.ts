@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { WorkOrderAgentType } from '@prisma/client';
 import { DevFlowStateType, GeneratedArtifact } from '../graph/devflow.state';
 import { MemoryService } from '../../memory/memory.service';
 import { EventLogService } from '../../supervisor/event-log.service';
@@ -7,14 +6,22 @@ import { AgentLlmRouter } from '../providers/agent-llm.router';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StreamEmitter } from '../streaming/stream-emitter.service';
 import { humanReadableError } from './human-readable-error';
-import { FRONTEND_AGENT_SYSTEM, buildAgentSystemPrompt, buildRepoAccessBlock, buildStructuredMemoryContext } from '../prompts/agent-prompts';
+import { MOBILE_AGENT_SYSTEM, buildAgentSystemPrompt, buildRepoAccessBlock, buildStructuredMemoryContext } from '../prompts/agent-prompts';
 import { resolveModelForNode } from '../providers/base-llm.provider';
-import { ProjectScaffolderService } from '../scaffolding/project-scaffolder.service';
 import { OutputValidationService } from '../output-validation/output-validation.service';
 
+/**
+ * Generates React Native code for projects provisioned with a MOBILE repository.
+ *
+ * Unlike the frontend/backend/database agents this node is opt-in: the Gate 1 fan-out only
+ * dispatches it when `state.hasMobileRepo` is true (see `codeAgentsFor`), so 2-repo projects
+ * never pay for mobile generation. There is no scaffold merge — the mobile repository is
+ * scaffolded deterministically at project creation by `repo-scaffold.ts`, so this agent only
+ * produces feature code.
+ */
 @Injectable()
-export class FrontendAgentNode {
-  private readonly logger = new Logger(FrontendAgentNode.name);
+export class MobileAgentNode {
+  private readonly logger = new Logger(MobileAgentNode.name);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -22,7 +29,6 @@ export class FrontendAgentNode {
     private readonly eventLog: EventLogService,
     private readonly llm: AgentLlmRouter,
     private readonly streamEmitter: StreamEmitter,
-    private readonly scaffolder: ProjectScaffolderService,
     private readonly outputValidation: OutputValidationService,
   ) {}
 
@@ -30,23 +36,23 @@ export class FrontendAgentNode {
     state: DevFlowStateType,
   ): Promise<Partial<DevFlowStateType>> {
     const { projectId, runId } = state;
-    this.logger.log(`[${projectId}] Frontend agent generating files`);
+    this.logger.log(`[${projectId}] Mobile agent generating files`);
 
     if (!state.contract) {
-      this.streamEmitter.emit(projectId, 'frontend_agent', runId ?? '', 'error', 'Frontend agent skipped: contract is missing');
-      return { error: 'FrontendAgentNode: contract is null' };
+      this.streamEmitter.emit(projectId, 'mobile_agent', runId ?? '', 'error', 'Mobile agent skipped: contract is missing');
+      return { error: 'MobileAgentNode: contract is null' };
     }
 
-    await this.eventLog.logStarted(projectId, 'frontend_agent');
+    await this.eventLog.logStarted(projectId, 'mobile_agent');
 
-    this.streamEmitter.emit(projectId, 'frontend_agent', runId ?? '', 'decision', 'Starting frontend code generation...');
-    this.streamEmitter.progress(projectId, 'frontend_agent', runId ?? '', 10, 'Loading context');
+    this.streamEmitter.emit(projectId, 'mobile_agent', runId ?? '', 'decision', 'Starting mobile code generation...');
+    this.streamEmitter.progress(projectId, 'mobile_agent', runId ?? '', 10, 'Loading context');
 
     try {
       const memoryQuery = [
         state.contract.requirements.projectType,
         state.stackKey,
-        state.contract.requirements.techStack.frontend,
+        state.contract.requirements.techStack.mobile,
         state.contract.requirements.features.join(' '),
         state.companyName,
       ]
@@ -54,32 +60,30 @@ export class FrontendAgentNode {
         .join(' ');
 
       const memoryBundle = await this.memory.buildContextForAgent({
-        agentType: 'frontend',
+        agentType: 'mobile',
         projectId: state.projectId,
         query: memoryQuery,
       });
-      const memoryContext = memoryBundle.context;
 
-      this.streamEmitter.emit(projectId, 'frontend_agent', runId ?? '', 'decision', `Loaded ${memoryBundle.total} memory references for frontend context`);
+      this.streamEmitter.emit(projectId, 'mobile_agent', runId ?? '', 'decision', `Loaded ${memoryBundle.total} memory references for mobile context`);
 
-      const frontendSourceFiles = state.contract.fileManifest.filter((f) =>
-        /\.(tsx|jsx|css|scss|module\.css)$|README-frontend\.md$/i.test(f),
+      // Mobile source files from the contract, plus the screens every app needs.
+      const mobileSourceFiles = state.contract.fileManifest.filter((f) =>
+        /^(app|src)\/.*\.(tsx|ts)$|README-mobile\.md$/i.test(f) && !/\.(css|scss)$/i.test(f),
       );
 
       const coreSourceFiles = [
-        'src/app/page.tsx',
-        'src/app/layout.tsx',
+        'app/(tabs)/index.tsx',
+        'app/_layout.tsx',
         'src/components/ui/Button.tsx',
-        'src/components/ui/Card.tsx',
-        'src/styles/globals.css',
-        'README-frontend.md',
+        'README-mobile.md',
       ];
-      const allFrontendFiles = [
-        ...new Set([...coreSourceFiles, ...frontendSourceFiles]),
+      const allMobileFiles = [
+        ...new Set([...coreSourceFiles, ...mobileSourceFiles]),
       ];
 
       const skipCandidate = await this.memory.findSkipCandidate(
-        'frontend',
+        'mobile',
         memoryQuery,
         state.stackKey,
         state.projectId,
@@ -93,8 +97,8 @@ export class FrontendAgentNode {
         if (isValid) {
           const candidatePath = skipCandidate.metadata['filePath'];
           const candidateArtifact: GeneratedArtifact = {
-            agentType: 'frontend',
-            filePath: typeof candidatePath === 'string' ? candidatePath : 'src/app/page.tsx',
+            agentType: 'mobile',
+            filePath: typeof candidatePath === 'string' ? candidatePath : 'app/(tabs)/index.tsx',
             content: skipCandidate.content,
             language: 'typescript',
             source: 'skip',
@@ -102,10 +106,10 @@ export class FrontendAgentNode {
           const validationErrors = this.outputValidation.validateBatch([candidateArtifact], state.projectId);
           if (validationErrors.length === 0) {
             this.logger.log(
-              `[${state.projectId}] Skip-generation: reusing frontend memory artifact (similarity=${skipCandidate.similarity?.toFixed(3)})`,
+              `[${state.projectId}] Skip-generation: reusing mobile memory artifact (similarity=${skipCandidate.similarity?.toFixed(3)})`,
             );
             await this.memory.bumpUsageStats(skipCandidate.id);
-            return { artifacts: this.mergeWithScaffold([candidateArtifact], state), validationFeedback: null };
+            return { artifacts: [candidateArtifact], validationFeedback: null };
           }
           this.logger.warn(
             `[${state.projectId}] Skip candidate failed content validation (${validationErrors.length} errors), falling through to LLM generation`,
@@ -117,23 +121,22 @@ export class FrontendAgentNode {
       }
 
       if (process.env.MOCK_MODE === 'true') {
-        this.streamEmitter.emit(projectId, 'frontend_agent', runId ?? '', 'decision', 'Mock mode: generating predefined frontend components');
+        this.streamEmitter.emit(projectId, 'mobile_agent', runId ?? '', 'decision', 'Mock mode: generating predefined mobile screens');
         const mockArtifacts: GeneratedArtifact[] = [
           {
-            agentType: 'frontend',
-            filePath: 'src/app/page.tsx',
-            content: `export default function Page() { return <div>Mock Frontend for ${state.companyName}</div>; }`,
+            agentType: 'mobile',
+            filePath: 'app/(tabs)/index.tsx',
+            content: `import { Text, View } from 'react-native';\n\nexport default function HomeScreen() {\n  return (\n    <View>\n      <Text>Mock Mobile for ${state.companyName}</Text>\n    </View>\n  );\n}\n`,
             language: 'tsx',
             source: 'mock',
           },
         ];
-        const artifacts = this.mergeWithScaffold(mockArtifacts, state);
-        await this.eventLog.logCompleted(state.projectId, 'frontend_agent', { inputTokens: 0, outputTokens: 0, model: 'mock' });
-        return { artifacts, validationFeedback: null };
+        await this.eventLog.logCompleted(state.projectId, 'mobile_agent', { inputTokens: 0, outputTokens: 0, model: 'mock' });
+        return { artifacts: mockArtifacts, validationFeedback: null };
       }
 
-      this.streamEmitter.progress(projectId, 'frontend_agent', runId ?? '', 40, `Generating ${allFrontendFiles.length} files`);
-      this.streamEmitter.emit(projectId, 'frontend_agent', runId ?? '', 'decision', `Calling LLM (${this.llm.model()}) to generate frontend code for ${allFrontendFiles.length} files...`);
+      this.streamEmitter.progress(projectId, 'mobile_agent', runId ?? '', 40, `Generating ${allMobileFiles.length} files`);
+      this.streamEmitter.emit(projectId, 'mobile_agent', runId ?? '', 'decision', `Calling LLM (${this.llm.model()}) to generate mobile code for ${allMobileFiles.length} files...`);
 
       const artifactManifest = (state.artifacts ?? [])
         .map((a) => `${a.agentType}: ${a.filePath}`)
@@ -154,7 +157,7 @@ export class FrontendAgentNode {
         .join('\n\n');
 
       const systemPrompt = buildAgentSystemPrompt(
-        FRONTEND_AGENT_SYSTEM,
+        MOBILE_AGENT_SYSTEM,
         structuredMemory,
         artifactManifest,
         combinedFeedback || undefined,
@@ -163,18 +166,18 @@ export class FrontendAgentNode {
 
       // Give the agent its repository capability so it can read the existing code before
       // generating; empty string when repository access is disabled for this run.
-      const systemPromptWithRepo = systemPrompt + buildRepoAccessBlock(state.repoToken, 'frontend');
+      const systemPromptWithRepo = systemPrompt + buildRepoAccessBlock(state.repoToken, 'mobile');
 
       const result = await this.llm.generateJson<Array<{
         filePath: string;
         content: string;
         language?: string;
       }>>({
-        agentName: resolveModelForNode('frontend_agent', 'frontend_agent'),
-        subagent: 'frontend',
-        onToken: (delta) => this.streamEmitter.emit(projectId, 'frontend_agent', runId ?? '', 'token', delta),
+        agentName: resolveModelForNode('mobile_agent', 'mobile_agent'),
+        subagent: 'mobile',
+        onToken: (delta) => this.streamEmitter.emit(projectId, 'mobile_agent', runId ?? '', 'token', delta),
         systemPrompt: systemPromptWithRepo,
-        userPrompt: `Generate frontend files for this project:
+        userPrompt: `Generate React Native files for this project:
 
 Project: ${state.contract.projectName}
 Description: ${state.contract.description}
@@ -183,27 +186,25 @@ Features: ${state.contract.requirements.features.join(', ')}
 Acceptance Criteria: ${state.contract.acceptanceCriteria.join('; ')}
 
 Files to generate:
-${allFrontendFiles.map((f) => `- ${f}`).join('\n')}
+${allMobileFiles.map((f) => `- ${f}`).join('\n')}
 
-Generate complete, production-quality code for each file. Config files (package.json, tsconfig.json, next.config.ts, postcss.config.mjs, layout.tsx, globals.css, README-frontend.md) will be provided automatically — do not include them in your output.`,
+Generate complete, production-quality code for each file. Config files (package.json, tsconfig.json, app.json, babel.config.js) are already provisioned in the mobile repository — do not include them in your output.`,
         expectedShape: 'array',
       });
 
-      const llmArtifacts: GeneratedArtifact[] = result.value.map((item) => ({
-        agentType: 'frontend' as const,
+      const artifacts: GeneratedArtifact[] = result.value.map((item) => ({
+        agentType: 'mobile' as const,
         filePath: item.filePath,
         content: item.content,
         language: item.language ?? this.inferLanguage(item.filePath),
         source: 'llm',
       }));
 
-      const artifacts = this.mergeWithScaffold(llmArtifacts, state);
-
       this.logger.log(
-        `[${state.projectId}] Frontend agent generated ${artifacts.length} files (${memoryBundle.total} layered memories injected)`,
+        `[${state.projectId}] Mobile agent generated ${artifacts.length} files (${memoryBundle.total} layered memories injected)`,
       );
 
-      await this.eventLog.logCompleted(state.projectId, 'frontend_agent', {
+      await this.eventLog.logCompleted(state.projectId, 'mobile_agent', {
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,
         model: result.model,
@@ -223,35 +224,21 @@ Generate complete, production-quality code for each file. Config files (package.
         this.logger.warn(`[${state.projectId}] Artifact persist failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
       });
 
-      this.streamEmitter.progress(projectId, 'frontend_agent', runId ?? '', 95, 'Saving artifacts');
-      this.streamEmitter.emit(projectId, 'frontend_agent', runId ?? '', 'decision', `Frontend generation complete: ${artifacts.length} files generated (${result.usage.outputTokens} output tokens)`);
+      this.streamEmitter.progress(projectId, 'mobile_agent', runId ?? '', 95, 'Saving artifacts');
+      this.streamEmitter.emit(projectId, 'mobile_agent', runId ?? '', 'decision', `Mobile generation complete: ${artifacts.length} files generated (${result.usage.outputTokens} output tokens)`);
 
       return { artifacts, validationFeedback: null };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`[${state.projectId}] Frontend agent failed: ${message}`);
-      this.streamEmitter.emit(projectId, 'frontend_agent', runId ?? '', 'error', `Frontend generation failed: ${humanReadableError(message)}`);
-      return { error: `FrontendAgentNode failed: ${message}` };
+      this.logger.error(`[${state.projectId}] Mobile agent failed: ${message}`);
+      this.streamEmitter.emit(projectId, 'mobile_agent', runId ?? '', 'error', `Mobile generation failed: ${humanReadableError(message)}`);
+      return { error: `MobileAgentNode failed: ${message}` };
     }
-  }
-
-  private mergeWithScaffold(
-    llmArtifacts: GeneratedArtifact[],
-    state: DevFlowStateType,
-  ): GeneratedArtifact[] {
-    const scaffoldFiles = this.scaffolder.scaffold({
-      projectId: state.projectId,
-      agentType: WorkOrderAgentType.FRONTEND,
-      contract: state.contract!,
-      companyName: state.companyName,
-    });
-    return this.scaffolder.merge(llmArtifacts, scaffoldFiles, 'frontend');
   }
 
   private inferLanguage(filePath: string): string {
     if (filePath.endsWith('.tsx') || filePath.endsWith('.jsx')) return 'typescript';
     if (filePath.endsWith('.ts') || filePath.endsWith('.js')) return 'typescript';
-    if (filePath.endsWith('.css') || filePath.endsWith('.scss')) return 'css';
     if (filePath.endsWith('.md')) return 'markdown';
     return 'text';
   }

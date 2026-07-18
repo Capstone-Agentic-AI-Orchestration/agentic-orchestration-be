@@ -33,6 +33,32 @@ export interface GithubRepository {
   visibility: string;
 }
 
+/** A single entry from a repository tree listing. */
+export interface GithubTreeEntry {
+  path: string;
+  type: 'blob' | 'tree';
+  size: number | null;
+}
+
+export interface GithubFileContent {
+  path: string;
+  content: string;
+  sha: string;
+  size: number;
+}
+
+export interface GithubPullRequest {
+  number: number;
+  htmlUrl: string;
+  branch: string;
+}
+
+/**
+ * Largest file the agents may read in one call. Generated source files are far smaller than
+ * this; the cap stops a stray binary or vendored bundle from blowing up an agent's context.
+ */
+const MAX_READABLE_FILE_BYTES = 256_000;
+
 @Injectable()
 export class GithubService implements OnModuleInit {
   private readonly logger = new Logger(GithubService.name);
@@ -446,6 +472,226 @@ export class GithubService implements OnModuleInit {
     });
 
     this.logger.log(`Committed ${artifacts.length} files to ${repoName}`);
+  }
+
+  // ─── Repository reading (agent tools) ──────────────────────────────────────────
+
+  /**
+   * Lists the file paths in a repository at `ref` (default branch when omitted).
+   *
+   * Uses the recursive tree API so an agent can discover the existing layout in one call
+   * instead of walking directories. Directory entries are dropped — agents only ever act on
+   * files — and the response is truncation-aware: GitHub caps tree responses, so a very large
+   * repository returns a partial list rather than silently pretending to be complete.
+   */
+  async listFiles(repoName: string, ref?: string): Promise<{ entries: GithubTreeEntry[]; truncated: boolean }> {
+    this.assertConfigured();
+    const owner = await this.getOwner();
+    const branch = ref?.trim() || (await this.octokit.repos.get({ owner, repo: repoName })).data.default_branch;
+
+    const { data } = await this.octokit.git.getTree({
+      owner,
+      repo: repoName,
+      tree_sha: branch,
+      recursive: '1',
+    });
+
+    const entries = (data.tree ?? [])
+      .filter((node): node is typeof node & { path: string; type: string } => Boolean(node.path && node.type))
+      .filter((node) => node.type === 'blob')
+      .map((node) => ({
+        path: node.path,
+        type: 'blob' as const,
+        size: typeof node.size === 'number' ? node.size : null,
+      }));
+
+    return { entries, truncated: Boolean(data.truncated) };
+  }
+
+  /**
+   * Reads a single file's decoded contents at `ref` (default branch when omitted).
+   *
+   * Returns null when the path does not exist, so a caller can distinguish "no such file"
+   * (the agent should create it) from a transport failure (which throws).
+   */
+  async readFile(repoName: string, filePath: string, ref?: string): Promise<GithubFileContent | null> {
+    this.assertConfigured();
+    const owner = await this.getOwner();
+
+    try {
+      const { data } = await this.octokit.repos.getContent({
+        owner,
+        repo: repoName,
+        path: filePath,
+        ...(ref?.trim() ? { ref: ref.trim() } : {}),
+      });
+
+      if (Array.isArray(data) || data.type !== 'file') {
+        throw new Error(`Path "${filePath}" in ${repoName} is not a file`);
+      }
+      if (data.size > MAX_READABLE_FILE_BYTES) {
+        throw new Error(
+          `File "${filePath}" is ${data.size} bytes, above the ${MAX_READABLE_FILE_BYTES}-byte read limit`,
+        );
+      }
+
+      const encoded = 'content' in data ? data.content : '';
+      return {
+        path: data.path,
+        content: Buffer.from(encoded ?? '', 'base64').toString('utf8'),
+        sha: data.sha,
+        size: data.size,
+      };
+    } catch (error) {
+      if (this.isNotFound(error)) return null;
+      throw error;
+    }
+  }
+
+  private isNotFound(error: unknown): boolean {
+    return typeof error === 'object' && error !== null && 'status' in error && (error as { status: number }).status === 404;
+  }
+
+  // ─── Branch + pull-request delivery ────────────────────────────────────────────
+
+  /**
+   * Commits files onto `branch`, creating the branch from the default branch when it does not
+   * exist yet. Identical tree/commit mechanics to {@link commitFiles} (incremental via
+   * `base_tree`), but the default branch is never advanced — review happens in the PR.
+   */
+  async commitFilesToBranch(
+    repoName: string,
+    branch: string,
+    artifacts: GitHubArtifact[],
+    message: string,
+  ): Promise<{ commitSha: string; branch: string }> {
+    this.assertConfigured();
+    const owner = await this.getOwner();
+
+    const { data: repo } = await this.octokit.repos.get({ owner, repo: repoName });
+    const defaultBranch = repo.default_branch;
+
+    // Resolve the branch head, branching off the default branch on first write of a run.
+    let headSha: string;
+    try {
+      const { data: existing } = await this.octokit.git.getRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branch}`,
+      });
+      headSha = existing.object.sha;
+    } catch (error) {
+      if (!this.isNotFound(error)) throw error;
+      const { data: base } = await this.octokit.git.getRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${defaultBranch}`,
+      });
+      await this.octokit.git.createRef({
+        owner,
+        repo: repoName,
+        ref: `refs/heads/${branch}`,
+        sha: base.object.sha,
+      });
+      headSha = base.object.sha;
+      this.logger.log(`Created branch ${branch} in ${repoName} from ${defaultBranch}`);
+    }
+
+    const { data: headCommit } = await this.octokit.git.getCommit({
+      owner,
+      repo: repoName,
+      commit_sha: headSha,
+    });
+
+    const treeItems = await Promise.all(
+      artifacts.map(async (artifact) => {
+        const { data: blob } = await this.octokit.git.createBlob({
+          owner,
+          repo: repoName,
+          content: Buffer.from(artifact.content).toString('base64'),
+          encoding: 'base64',
+        });
+        return {
+          path: artifact.filePath,
+          mode: '100644' as const,
+          type: 'blob' as const,
+          sha: blob.sha,
+        };
+      }),
+    );
+
+    const { data: tree } = await this.octokit.git.createTree({
+      owner,
+      repo: repoName,
+      base_tree: headCommit.tree.sha,
+      tree: treeItems,
+    });
+
+    const { data: commit } = await this.octokit.git.createCommit({
+      owner,
+      repo: repoName,
+      message,
+      tree: tree.sha,
+      parents: [headSha],
+    });
+
+    await this.octokit.git.updateRef({
+      owner,
+      repo: repoName,
+      ref: `heads/${branch}`,
+      sha: commit.sha,
+    });
+
+    this.logger.log(`Committed ${artifacts.length} files to ${repoName}@${branch}`);
+    return { commitSha: commit.sha, branch };
+  }
+
+  /**
+   * Opens a PR from `branch` into the default branch, or returns the existing open PR for that
+   * branch. Idempotent so a re-run or retry never fails on "a pull request already exists".
+   */
+  async openPullRequest(
+    repoName: string,
+    branch: string,
+    title: string,
+    body: string,
+  ): Promise<GithubPullRequest | null> {
+    this.assertConfigured();
+    const owner = await this.getOwner();
+
+    const { data: existing } = await this.octokit.pulls.list({
+      owner,
+      repo: repoName,
+      head: `${owner}:${branch}`,
+      state: 'open',
+      per_page: 1,
+    });
+    if (existing.length > 0) {
+      return { number: existing[0].number, htmlUrl: existing[0].html_url, branch };
+    }
+
+    const { data: repo } = await this.octokit.repos.get({ owner, repo: repoName });
+
+    try {
+      const { data: pr } = await this.octokit.pulls.create({
+        owner,
+        repo: repoName,
+        head: branch,
+        base: repo.default_branch,
+        title,
+        body,
+      });
+      this.logger.log(`Opened PR #${pr.number} in ${repoName}: ${pr.html_url}`);
+      return { number: pr.number, htmlUrl: pr.html_url, branch };
+    } catch (error) {
+      // A branch identical to the default branch has nothing to compare; that is not a failure.
+      const message = error instanceof Error ? error.message : String(error);
+      if (/No commits between/i.test(message)) {
+        this.logger.warn(`No PR opened for ${repoName}@${branch}: no commits between branches`);
+        return null;
+      }
+      throw error;
+    }
   }
 
   private assertConfigured(): void {

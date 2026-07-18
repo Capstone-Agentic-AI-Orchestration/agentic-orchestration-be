@@ -272,12 +272,214 @@ function mobile(ctx: ScaffoldContext): ScaffoldFile[] {
   ];
 }
 
-const BUILDERS: Record<RepositoryKind, (ctx: ScaffoldContext) => ScaffoldFile[]> = {
-  [RepositoryKind.BACKEND]: backend,
-  [RepositoryKind.FRONTEND]: frontend,
-  [RepositoryKind.MOBILE]: mobile,
+function backendNode(ctx: ScaffoldContext): ScaffoldFile[] {
+  return [
+    { filePath: '.gitignore', content: NODE_IGNORE },
+    { filePath: '.env.example', content: `PORT=4000\nNODE_ENV=development\nDATABASE_URL=\n` },
+    {
+      filePath: 'package.json',
+      content: JSON.stringify(
+        {
+          name: `${ctx.slug}-be`,
+          version: '0.1.0',
+          private: true,
+          scripts: { build: 'tsc', start: 'node dist/index.js', dev: 'ts-node-dev src/index.ts' },
+          dependencies: { express: '^4.19.0' },
+          devDependencies: {
+            typescript: '^5.4.0',
+            'ts-node-dev': '^2.0.0',
+            '@types/express': '^4.17.0',
+            '@types/node': '^20.0.0',
+          },
+        },
+        null,
+        2,
+      ),
+    },
+    {
+      filePath: 'tsconfig.json',
+      content: JSON.stringify(
+        { compilerOptions: { target: 'ES2021', module: 'commonjs', outDir: 'dist', strict: true, esModuleInterop: true } },
+        null,
+        2,
+      ),
+    },
+    {
+      filePath: 'README.md',
+      content: `# ${ctx.companyName} — Backend (Node / Express)\n\nLayered: routes (controller) -> services -> repositories. See \`src/modules/health/\`.\n`,
+    },
+    {
+      filePath: 'src/index.ts',
+      content: `import express from 'express';\nimport { healthRouter } from './modules/health/health.controller';\n\nconst app = express();\napp.use(express.json());\napp.use('/health', healthRouter);\napp.listen(process.env.PORT ?? 4000);\n`,
+    },
+    {
+      filePath: 'src/modules/health/health.controller.ts',
+      content: `import { Router } from 'express';\nimport { healthService } from './health.service';\n\n// Controller: HTTP in/out only.\nexport const healthRouter = Router();\nhealthRouter.get('/', (_req, res) => res.json(healthService.status()));\n`,
+    },
+    {
+      filePath: 'src/modules/health/health.service.ts',
+      content: `// Service: business logic.\nexport const healthService = {\n  status() {\n    return { status: 'ok', ts: new Date().toISOString() };\n  },\n};\n`,
+    },
+  ];
+}
+
+function frontendReact(ctx: ScaffoldContext): ScaffoldFile[] {
+  const viteIgnore = `${NODE_IGNORE}\n# vite\n.vite/\n`;
+  return [
+    { filePath: '.gitignore', content: viteIgnore },
+    { filePath: '.env.example', content: `VITE_API_URL=http://localhost:4000\n` },
+    {
+      filePath: 'package.json',
+      content: JSON.stringify(
+        {
+          name: `${ctx.slug}-fe`,
+          version: '0.1.0',
+          private: true,
+          type: 'module',
+          scripts: { dev: 'vite', build: 'tsc && vite build', preview: 'vite preview' },
+          dependencies: { react: '^18.3.0', 'react-dom': '^18.3.0' },
+          devDependencies: {
+            vite: '^5.0.0',
+            '@vitejs/plugin-react': '^4.0.0',
+            typescript: '^5.4.0',
+            '@types/react': '^18.3.0',
+            '@types/react-dom': '^18.3.0',
+          },
+        },
+        null,
+        2,
+      ),
+    },
+    {
+      filePath: 'vite.config.ts',
+      content: `import { defineConfig } from 'vite';\nimport react from '@vitejs/plugin-react';\n\nexport default defineConfig({ plugins: [react()] });\n`,
+    },
+    {
+      filePath: 'tsconfig.json',
+      content: JSON.stringify(
+        {
+          compilerOptions: {
+            target: 'ES2021',
+            lib: ['dom', 'dom.iterable', 'esnext'],
+            jsx: 'react-jsx',
+            module: 'esnext',
+            moduleResolution: 'bundler',
+            strict: true,
+            baseUrl: '.',
+            paths: { '@/*': ['./src/*'] },
+          },
+          include: ['src'],
+        },
+        null,
+        2,
+      ),
+    },
+    {
+      filePath: 'index.html',
+      content: `<!doctype html>\n<html lang="en">\n  <head><meta charset="UTF-8" /><title>${ctx.companyName}</title></head>\n  <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>\n</html>\n`,
+    },
+    {
+      filePath: 'README.md',
+      content: `# ${ctx.companyName} — Frontend (React + Vite)\n\n\`\`\`\nsrc/ App.tsx, components/, hooks/ (view-model), lib/ (api)\n\`\`\`\n`,
+    },
+    {
+      filePath: 'src/main.tsx',
+      content: `import React from 'react';\nimport { createRoot } from 'react-dom/client';\nimport { App } from './App';\n\ncreateRoot(document.getElementById('root')!).render(\n  <React.StrictMode>\n    <App />\n  </React.StrictMode>,\n);\n`,
+    },
+    {
+      filePath: 'src/App.tsx',
+      content: `import { useHealth } from './hooks/useHealth';\n\nexport function App() {\n  const { status } = useHealth();\n  return (\n    <main style={{ padding: 24 }}>\n      <h1>${ctx.companyName}</h1>\n      <p>API: {status}</p>\n    </main>\n  );\n}\n`,
+    },
+    {
+      filePath: 'src/lib/api.ts',
+      content: `const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:4000';\n\nexport async function api<T>(path: string): Promise<T> {\n  const res = await fetch(\`\${API_URL}\${path}\`);\n  if (!res.ok) throw new Error(\`Request failed: \${res.status}\`);\n  return res.json() as Promise<T>;\n}\n`,
+    },
+    {
+      filePath: 'src/hooks/useHealth.ts',
+      content: `import { useEffect, useState } from 'react';\nimport { api } from '../lib/api';\n\nexport function useHealth() {\n  const [status, setStatus] = useState('loading');\n  useEffect(() => {\n    api<{ status: string }>('/health').then((r) => setStatus(r.status)).catch(() => setStatus('error'));\n  }, []);\n  return { status };\n}\n`,
+    },
+  ];
+}
+
+function mobileReactNative(ctx: ScaffoldContext): ScaffoldFile[] {
+  const rnIgnore = `${NODE_IGNORE}\n# react-native\nios/Pods/\n*.keystore\n*.jsbundle\n`;
+  return [
+    { filePath: '.gitignore', content: rnIgnore },
+    { filePath: '.env.example', content: `API_URL=http://localhost:4000\n` },
+    {
+      filePath: 'package.json',
+      content: JSON.stringify(
+        {
+          name: `${ctx.slug}-mobile`,
+          version: '0.1.0',
+          private: true,
+          scripts: { start: 'react-native start', android: 'react-native run-android', ios: 'react-native run-ios' },
+          dependencies: { react: '18.2.0', 'react-native': '0.74.0' },
+          devDependencies: { typescript: '^5.4.0', '@types/react': '^18.2.0' },
+        },
+        null,
+        2,
+      ),
+    },
+    { filePath: 'app.json', content: JSON.stringify({ name: `${ctx.slug}-mobile`, displayName: ctx.companyName }, null, 2) },
+    {
+      filePath: 'index.js',
+      content: `import { AppRegistry } from 'react-native';\nimport App from './App';\nimport { name as appName } from './app.json';\n\nAppRegistry.registerComponent(appName, () => App);\n`,
+    },
+    {
+      filePath: 'tsconfig.json',
+      content: JSON.stringify(
+        { compilerOptions: { strict: true, jsx: 'react-native', baseUrl: '.', paths: { '@/*': ['./src/*'] } } },
+        null,
+        2,
+      ),
+    },
+    {
+      filePath: 'README.md',
+      content: `# ${ctx.companyName} — Mobile (React Native CLI)\n\nMVVM: \`src/features/<feature>/{<feature>-view.tsx, use-<feature>-view-model.ts}\`, \`src/lib/\` (api).\n`,
+    },
+    { filePath: 'App.tsx', content: `import { HomeView } from './src/features/home/home-view';\n\nexport default function App() {\n  return <HomeView />;\n}\n` },
+    {
+      filePath: 'src/features/home/use-home-view-model.ts',
+      content: `import { useEffect, useState } from 'react';\nimport { api } from '../../lib/api';\n\nexport function useHomeViewModel() {\n  const [status, setStatus] = useState('loading');\n  useEffect(() => {\n    api<{ status: string }>('/health').then((r) => setStatus(r.status)).catch(() => setStatus('error'));\n  }, []);\n  return { status };\n}\n`,
+    },
+    {
+      filePath: 'src/features/home/home-view.tsx',
+      content: `import { Text, View } from 'react-native';\nimport { useHomeViewModel } from './use-home-view-model';\n\nexport function HomeView() {\n  const vm = useHomeViewModel();\n  return (\n    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>\n      <Text>${ctx.companyName}</Text>\n      <Text>API: {vm.status}</Text>\n    </View>\n  );\n}\n`,
+    },
+    {
+      filePath: 'src/lib/api.ts',
+      content: `const API_URL = process.env.API_URL ?? 'http://localhost:4000';\n\nexport async function api<T>(path: string): Promise<T> {\n  const res = await fetch(\`\${API_URL}\${path}\`);\n  if (!res.ok) throw new Error(\`Request failed: \${res.status}\`);\n  return res.json() as Promise<T>;\n}\n`,
+    },
+  ];
+}
+
+/** Available stack variants per repo kind (first is the default). */
+export const STACK_OPTIONS: Record<RepositoryKind, string[]> = {
+  [RepositoryKind.BACKEND]: ['nest', 'node'],
+  [RepositoryKind.FRONTEND]: ['next', 'react'],
+  [RepositoryKind.MOBILE]: ['expo', 'react-native'],
 };
 
-export function scaffoldFilesFor(kind: RepositoryKind, ctx: ScaffoldContext): ScaffoldFile[] {
-  return BUILDERS[kind](ctx);
+const BUILDERS: Record<string, (ctx: ScaffoldContext) => ScaffoldFile[]> = {
+  'BACKEND:nest': backend,
+  'BACKEND:node': backendNode,
+  'FRONTEND:next': frontend,
+  'FRONTEND:react': frontendReact,
+  'MOBILE:expo': mobile,
+  'MOBILE:react-native': mobileReactNative,
+};
+
+export function isValidStack(kind: RepositoryKind, stack: string): boolean {
+  return STACK_OPTIONS[kind].includes(stack.toLowerCase());
+}
+
+export function scaffoldFilesFor(
+  kind: RepositoryKind,
+  stack: string | null | undefined,
+  ctx: ScaffoldContext,
+): ScaffoldFile[] {
+  const variant = (stack || STACK_OPTIONS[kind][0]).toLowerCase();
+  const builder = BUILDERS[`${kind}:${variant}`] ?? BUILDERS[`${kind}:${STACK_OPTIONS[kind][0]}`];
+  return builder(ctx);
 }
