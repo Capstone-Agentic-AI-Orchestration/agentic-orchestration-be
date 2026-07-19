@@ -32,7 +32,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const CONFIG = JSON.parse(readFileSync(join(HERE, 'environments.json'), 'utf8'));
 const CRED_DIR = join(HERE, 'credentials');
 
-const VALID_ENVS = ['test', 'uat', 'main'];
+const VALID_ENVS = ['local', 'test', 'uat', 'main'];
 
 function die(msg) {
   console.error(`\n  ✗ ${msg}\n`);
@@ -62,7 +62,7 @@ function buildManifest(env, cfg, port) {
     url: cfg.frontendUrl,
     hook_attributes: {
       url: `${cfg.apiUrl.replace(/\/+$/, '')}/github/webhooks`,
-      active: false, // no inbound webhook consumer today; flip to true when one exists
+      active: false,
     },
     redirect_url: `http://localhost:${port}/callback`,
     public: false,
@@ -72,7 +72,8 @@ function buildManifest(env, cfg, port) {
       contents: 'write',
       metadata: 'read',
       pull_requests: 'write',
-      workflows: 'write',
+      administration: 'write',
+      members: 'read',
     },
     default_events: [],
   };

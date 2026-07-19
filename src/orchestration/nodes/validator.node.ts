@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { DevFlowStateType, RetryDirective } from '../graph/devflow.state';
+import { CodeAgentType, DevFlowStateType, RetryDirective } from '../graph/devflow.state';
 import { NODE } from '../graph/topology';
 import { MemoryService } from '../../memory/memory.service';
 import { StreamEmitter } from '../streaming/stream-emitter.service';
@@ -7,7 +7,7 @@ import { humanReadableError } from './human-readable-error';
 import { OutputValidationService } from '../output-validation/output-validation.service';
 import type { ValidationError, ValidationErrorCode } from '../output-validation/schemas/schema.types';
 
-type AgentType = 'frontend' | 'backend' | 'database' | 'architecture';
+type AgentType = CodeAgentType;
 
 interface ValidationResult {
   valid: boolean;
@@ -322,6 +322,9 @@ export class ValidatorNode {
 
   /** Best-effort agent attribution from a file path's extension/suffix. */
   private agentForFile(filePath: string): AgentType {
+    // Mobile screens live at the repo root under `app/` (Expo Router); the frontend agent's
+    // Next.js App Router files are always under `src/app/`, so the prefix disambiguates them.
+    if (/^app\/.*\.(tsx|ts)$/.test(filePath)) return 'mobile';
     if (/\.(tsx|jsx|css)$/.test(filePath)) return 'frontend';
     if (/\.(module|controller|service|guard|pipe|interceptor|dto)\.ts$/.test(filePath)) return 'backend';
     if (/\.(prisma|sql)$/.test(filePath)) return 'database';
@@ -334,6 +337,7 @@ export class ValidatorNode {
     const prefix = issue.split(':', 1)[0]?.trim().toLowerCase();
     if (
       prefix === 'frontend' ||
+      prefix === 'mobile' ||
       prefix === 'backend' ||
       prefix === 'database' ||
       prefix === 'architecture'

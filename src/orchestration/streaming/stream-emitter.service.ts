@@ -1,4 +1,5 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
+import { ContextMemoryService } from '../../context-memory/context-memory.service';
 import { DevFlowGateway } from '../../gateway/devflow.gateway';
 import { OrchestrationEmitter } from './orchestration-emitter.service';
 import { ORCHESTRATION_PROTOCOL_VERSION } from './protocol';
@@ -27,6 +28,7 @@ export class StreamEmitter {
   constructor(
     @Optional() private readonly gateway: DevFlowGateway | null = null,
     @Optional() private readonly emitter: OrchestrationEmitter | null = null,
+    @Optional() private readonly contextMemory: ContextMemoryService | null = null,
   ) {}
 
   /**
@@ -37,6 +39,7 @@ export class StreamEmitter {
    */
   progress(projectId: string, nodeId: string, runId: string, pct?: number, label?: string): void {
     this.emitter?.nodeProgress(projectId, runId ?? '', nodeId, pct, label);
+    this.writeProgressMemory(projectId, nodeId, runId, pct, label);
   }
 
   emit(projectId: string, nodeId: string, runId: string, type: StreamChunk['type'], chunk: string, metadata?: Record<string, unknown>): void {
@@ -98,5 +101,40 @@ export class StreamEmitter {
         this.flush(key);
       }
     }
+  }
+
+  private writeProgressMemory(
+    projectId: string,
+    nodeId: string,
+    runId: string,
+    pct?: number,
+    label?: string,
+  ): void {
+    if (!this.contextMemory) return;
+    const percent = typeof pct === 'number'
+      ? Math.max(0, Math.min(100, Math.round(pct)))
+      : undefined;
+    const content = label?.trim() || `${nodeId} progress checkpoint`;
+    void this.contextMemory.record({
+      projectId,
+      runId,
+      agentType: nodeId,
+      type: 'progress_event',
+      title: `${nodeId} progress`,
+      content,
+      importance: 0.45,
+      tags: ['progress', nodeId],
+      progress: {
+        status: 'running',
+        node: nodeId,
+        percent,
+      },
+      metadata: {
+        source: 'stream-emitter',
+      },
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Failed to persist progress memory for ${projectId}:${nodeId}: ${message}`);
+    });
   }
 }

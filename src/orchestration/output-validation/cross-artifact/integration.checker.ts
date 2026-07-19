@@ -23,7 +23,7 @@ import type { ValidationError } from '../schemas/schema.types';
  */
 
 export interface IntegrationArtifact {
-  agentType: 'frontend' | 'backend' | 'database' | 'architecture';
+  agentType: 'frontend' | 'backend' | 'database' | 'architecture' | 'mobile';
   filePath: string;
   content: string;
 }

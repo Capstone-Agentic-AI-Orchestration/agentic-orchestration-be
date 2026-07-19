@@ -209,6 +209,20 @@ export function buildSimulationNodeImpls(
       };
     },
 
+    [NODE.MOBILE_AGENT]: async (state) => {
+      await play(emitter, state, NODE.MOBILE_AGENT, [
+        { type: 'decision', text: 'Scaffolding Expo router screens…', pct: 25 },
+        { type: 'token', text: 'Building navigation and list screens…', pct: 65 },
+        { type: 'decision', text: 'Mobile artifacts generated.', pct: 100 },
+      ]);
+      return {
+        artifacts: [
+          artifact('mobile', 'app/(tabs)/index.tsx', 'tsx'),
+          artifact('mobile', 'app/_layout.tsx', 'tsx'),
+        ],
+      };
+    },
+
     [NODE.BACKEND_AGENT]: async (state) => {
       await play(emitter, state, NODE.BACKEND_AGENT, [
         { type: 'decision', text: 'Wiring NestJS modules and auth…', pct: 25 },

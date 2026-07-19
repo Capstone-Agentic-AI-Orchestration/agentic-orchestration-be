@@ -3,6 +3,7 @@ import { DevFlowStateType } from './devflow.state';
 import { RequirementsParserNode } from '../nodes/requirements-parser.node';
 import { ContractNegotiatorNode } from '../nodes/contract-negotiator.node';
 import { FrontendAgentNode } from '../nodes/frontend-agent.node';
+import { MobileAgentNode } from '../nodes/mobile-agent.node';
 import { BackendAgentNode } from '../nodes/backend-agent.node';
 import { DatabaseAgentNode } from '../nodes/database-agent.node';
 import { ArchitectureAgentNode } from '../nodes/architecture-agent.node';
@@ -38,6 +39,8 @@ export interface DevFlowNodeImpls {
   [NODE.PARSE_REQUIREMENTS]: NodeImpl;
   [NODE.NEGOTIATE_CONTRACT]: NodeImpl;
   [NODE.FRONTEND_AGENT]: NodeImpl;
+  /** Only dispatched for projects with a MOBILE repository — see `codeAgentsFor`. */
+  [NODE.MOBILE_AGENT]: NodeImpl;
   [NODE.BACKEND_AGENT]: NodeImpl;
   [NODE.DATABASE_AGENT]: NodeImpl;
   [NODE.ARCHITECTURE_AGENT]: NodeImpl;
@@ -89,6 +92,7 @@ export function buildDevFlowNodeImpls(
   requirementsParser: RequirementsParserNode,
   contractNegotiator: ContractNegotiatorNode,
   frontendAgent: FrontendAgentNode,
+  mobileAgent: MobileAgentNode,
   backendAgent: BackendAgentNode,
   databaseAgent: DatabaseAgentNode,
   architectureAgent: ArchitectureAgentNode,
@@ -101,6 +105,7 @@ export function buildDevFlowNodeImpls(
     [NODE.PARSE_REQUIREMENTS]: (state) => requirementsParser.execute(state),
     [NODE.NEGOTIATE_CONTRACT]: (state) => contractNegotiator.execute(state),
     [NODE.FRONTEND_AGENT]: (state) => frontendAgent.execute(state),
+    [NODE.MOBILE_AGENT]: (state) => mobileAgent.execute(state),
     [NODE.BACKEND_AGENT]: (state) => backendAgent.execute(state),
     [NODE.DATABASE_AGENT]: (state) => databaseAgent.execute(state),
     [NODE.ARCHITECTURE_AGENT]: (state) => architectureAgent.execute(state),

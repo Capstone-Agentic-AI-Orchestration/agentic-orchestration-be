@@ -24,6 +24,9 @@ async function bootstrap(): Promise<void> {
   // Must be registered before app.listen() so the /devflow namespace is mounted.
   app.useWebSocketAdapter(new IoAdapter(app));
 
+  // CORS_ORIGIN may list several origins comma-separated (e.g. localhost + 127.0.0.1,
+  // or a prod frontend URL). The cors package only multi-matches when given an ARRAY —
+  // a comma-joined string is treated as one literal origin and matches nothing.
   app.enableCors({
     origin: corsOrigins(),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

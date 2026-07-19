@@ -8,7 +8,7 @@ The two are different things and their credentials live in different places:
 
 | | GitHub App (`agentic-orchestration-<env>`) | OAuth App (`agentic-orchestration-<env>`) |
 |---|---|---|
-| Purpose | Server-to-server: the backend pushing code artifacts to repos | User login "Sign in with GitHub" |
+| Purpose | Server-to-server: create plain repositories, push artifacts, and manage developer access | User login "Sign in with GitHub" |
 | Identity | Acts as itself (installation token) | Acts on behalf of a user |
 | Creation | **Automated** via the manifest flow below | **Manual** — GitHub has no OAuth-App creation API |
 | Credentials go into | **Render** env vars (this backend's `.env`) | **Supabase** dashboard (Auth → Providers → GitHub) |
@@ -58,7 +58,8 @@ already reads `GITHUB_APP_ID`, `GITHUB_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`,
 `GITHUB_ORG` (see `.env.example`).
 
 **Default permissions** requested: `contents:write`, `metadata:read`,
-`pull_requests:write`, `workflows:write`. Adjust in
+`pull_requests:write`, `administration:write`, `members:read`. Repository creation
+initializes project folders only; GitHub Actions and other CI/CD files are not created. Adjust in
 `create-github-app.mjs → buildManifest()` before creating, or on the app page after.
 
 > Note: GitHub App names are globally unique. If `agentic-orchestration-main` is

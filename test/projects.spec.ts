@@ -5,6 +5,7 @@ import { ProjectsService } from '../src/projects/projects.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { OrchestrationService } from '../src/orchestration/orchestration.service';
 import { NotificationsService } from '../src/notifications/notifications.service';
+import { IntakeService } from '../src/intake/intake.service';
 import { AuthUser } from '../src/auth/auth.types';
 
 const pmUser: AuthUser = {
@@ -243,6 +244,7 @@ describe('ProjectsService', () => {
       pmUser.id,
       OrchestrationRunTrigger.START,
       undefined,
+      undefined,
     );
   });
 
@@ -274,10 +276,54 @@ describe('ProjectsService', () => {
       'Acme Logistics',
       pmUser.id,
       OrchestrationRunTrigger.START,
+      undefined,
       expect.objectContaining({
         theme: 'black',
         forbiddenPatterns: ['gradient orb'],
       }),
+    );
+  });
+
+  it('starts orchestration with the immutable locked intake context', async () => {
+    const intakeContext = {
+      schemaVersion: 'intake-context-v1' as const,
+      projectId: 'project-1',
+      intakeSnapshotId: 'snapshot-1',
+      intakeVersion: 3,
+      canonicalBrief: 'Locked client requirements',
+      clientRequirements: {} as never,
+      pmNotes: 'Scope reviewed',
+      sources: [],
+    };
+    const intake = { contextForStart: vi.fn().mockResolvedValue(intakeContext) };
+    const serviceWithIntake = new ProjectsService(
+      prisma as unknown as PrismaService,
+      orchestration as unknown as OrchestrationService,
+      notifications as unknown as NotificationsService,
+      intake as unknown as IntakeService,
+    );
+    prisma.project.findFirst.mockResolvedValue({
+      id: 'project-1',
+      companyName: 'Acme Logistics',
+      brief: 'Build a delivery dashboard',
+      stackKey: 'nextjs-nestjs-supabase',
+      runId: null,
+      kickoff: { status: ProjectKickoffStatus.READY },
+      workOrders: [{ instructions: 'Build the first dashboard shell.' }],
+    });
+
+    await serviceWithIntake.startOrchestration('project-1', pmUser);
+
+    expect(intake.contextForStart).toHaveBeenCalledWith(expect.objectContaining({ id: 'project-1' }), pmUser.id);
+    expect(orchestration.startRun).toHaveBeenCalledWith(
+      'project-1',
+      'Build a delivery dashboard',
+      'nextjs-nestjs-supabase',
+      'Acme Logistics',
+      pmUser.id,
+      OrchestrationRunTrigger.START,
+      intakeContext,
+      undefined,
     );
   });
 
@@ -406,6 +452,7 @@ describe('ProjectsService', () => {
         status: true,
         createdAt: true,
         updatedAt: true,
+        groupId: true,
         runId: true,
         kickoff: {
           select: {
@@ -452,6 +499,7 @@ describe('ProjectsService', () => {
         OR: [
           { createdById: pmUser.id },
           { members: { some: { userId: pmUser.id } } },
+          { group: { members: { some: { userId: pmUser.id, status: 'ACTIVE' } } } },
         ],
       },
       select: {
@@ -460,6 +508,7 @@ describe('ProjectsService', () => {
         status: true,
         createdAt: true,
         updatedAt: true,
+        groupId: true,
         runId: true,
         kickoff: {
           select: {
@@ -632,6 +681,7 @@ describe('ProjectsService', () => {
         OR: [
           { createdById: pmUser.id },
           { members: { some: { userId: pmUser.id } } },
+          { group: { members: { some: { userId: pmUser.id, status: 'ACTIVE' } } } },
         ],
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -659,6 +709,7 @@ describe('ProjectsService', () => {
         OR: [
           { createdById: devUser.id },
           { members: { some: { userId: devUser.id } } },
+          { group: { members: { some: { userId: devUser.id, status: 'ACTIVE' } } } },
         ],
       },
       include: expect.any(Object),

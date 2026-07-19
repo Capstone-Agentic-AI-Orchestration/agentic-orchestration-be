@@ -9,6 +9,7 @@ import {
   ConversationCategory,
   InquiryStatus,
   Prisma,
+  ProfileStatus,
   ProjectStatus,
   ProjectTimelineEventType,
   ProjectTimelineVisibility,
@@ -137,10 +138,19 @@ export class IntakeRepository {
 
     const clientProfile = await tx.profile.findFirst({
       where: { email: inquiry.email, role: UserRole.CLIENT },
-      select: { id: true },
+      select: { id: true, status: true },
     });
 
     if (clientProfile) {
+      // If the client already signed in and is waiting on approval, this is that approval:
+      // release them from PENDING so their next request reaches the client persona.
+      if (clientProfile.status === ProfileStatus.PENDING) {
+        await tx.profile.update({
+          where: { id: clientProfile.id },
+          data: { status: ProfileStatus.ACTIVE },
+        });
+      }
+
       await tx.projectMember.upsert({
         where: {
           projectId_userId: {

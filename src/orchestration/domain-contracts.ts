@@ -984,7 +984,11 @@ function isAllowedByOutputStructure(
   if (agentType === 'frontend') return isAllowedFrontendPath(filePath);
   if (agentType === 'backend') return isAllowedBackendPath(filePath);
   if (agentType === 'database') return isAllowedDatabasePath(filePath);
-  return isAllowedArchitecturePath(filePath);
+  if (agentType === 'architecture') return isAllowedArchitecturePath(filePath);
+  // 'mobile' has no OUTPUT_STRUCTURE contract authored yet. Until one exists, mobile
+  // artifacts go unvalidated rather than falling through to the architecture-doc rules,
+  // which would reject every generated mobile file.
+  return true;
 }
 
 function isAllowedFrontendPath(filePath: string): boolean {
@@ -1032,7 +1036,10 @@ function patternsForAgent(
   contract: OutputStructureContractTemplate,
   agentType: GeneratedArtifact['agentType'],
 ): string[] {
-  return contract.agents[agentType].allowedPatterns;
+  // Agent types without an authored contract entry (currently 'mobile') have no
+  // expected patterns to report.
+  const rule = contract.agents[agentType as keyof OutputStructureContractTemplate['agents']];
+  return rule?.allowedPatterns ?? [];
 }
 
 function buildRoutes(resource: string): BackendApiRouteTemplate[] {

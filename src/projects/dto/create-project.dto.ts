@@ -1,5 +1,13 @@
 import { Type } from 'class-transformer';
-import { IsOptional, IsString, MinLength, ValidateNested } from 'class-validator';
+import {
+  IsBoolean,
+  IsOptional,
+  IsString,
+  MaxLength,
+  MinLength,
+  ValidateIf,
+  ValidateNested,
+} from 'class-validator';
 import { DesignGuidanceDto } from './design-guidance.dto';
 
 export class CreateProjectDto {
@@ -14,6 +22,43 @@ export class CreateProjectDto {
   @IsString()
   @MinLength(1, { message: 'stackKey must not be empty' })
   stackKey!: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  groupId?: string;
+
+  @ValidateIf((input: CreateProjectDto) => Boolean(input.groupId) || Boolean(input.repositoryName))
+  @IsString()
+  @MinLength(1)
+  @MaxLength(100)
+  repositoryName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(350)
+  repositoryDescription?: string;
+
+  /** When true, also provision a mobile (Expo/React Native) repository. Default: backend + frontend only. */
+  @IsOptional()
+  @IsBoolean()
+  includeMobile?: boolean;
+
+  /** Per-repo tech stack. Backend: nest|node. Frontend: next|react. Mobile: expo|react-native. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  backendStack?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  frontendStack?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  mobileStack?: string;
 
   @IsOptional()
   @ValidateNested()

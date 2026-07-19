@@ -1,14 +1,16 @@
-import { Injectable, OnModuleInit, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, OnModuleInit, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createRemoteJWKSet, jwtVerify, JWTPayload } from 'jose';
-import { ClientInviteStatus, ProfileStatus, UserRole } from '@prisma/client';
+import { ClientInviteStatus, InquiryStatus, ProfileStatus, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { GithubTeamsService } from '../github/github-teams.service';
 import { AuthUser } from './auth.types';
 
 const INVITE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 
 @Injectable()
 export class SupabaseAuthService implements OnModuleInit {
+  private readonly logger = new Logger(SupabaseAuthService.name);
   private readonly issuer: string;
   private readonly jwks: ReturnType<typeof createRemoteJWKSet>;
   private jwksWarmed = false;
@@ -18,6 +20,7 @@ export class SupabaseAuthService implements OnModuleInit {
   constructor(
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly githubTeams: GithubTeamsService,
   ) {
     const supabaseUrl = this.configService.get<string>('supabase.url');
     if (supabaseUrl) {
@@ -90,7 +93,10 @@ export class SupabaseAuthService implements OnModuleInit {
       this.assertAllowedProvider(payload);
       return this.syncProfile(payload);
     } catch (error) {
-      if (error instanceof UnauthorizedException) {
+      // Deliberate auth decisions pass through unchanged. A pending-approval refusal in
+      // particular must keep its 403 + ACCOUNT_PENDING_APPROVAL code, or the frontend cannot
+      // tell "awaiting approval" apart from "your token is broken" and shows the wrong screen.
+      if (error instanceof UnauthorizedException || error instanceof ForbiddenException) {
         throw error;
       }
       throw new UnauthorizedException('Invalid or expired access token');
@@ -106,33 +112,62 @@ export class SupabaseAuthService implements OnModuleInit {
     const email = this.getEmail(payload);
     const fullName = this.getFullName(payload);
     const authProvider = this.getAuthProvider(payload);
+    const githubLogin = this.getGithubLogin(payload);
+    const avatarUrl = this.getAvatarUrl(payload);
 
     const existing = await this.prisma.profile.findUnique({
       where: { id: userId },
-      select: { id: true, email: true, fullName: true, role: true, status: true },
+      select: { id: true, email: true, fullName: true, githubLogin: true, avatarUrl: true, role: true, status: true },
     });
 
-    let profile: { id: string; email: string | null; fullName: string | null; role: UserRole; status: ProfileStatus };
+    let profile: { id: string; email: string | null; fullName: string | null; githubLogin: string | null; avatarUrl: string | null; role: UserRole; status: ProfileStatus };
 
     if (existing) {
-      if (existing.email !== email || (fullName && existing.fullName !== fullName)) {
+      if (
+        existing.email !== email ||
+        (fullName && existing.fullName !== fullName) ||
+        (githubLogin && existing.githubLogin !== githubLogin) ||
+        (avatarUrl && existing.avatarUrl !== avatarUrl)
+      ) {
         profile = await this.prisma.profile.update({
           where: { id: userId },
-          data: { email, ...(fullName ? { fullName } : {}) },
-          select: { id: true, email: true, fullName: true, role: true, status: true },
+          data: {
+            email,
+            ...(fullName ? { fullName } : {}),
+            ...(githubLogin ? { githubLogin } : {}),
+            ...(avatarUrl ? { avatarUrl } : {}),
+          },
+          select: { id: true, email: true, fullName: true, githubLogin: true, avatarUrl: true, role: true, status: true },
         });
       } else {
         profile = existing;
       }
     } else {
+      // New sign-in: derive the role from GitHub org team membership when
+      // configured (github-teams.service.ts); fall back to CLIENT otherwise.
+      const provisionedRole =
+        (await this.githubTeams.resolveRoleFromTeams(githubLogin)) ?? UserRole.CLIENT;
+
+      // Clients must be vetted before they get in. Staff (DEV/PM/ADMIN resolved from an org
+      // team) are already trusted by virtue of that membership, so only CLIENT is gated:
+      // a client is ACTIVE only when a PM has already approved an inquiry for this email,
+      // otherwise the account is created PENDING so the person can see their request status.
+      const provisionedStatus =
+        provisionedRole === UserRole.CLIENT && !(await this.hasApprovedIntake(email))
+          ? ProfileStatus.PENDING
+          : ProfileStatus.ACTIVE;
+
       profile = await this.prisma.profile.create({
         data: {
           id: userId,
           email,
           fullName,
-          role: UserRole.CLIENT,
+          githubLogin,
+          avatarUrl,
+          role: provisionedRole,
+          status: provisionedStatus,
         },
-        select: { id: true, email: true, fullName: true, role: true, status: true },
+        select: { id: true, email: true, fullName: true, githubLogin: true, avatarUrl: true, role: true, status: true },
       });
     }
 
@@ -140,13 +175,58 @@ export class SupabaseAuthService implements OnModuleInit {
       throw new UnauthorizedException('This account has been suspended');
     }
 
+    // A pending client may have been approved since they last signed in; re-check before
+    // refusing, so approval takes effect on their next request without admin intervention.
+    if (profile.status === ProfileStatus.PENDING) {
+      profile = await this.activateIfApproved(profile);
+    }
+
+    if (profile.status === ProfileStatus.PENDING) {
+      throw new ForbiddenException({
+        code: 'ACCOUNT_PENDING_APPROVAL',
+        message: 'Your account is awaiting project manager approval.',
+      });
+    }
+
     const lastCheck = this.lastInviteCheck.get(userId) ?? 0;
     if (Date.now() - lastCheck > INVITE_CHECK_INTERVAL_MS) {
+      profile = await this.promoteFromTeamsIfNeeded(profile, githubLogin);
       await this.acceptPendingClientInvites(profile);
       this.lastInviteCheck.set(userId, Date.now());
     }
 
     return { ...profile, authProvider };
+  }
+
+  /**
+   * Upgrades an existing CLIENT to DEV/PM when their GitHub login is (now) in a
+   * mapped org team. Only ever promotes — never auto-demotes — so manual/admin
+   * role changes are preserved. No-op unless team mapping is enabled.
+   */
+  private async promoteFromTeamsIfNeeded(
+    profile: {
+      id: string;
+      email: string | null;
+      fullName: string | null;
+      githubLogin: string | null;
+      avatarUrl: string | null;
+      role: UserRole;
+      status: ProfileStatus;
+    },
+    githubLogin: string | null,
+  ) {
+    if (profile.role !== UserRole.CLIENT || !githubLogin || !this.githubTeams.isEnabled()) {
+      return profile;
+    }
+
+    const teamRole = await this.githubTeams.resolveRoleFromTeams(githubLogin);
+    if (!teamRole || teamRole === UserRole.CLIENT) return profile;
+
+    return this.prisma.profile.update({
+      where: { id: profile.id },
+      data: { role: teamRole },
+      select: { id: true, email: true, fullName: true, githubLogin: true, avatarUrl: true, role: true, status: true },
+    });
   }
 
   private getEmail(payload: JWTPayload): string | null {
@@ -168,6 +248,26 @@ export class SupabaseAuthService implements OnModuleInit {
     return typeof candidate === 'string'
       ? candidate.trim()
       : null;
+  }
+
+  private getGithubLogin(payload: JWTPayload): string | null {
+    const metadata = payload.user_metadata;
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+    const values = metadata as Record<string, unknown>;
+    const candidate = [values.user_name, values.preferred_username, values.login].find(
+      (value) => typeof value === 'string' && value.trim(),
+    );
+    return typeof candidate === 'string' ? candidate.trim() : null;
+  }
+
+  private getAvatarUrl(payload: JWTPayload): string | null {
+    const metadata = payload.user_metadata;
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+    const values = metadata as Record<string, unknown>;
+    const candidate = [values.avatar_url, values.picture].find(
+      (value) => typeof value === 'string' && value.trim(),
+    );
+    return typeof candidate === 'string' ? candidate.trim() : null;
   }
 
   private assertAllowedProvider(payload: JWTPayload): void {
@@ -204,6 +304,46 @@ export class SupabaseAuthService implements OnModuleInit {
     }
 
     return typeof provider === 'string' ? [provider.toLowerCase()] : [];
+  }
+
+  /**
+   * True when a project manager has already approved this email's way in — either an approved
+   * inquiry or a client invite addressed to them. Email is the only link between the anonymous
+   * intake form and the account created later at sign-in, so it is matched case-insensitively.
+   */
+  private async hasApprovedIntake(email: string | null): Promise<boolean> {
+    const value = email?.trim().toLowerCase();
+    if (!value) return false;
+
+    const [approvedInquiry, invite] = await Promise.all([
+      this.prisma.clientInquiry.findFirst({
+        where: { email: { equals: value, mode: 'insensitive' }, status: InquiryStatus.APPROVED },
+        select: { id: true },
+      }),
+      this.prisma.clientInvite.findFirst({
+        where: {
+          email: { equals: value, mode: 'insensitive' },
+          status: { in: [ClientInviteStatus.PENDING, ClientInviteStatus.ACCEPTED] },
+        },
+        select: { id: true },
+      }),
+    ]);
+
+    return Boolean(approvedInquiry || invite);
+  }
+
+  /** Promotes a PENDING profile to ACTIVE once their intake has been approved. */
+  private async activateIfApproved<T extends { id: string; status: ProfileStatus; email: string | null }>(
+    profile: T,
+  ): Promise<T> {
+    if (!(await this.hasApprovedIntake(profile.email))) return profile;
+
+    this.logger.log(`Activating approved client profile ${profile.id}`);
+    await this.prisma.profile
+      .update({ where: { id: profile.id }, data: { status: ProfileStatus.ACTIVE } })
+      .catch(() => undefined);
+
+    return { ...profile, status: ProfileStatus.ACTIVE };
   }
 
   private async acceptPendingClientInvites(profile: AuthUser): Promise<void> {

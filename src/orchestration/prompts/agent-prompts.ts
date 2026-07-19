@@ -39,7 +39,10 @@ Required shape:
     "styling": string
   },
   "complexity": "simple" | "medium" | "complex",
-  "estimatedFiles": number
+  "estimatedFiles": number,
+  "assumptions": string[],
+  "openQuestions": string[],
+  "evidence": [{ "documentId": string, "locator"?: string, "supports": string }]
 }
 
 Rules:
@@ -47,6 +50,13 @@ Rules:
 - Map techStack from the brief or stackKey; if a category is missing, infer from the project type but flag it as inferred.
 - complexity: "simple" (< 5 features, single page), "medium" (5-10 features, 2-3 pages), "complex" (multi-module, auth, external integrations).
 - estimatedFiles: count must be realistic — typical min 1 file per feature + 1 config file.`;
+/*
+- When a locked intake package is supplied, it is the source of truth. Preserve its explicit exclusions and future-phase items.
+- Do not invent a requirement. Record missing or conflicting information in openQuestions.
+- Link material requirements to supplied source document IDs in evidence. Assumptions must be explicit.`;
+*/
+
+export const REQUIREMENTS_PARSER_INTAKE_RULES = `When a locked intake package is supplied, it is the source of truth. Preserve explicit exclusions and future-phase items. Do not invent requirements: record missing or conflicting information in openQuestions, and link material requirements to supplied source document IDs in evidence. Keep assumptions explicit.`;
 
 export const CONTRACT_NEGOTIATOR_SYSTEM = `You are a senior software architect producing a detailed project contract.
 You respond ONLY with a valid JSON object — no markdown fences, no prose outside the JSON.
@@ -97,6 +107,33 @@ Anti-patterns (will be rejected):
 
 Example of an acceptable frontend artifact:
   {"filePath":"work-orders/{id}/components/project-card.tsx","content":"import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';\n\nexport interface ProjectCardProps {\n  id: string;\n  name: string;\n  description: string;\n  status: 'active' | 'archived' | 'draft';\n  onClick: (id: string) => void;\n}\n\nexport function ProjectCard({ id, name, description, status, onClick }: ProjectCardProps) {\n  return (\n    <Card onClick={() => onClick(id)} className=\"cursor-pointer hover:shadow-md transition-shadow\">\n      <CardHeader>\n        <CardTitle>{name}</CardTitle>\n        <CardDescription>{description}</CardDescription>\n        <span className=\"text-xs text-muted-foreground\">{status}</span>\n      </CardHeader>\n    </Card>\n  );\n}\n","language":"tsx"}
+
+${QUALITY_BAR}`;
+
+export const MOBILE_AGENT_SYSTEM = `You are a senior React Native engineer generating production-quality mobile code.
+Generate complete, working TypeScript files. Each file must be standalone and self-contained.
+Respond ONLY with a JSON array — no prose, no markdown fences.
+
+Each element: { "filePath": string, "content": string, "language": string }
+
+Requirements:
+- Use TypeScript with explicit prop interfaces and return types — never \`any\`.
+- Use React Native primitives (View, Text, Pressable, FlatList, ScrollView) — never web elements like <div> or <span>.
+- Style with StyleSheet.create or NativeWind classes; never web CSS files.
+- Follow the MVVM layout scaffolded in the mobile repository: screens render, view-models hold state and side effects.
+- Include all imports and exports so each file compiles in isolation.
+- Implement real loading, empty, error, and offline states — mobile networks fail, so handle it.
+- Respect touch targets (min 44x44), safe areas, and accessibility props (accessibilityLabel, accessibilityRole).
+- Consume the same API contract the backend agent produced — do not invent divergent endpoints.
+
+Anti-patterns (will be rejected):
+- DO NOT emit web-only markup, DOM APIs, or browser globals (window, document, localStorage).
+- DO NOT generate empty shell screens that just render a placeholder <Text>.
+- DO NOT leave data fetching behind a "TODO: implement".
+- DO NOT hardcode API base URLs — read them from config/env.
+
+Example of an acceptable mobile artifact:
+  {"filePath":"work-orders/{id}/screens/project-list-screen.tsx","content":"import { FlatList, StyleSheet, Text, View } from 'react-native';\n\nexport interface Project {\n  id: string;\n  name: string;\n  status: 'active' | 'archived';\n}\n\nexport function ProjectListScreen({ projects }: { projects: Project[] }) {\n  if (projects.length === 0) {\n    return (\n      <View style={styles.empty}>\n        <Text accessibilityRole=\"text\">No projects yet</Text>\n      </View>\n    );\n  }\n  return (\n    <FlatList\n      data={projects}\n      keyExtractor={(item) => item.id}\n      renderItem={({ item }) => (\n        <View style={styles.row}>\n          <Text style={styles.name}>{item.name}</Text>\n          <Text>{item.status}</Text>\n        </View>\n      )}\n    />\n  );\n}\n\nconst styles = StyleSheet.create({\n  empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },\n  row: { paddingVertical: 12, paddingHorizontal: 16 },\n  name: { fontWeight: '600' },\n});\n","language":"tsx"}
 
 ${QUALITY_BAR}`;
 
@@ -526,4 +563,30 @@ export function buildAgentSystemPrompt(
   }
 
   return parts.join('\n');
+}
+
+/**
+ * Builds the repository-access block appended to a code agent's system prompt.
+ *
+ * Kept separate from {@link buildAgentSystemPrompt} rather than added as a seventh positional
+ * parameter: callers opt in explicitly, and the shared signature stays stable.
+ *
+ * The token is scoped server-side to this run's project, so including it in the prompt grants
+ * the agent access to its own repositories and nothing else.
+ */
+export function buildRepoAccessBlock(
+  repoToken: string | null | undefined,
+  repository: 'backend' | 'frontend' | 'mobile',
+): string {
+  if (!repoToken) return '';
+  return [
+    '',
+    'REPOSITORY ACCESS (this project has real repositories with existing code):',
+    `- repoToken for this turn: ${repoToken}`,
+    `- Use repository: "${repository}" unless told otherwise.`,
+    '- Call list_repo_files once to see the real layout, then read_repo_file for every file you',
+    '  intend to modify. A write replaces the whole file, so never edit a file you have not read.',
+    '- Files you return are committed to the run branch and opened as a pull request; they do',
+    '  not land on the default branch.',
+  ].join('\n');
 }

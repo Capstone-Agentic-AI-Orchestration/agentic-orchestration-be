@@ -4,6 +4,9 @@ export const envSchema = z.object({
   DATABASE_URL: z.string().url('DATABASE_URL must be a valid URL'),
   SUPABASE_URL: z.string().url().optional(),
   AUTH_ALLOWED_PROVIDERS: z.string().optional().default('github'),
+  // 'simulation' runs the real pipeline (same sequencer, gates, and streaming) with
+  // deterministic fake agents and no external calls — no LLM spend, no GitHub writes.
+  // The provider registry has always supported it; this enum was the only thing blocking it.
   AGENT_PROVIDER: z.enum(['mock', 'llm', 'simulation']).optional().default('mock'),
   // Eve migration — see docs/architecture/EVE_MIGRATION.md.
   // ORCHESTRATION_LLM_ENGINE selects how agent nodes generate: delegation to the Eve agent
@@ -54,10 +57,17 @@ export const envSchema = z.object({
   GEMINI_FALLBACK_MODEL: z.string().optional().default(''),
   OPENAI_API_KEY: z.string().optional().default(''),
   GITHUB_APP_ID: z.string().optional().default(''),
+  GITHUB_APP_SLUG: z.string().optional().default(''),
   GITHUB_PRIVATE_KEY: z.string().optional().default(''),
   GITHUB_INSTALLATION_ID: z.string().optional().default(''),
   GITHUB_ORG: z.string().optional().default(''),
+  // Org team slugs that map a GitHub login to a DevFlow role at first sign-in.
+  // Empty = feature disabled (GitHub logins stay CLIENT). Requires the GitHub App
+  // to have `Members: read` org permission. See github-teams.service.ts.
+  GITHUB_DEV_TEAM: z.string().optional().default(''),
+  GITHUB_PM_TEAM: z.string().optional().default(''),
   GITHUB_TOKEN: z.string().optional().default(''),
+  GITHUB_WEBHOOK_SECRET: z.string().optional().default(''),
   PORT: z
     .string()
     .optional()

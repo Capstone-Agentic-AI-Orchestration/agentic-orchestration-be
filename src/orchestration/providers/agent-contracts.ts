@@ -42,6 +42,30 @@ export const AGENT_ARTIFACT_CONTRACTS = {
       'Ready for PM output review before client publication',
     ],
   },
+  [WorkOrderAgentType.MOBILE]: {
+    agentType: WorkOrderAgentType.MOBILE,
+    slug: 'mobile',
+    nodeName: 'work_order_mobile',
+    displayName: 'Mobile Agent',
+    language: 'typescript',
+    fileName: 'mobile-output.tsx',
+    requiredExtensions: ['.tsx', '.ts'],
+    requiredSignals: [
+      {
+        anyOf: ['export function', 'export default'],
+        message: 'mobile output must export a component or hook',
+      },
+      {
+        anyOf: ['react-native', '<View', '<Text', 'expo'],
+        message: 'mobile output must contain React Native UI',
+      },
+    ],
+    handoffChecklist: [
+      'React Native screen or view-model entry point',
+      'Follows the MVVM layout scaffolded in the mobile repository',
+      'Ready for PM output review before client publication',
+    ],
+  },
   [WorkOrderAgentType.BACKEND]: {
     agentType: WorkOrderAgentType.BACKEND,
     slug: 'backend',

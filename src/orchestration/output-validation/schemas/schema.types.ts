@@ -12,7 +12,8 @@ export type ValidationAgentType =
   | 'frontend'
   | 'backend'
   | 'database'
-  | 'architecture';
+  | 'architecture'
+  | 'mobile';
 
 export interface ValidationError {
   code: ValidationErrorCode;

@@ -24,29 +24,40 @@ export interface GithubDeliveryVerification {
   reason: string | null;
 }
 
-const CI_WORKFLOW_CONTENT = `name: CI
+export interface GithubRepository {
+  name: string;
+  fullName: string;
+  htmlUrl: string;
+  cloneUrl: string;
+  defaultBranch: string;
+  visibility: string;
+}
 
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+/** A single entry from a repository tree listing. */
+export interface GithubTreeEntry {
+  path: string;
+  type: 'blob' | 'tree';
+  size: number | null;
+}
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install dependencies
-        run: npm ci
-      - name: Build
-        run: npm run build --if-present
-      - name: Test
-        run: npm test --if-present
-`;
+export interface GithubFileContent {
+  path: string;
+  content: string;
+  sha: string;
+  size: number;
+}
+
+export interface GithubPullRequest {
+  number: number;
+  htmlUrl: string;
+  branch: string;
+}
+
+/**
+ * Largest file the agents may read in one call. Generated source files are far smaller than
+ * this; the cap stops a stray binary or vendored bundle from blowing up an agent's context.
+ */
+const MAX_READABLE_FILE_BYTES = 256_000;
 
 @Injectable()
 export class GithubService implements OnModuleInit {
@@ -138,9 +149,12 @@ export class GithubService implements OnModuleInit {
     return this.ownerLogin;
   }
 
-  async createRepo(name: string): Promise<string> {
+  async createPlainRepository(
+    name: string,
+    description = 'Created by DevFlow',
+  ): Promise<GithubRepository> {
     this.assertConfigured();
-    this.logger.log(`Creating repository: ${name}`);
+    this.logger.log(`Creating plain repository: ${name}`);
     const owner = await this.getOwner();
 
     if (this.hasToken) {
@@ -158,16 +172,25 @@ export class GithubService implements OnModuleInit {
           name,
           private: true,
           auto_init: true,
-          description: `Scaffolded by DevFlow`,
+          description,
         }),
       });
       if (!response.ok) {
         const body = await response.text();
         throw new Error(`GitHub repo creation failed (${response.status}): ${body.slice(0, 300)}`);
       }
-      const data = await response.json();
-      this.logger.log(`Repository created: ${data.clone_url}`);
-      return data.clone_url;
+      const data = await response.json() as {
+        name: string;
+        full_name: string;
+        html_url: string;
+        clone_url: string;
+        default_branch: string;
+        visibility?: string;
+        private?: boolean;
+      };
+      const repository = this.toRepository(data);
+      this.logger.log(`Plain repository created: ${repository.htmlUrl}`);
+      return repository;
     }
 
     // No PAT — try via GitHub App installation (org accounts only).
@@ -185,11 +208,92 @@ export class GithubService implements OnModuleInit {
       org: owner,
       name,
       private: true,
-      description: `Scaffolded by DevFlow`,
+      auto_init: true,
+      description,
     });
 
-    this.logger.log(`Repository created: ${data.clone_url}`);
-    return data.clone_url;
+    const repository = this.toRepository(data);
+    this.logger.log(`Plain repository created: ${repository.htmlUrl}`);
+    return repository;
+  }
+
+  /** Backward-compatible wrapper. All callers still receive a plain repository with no CI/CD. */
+  async createRepo(name: string): Promise<string> {
+    return (await this.createPlainRepository(name)).cloneUrl;
+  }
+
+  getInstallUrl(): string | null {
+    const slug = this.configService.get<string>('github.appSlug')?.trim();
+    return slug ? `https://github.com/apps/${encodeURIComponent(slug)}/installations/new` : null;
+  }
+
+  getConfiguredInstallationId(): number | null {
+    return this.installationId || null;
+  }
+
+  async verifyInstallation(installationId: number) {
+    this.assertConfigured();
+    if (!Number.isInteger(installationId) || installationId <= 0) {
+      throw new ServiceUnavailableException('A valid GitHub installation id is required');
+    }
+    if (this.hasToken) {
+      return { installationId, accountLogin: await this.getOwner(), accountType: 'Organization' };
+    }
+    const { data } = await this.octokit.apps.getInstallation({ installation_id: installationId });
+    const accountLogin = data.account && 'login' in data.account ? data.account.login : null;
+    const accountType = data.account && 'type' in data.account ? data.account.type : null;
+    if (this.installationId && installationId !== this.installationId) {
+      throw new ServiceUnavailableException(
+        `Installation ${installationId} is not the installation configured for this DevFlow environment`,
+      );
+    }
+    return { installationId, accountLogin, accountType };
+  }
+
+  async listVisibleRepositories() {
+    this.assertConfigured();
+    const owner = await this.getOwner();
+    if (this.hasToken) {
+      const { data } = await this.octokit.repos.listForOrg({ org: owner, per_page: 100, sort: 'updated' });
+      return data.map((repository) => ({
+        id: String(repository.id),
+        name: repository.name,
+        fullName: repository.full_name,
+        htmlUrl: repository.html_url,
+        private: repository.private,
+        defaultBranch: repository.default_branch,
+      }));
+    }
+    const { data } = await this.octokit.request('GET /installation/repositories', { per_page: 100 });
+    return data.repositories.map((repository) => ({
+      id: String(repository.id),
+      name: repository.name,
+      fullName: repository.full_name,
+      htmlUrl: repository.html_url,
+      private: repository.private,
+      defaultBranch: repository.default_branch,
+    }));
+  }
+
+  async addRepositoryCollaborator(repoName: string, githubLogin: string): Promise<void> {
+    this.assertConfigured();
+    const owner = await this.getOwner();
+    await this.octokit.repos.addCollaborator({
+      owner,
+      repo: repoName,
+      username: githubLogin,
+      permission: 'push',
+    });
+  }
+
+  async removeRepositoryCollaborator(repoName: string, githubLogin: string): Promise<void> {
+    this.assertConfigured();
+    const owner = await this.getOwner();
+    await this.octokit.repos.removeCollaborator({
+      owner,
+      repo: repoName,
+      username: githubLogin,
+    });
   }
 
   async verifyDeliveryAccess(): Promise<GithubDeliveryVerification> {
@@ -370,17 +474,224 @@ export class GithubService implements OnModuleInit {
     this.logger.log(`Committed ${artifacts.length} files to ${repoName}`);
   }
 
-  async injectCiWorkflow(repoName: string): Promise<void> {
-    await this.commitFiles(
-      repoName,
-      [
-        {
-          filePath: '.github/workflows/ci.yml',
-          content: CI_WORKFLOW_CONTENT,
-        },
-      ],
-      'ci: add GitHub Actions workflow',
+  // ─── Repository reading (agent tools) ──────────────────────────────────────────
+
+  /**
+   * Lists the file paths in a repository at `ref` (default branch when omitted).
+   *
+   * Uses the recursive tree API so an agent can discover the existing layout in one call
+   * instead of walking directories. Directory entries are dropped — agents only ever act on
+   * files — and the response is truncation-aware: GitHub caps tree responses, so a very large
+   * repository returns a partial list rather than silently pretending to be complete.
+   */
+  async listFiles(repoName: string, ref?: string): Promise<{ entries: GithubTreeEntry[]; truncated: boolean }> {
+    this.assertConfigured();
+    const owner = await this.getOwner();
+    const branch = ref?.trim() || (await this.octokit.repos.get({ owner, repo: repoName })).data.default_branch;
+
+    const { data } = await this.octokit.git.getTree({
+      owner,
+      repo: repoName,
+      tree_sha: branch,
+      recursive: '1',
+    });
+
+    const entries = (data.tree ?? [])
+      .filter((node): node is typeof node & { path: string; type: string } => Boolean(node.path && node.type))
+      .filter((node) => node.type === 'blob')
+      .map((node) => ({
+        path: node.path,
+        type: 'blob' as const,
+        size: typeof node.size === 'number' ? node.size : null,
+      }));
+
+    return { entries, truncated: Boolean(data.truncated) };
+  }
+
+  /**
+   * Reads a single file's decoded contents at `ref` (default branch when omitted).
+   *
+   * Returns null when the path does not exist, so a caller can distinguish "no such file"
+   * (the agent should create it) from a transport failure (which throws).
+   */
+  async readFile(repoName: string, filePath: string, ref?: string): Promise<GithubFileContent | null> {
+    this.assertConfigured();
+    const owner = await this.getOwner();
+
+    try {
+      const { data } = await this.octokit.repos.getContent({
+        owner,
+        repo: repoName,
+        path: filePath,
+        ...(ref?.trim() ? { ref: ref.trim() } : {}),
+      });
+
+      if (Array.isArray(data) || data.type !== 'file') {
+        throw new Error(`Path "${filePath}" in ${repoName} is not a file`);
+      }
+      if (data.size > MAX_READABLE_FILE_BYTES) {
+        throw new Error(
+          `File "${filePath}" is ${data.size} bytes, above the ${MAX_READABLE_FILE_BYTES}-byte read limit`,
+        );
+      }
+
+      const encoded = 'content' in data ? data.content : '';
+      return {
+        path: data.path,
+        content: Buffer.from(encoded ?? '', 'base64').toString('utf8'),
+        sha: data.sha,
+        size: data.size,
+      };
+    } catch (error) {
+      if (this.isNotFound(error)) return null;
+      throw error;
+    }
+  }
+
+  private isNotFound(error: unknown): boolean {
+    return typeof error === 'object' && error !== null && 'status' in error && (error as { status: number }).status === 404;
+  }
+
+  // ─── Branch + pull-request delivery ────────────────────────────────────────────
+
+  /**
+   * Commits files onto `branch`, creating the branch from the default branch when it does not
+   * exist yet. Identical tree/commit mechanics to {@link commitFiles} (incremental via
+   * `base_tree`), but the default branch is never advanced — review happens in the PR.
+   */
+  async commitFilesToBranch(
+    repoName: string,
+    branch: string,
+    artifacts: GitHubArtifact[],
+    message: string,
+  ): Promise<{ commitSha: string; branch: string }> {
+    this.assertConfigured();
+    const owner = await this.getOwner();
+
+    const { data: repo } = await this.octokit.repos.get({ owner, repo: repoName });
+    const defaultBranch = repo.default_branch;
+
+    // Resolve the branch head, branching off the default branch on first write of a run.
+    let headSha: string;
+    try {
+      const { data: existing } = await this.octokit.git.getRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${branch}`,
+      });
+      headSha = existing.object.sha;
+    } catch (error) {
+      if (!this.isNotFound(error)) throw error;
+      const { data: base } = await this.octokit.git.getRef({
+        owner,
+        repo: repoName,
+        ref: `heads/${defaultBranch}`,
+      });
+      await this.octokit.git.createRef({
+        owner,
+        repo: repoName,
+        ref: `refs/heads/${branch}`,
+        sha: base.object.sha,
+      });
+      headSha = base.object.sha;
+      this.logger.log(`Created branch ${branch} in ${repoName} from ${defaultBranch}`);
+    }
+
+    const { data: headCommit } = await this.octokit.git.getCommit({
+      owner,
+      repo: repoName,
+      commit_sha: headSha,
+    });
+
+    const treeItems = await Promise.all(
+      artifacts.map(async (artifact) => {
+        const { data: blob } = await this.octokit.git.createBlob({
+          owner,
+          repo: repoName,
+          content: Buffer.from(artifact.content).toString('base64'),
+          encoding: 'base64',
+        });
+        return {
+          path: artifact.filePath,
+          mode: '100644' as const,
+          type: 'blob' as const,
+          sha: blob.sha,
+        };
+      }),
     );
+
+    const { data: tree } = await this.octokit.git.createTree({
+      owner,
+      repo: repoName,
+      base_tree: headCommit.tree.sha,
+      tree: treeItems,
+    });
+
+    const { data: commit } = await this.octokit.git.createCommit({
+      owner,
+      repo: repoName,
+      message,
+      tree: tree.sha,
+      parents: [headSha],
+    });
+
+    await this.octokit.git.updateRef({
+      owner,
+      repo: repoName,
+      ref: `heads/${branch}`,
+      sha: commit.sha,
+    });
+
+    this.logger.log(`Committed ${artifacts.length} files to ${repoName}@${branch}`);
+    return { commitSha: commit.sha, branch };
+  }
+
+  /**
+   * Opens a PR from `branch` into the default branch, or returns the existing open PR for that
+   * branch. Idempotent so a re-run or retry never fails on "a pull request already exists".
+   */
+  async openPullRequest(
+    repoName: string,
+    branch: string,
+    title: string,
+    body: string,
+  ): Promise<GithubPullRequest | null> {
+    this.assertConfigured();
+    const owner = await this.getOwner();
+
+    const { data: existing } = await this.octokit.pulls.list({
+      owner,
+      repo: repoName,
+      head: `${owner}:${branch}`,
+      state: 'open',
+      per_page: 1,
+    });
+    if (existing.length > 0) {
+      return { number: existing[0].number, htmlUrl: existing[0].html_url, branch };
+    }
+
+    const { data: repo } = await this.octokit.repos.get({ owner, repo: repoName });
+
+    try {
+      const { data: pr } = await this.octokit.pulls.create({
+        owner,
+        repo: repoName,
+        head: branch,
+        base: repo.default_branch,
+        title,
+        body,
+      });
+      this.logger.log(`Opened PR #${pr.number} in ${repoName}: ${pr.html_url}`);
+      return { number: pr.number, htmlUrl: pr.html_url, branch };
+    } catch (error) {
+      // A branch identical to the default branch has nothing to compare; that is not a failure.
+      const message = error instanceof Error ? error.message : String(error);
+      if (/No commits between/i.test(message)) {
+        this.logger.warn(`No PR opened for ${repoName}@${branch}: no commits between branches`);
+        return null;
+      }
+      throw error;
+    }
   }
 
   private assertConfigured(): void {
@@ -415,5 +726,24 @@ export class GithubService implements OnModuleInit {
     } catch {
       return false;
     }
+  }
+
+  private toRepository(data: {
+    name: string;
+    full_name: string;
+    html_url: string;
+    clone_url: string;
+    default_branch: string;
+    visibility?: string | null;
+    private?: boolean;
+  }): GithubRepository {
+    return {
+      name: data.name,
+      fullName: data.full_name,
+      htmlUrl: data.html_url,
+      cloneUrl: data.clone_url,
+      defaultBranch: data.default_branch || 'main',
+      visibility: data.visibility ?? (data.private ? 'private' : 'public'),
+    };
   }
 }

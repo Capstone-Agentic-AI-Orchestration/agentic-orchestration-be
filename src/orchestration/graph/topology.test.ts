@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import {
   NODE,
   CODE_AGENTS,
+  ALL_CODE_AGENTS,
   gate1Router,
   validatorRouter,
   gate2Router,
@@ -26,6 +27,19 @@ describe('topology routers', () => {
       const targets = result as FanoutTarget[];
       expect(targets).toHaveLength(CODE_AGENTS.length);
       expect(targets.map((t) => t.node)).toEqual([...CODE_AGENTS]);
+    });
+
+    // Mobile is opt-in per project: dispatching it for a backend+frontend project would burn
+    // tokens generating React Native code with no repository to commit it to.
+    it('omits the mobile agent when the project has no mobile repository', () => {
+      const targets = gate1Router(state({ hasMobileRepo: false })) as FanoutTarget[];
+      expect(targets.map((t) => t.node)).not.toContain(NODE.MOBILE_AGENT);
+    });
+
+    it('includes the mobile agent when the project has a mobile repository', () => {
+      const targets = gate1Router(state({ hasMobileRepo: true })) as FanoutTarget[];
+      expect(targets.map((t) => t.node)).toContain(NODE.MOBILE_AGENT);
+      expect(targets).toHaveLength(ALL_CODE_AGENTS.length);
     });
   });
 

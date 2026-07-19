@@ -59,6 +59,12 @@ export interface BoundaryDefinitionViolation {
 
 export interface MutationRouteIdempotencyOptions {
   ignoredRouteFragments?: string[];
+  /**
+   * Source paths exempt from the idempotency rule. Reserved for internal service-to-service
+   * callbacks that are not user-issued commands — a retried agent read is harmless, and an
+   * agent write is already bounded by its capability token's call budget.
+   */
+  ignoredSourcePathFragments?: string[];
 }
 
 export interface MutationRouteIdempotencyViolation {
@@ -162,11 +168,11 @@ export interface IntegrationEventRegistryViolation {
 
 export const serviceBoundarySourceDirectories: Record<ServiceBoundary, string[]> = {
   identity: ['auth', 'profiles', 'developers'],
-  intake: ['inquiries', 'client-invites'],
-  'project-delivery': ['projects', 'reports', 'schedule'],
+  intake: ['inquiries', 'client-invites', 'intake'],
+  'project-delivery': ['projects', 'reports', 'schedule', 'groups', 'repositories'],
   collaboration: ['collaboration'],
   notifications: ['notifications'],
-  orchestration: ['orchestration', 'supervisor', 'memory', 'gateway'],
+  orchestration: ['orchestration', 'supervisor', 'memory', 'context-memory', 'gateway', 'agent-repo'],
   admin: ['admin'],
 };
 
@@ -189,7 +195,7 @@ export const serviceBoundaries: ServiceBoundaryDefinition[] = [
   },
   {
     name: 'intake',
-    owns: ['client_inquiries', 'client_invites', 'project kickoffs from approved inquiries'],
+    owns: ['client_inquiries', 'client_invites', 'project_intakes', 'project_intake_snapshots', 'document_extractions', 'project kickoffs from approved inquiries'],
     publishes: [
       IntegrationEvents.inquirySubmitted,
       IntegrationEvents.inquiryApproved,
@@ -208,6 +214,12 @@ export const serviceBoundaries: ServiceBoundaryDefinition[] = [
       'artifacts',
       'project_timeline_events',
       'project_delivery_reviews',
+      'groups',
+      'group_members',
+      'group_invitations',
+      'group_activity_events',
+      'repositories',
+      'repository_assignments',
     ],
     publishes: [],
     dependsOn: ['identity', 'intake', 'collaboration', 'notifications', 'orchestration'],
@@ -229,9 +241,20 @@ export const serviceBoundaries: ServiceBoundaryDefinition[] = [
   },
   {
     name: 'orchestration',
-    owns: ['orchestration_runs', 'work_order_executions', 'event_logs', 'run_budgets', 'agent_memories', 'realtime orchestration gateway'],
+    owns: [
+      'orchestration_runs',
+      'agent_repo_sessions',
+      'work_order_executions',
+      'event_logs',
+      'run_budgets',
+      'agent_memories',
+      'memory_context_events',
+      'memory_context_handoffs',
+      'memory_context_snapshots',
+      'realtime orchestration gateway',
+    ],
     publishes: [],
-    dependsOn: ['identity', 'project-delivery', 'notifications', 'admin'],
+    dependsOn: ['identity', 'intake', 'project-delivery', 'notifications', 'admin'],
     extractionReadiness: 'internal-module',
   },
   {
@@ -253,6 +276,8 @@ const prismaModelAccessPattern = /\b(?:(?:this\.)?prisma|tx)\.(\w+)\b/gm;
 const integrationEventTypePattern = /^([a-z][a-z-]*)\.([a-z][a-z0-9_]*)\.([a-z][a-z0-9_]*)\.v([1-9]\d*)$/;
 const integrationEventAggregateTypePattern = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
 const defaultIgnoredMutationRouteFragments = ['orchestration'];
+/** Internal agent callback surface; authenticated by service secret, not a user command path. */
+const defaultIgnoredMutationSourcePathFragments = ['src/agent-repo/'];
 const allowedRawOffsetPaginationFiles = new Set([
   'src/shared/pagination/cursor-pagination.ts',
 ]);
@@ -260,6 +285,10 @@ export const prismaModelOwners: Record<string, PrismaModelOwner> = {
   project: 'project-delivery',
   clientInquiry: 'intake',
   clientInvite: 'intake',
+  projectIntake: 'intake',
+  projectIntakeComment: 'intake',
+  projectIntakeSnapshot: 'intake',
+  documentExtraction: 'intake',
   projectKickoff: 'project-delivery',
   gateEvent: 'orchestration',
   artifact: 'project-delivery',
@@ -267,6 +296,12 @@ export const prismaModelOwners: Record<string, PrismaModelOwner> = {
   scheduleEvent: 'project-delivery',
   developerProfile: 'identity',
   projectMember: 'identity',
+  group: 'project-delivery',
+  groupMember: 'project-delivery',
+  groupInvitation: 'project-delivery',
+  groupActivityEvent: 'project-delivery',
+  repository: 'project-delivery',
+  repositoryAssignment: 'project-delivery',
   projectTask: 'project-delivery',
   projectTaskActivity: 'project-delivery',
   projectDeliveryReview: 'project-delivery',
@@ -276,6 +311,7 @@ export const prismaModelOwners: Record<string, PrismaModelOwner> = {
   collaborationDocument: 'collaboration',
   workOrder: 'project-delivery',
   orchestrationRun: 'orchestration',
+  agentRepoSession: 'orchestration',
   orchestrationJob: 'orchestration',
   providerInvocation: 'orchestration',
   workOrderExecution: 'orchestration',
@@ -296,6 +332,10 @@ export const prismaModelSchemas: Record<string, string> = {
   project: 'projects',
   clientInquiry: 'intake',
   clientInvite: 'intake',
+  projectIntake: 'intake',
+  projectIntakeComment: 'intake',
+  projectIntakeSnapshot: 'intake',
+  documentExtraction: 'intake',
   projectKickoff: 'projects',
   gateEvent: 'projects',
   artifact: 'projects',
@@ -303,6 +343,12 @@ export const prismaModelSchemas: Record<string, string> = {
   scheduleEvent: 'scheduling',
   developerProfile: 'identity',
   projectMember: 'projects',
+  group: 'projects',
+  groupMember: 'projects',
+  groupInvitation: 'projects',
+  groupActivityEvent: 'projects',
+  repository: 'projects',
+  repositoryAssignment: 'projects',
   projectTask: 'projects',
   projectTaskActivity: 'projects',
   projectDeliveryReview: 'projects',
@@ -312,6 +358,7 @@ export const prismaModelSchemas: Record<string, string> = {
   collaborationDocument: 'collaboration',
   workOrder: 'orchestration',
   orchestrationRun: 'orchestration',
+  agentRepoSession: 'orchestration',
   orchestrationJob: 'orchestration',
   providerInvocation: 'orchestration',
   workOrderExecution: 'orchestration',
@@ -345,6 +392,7 @@ export const allowedCrossBoundaryPrismaModels: Partial<Record<ServiceBoundary, C
   ],
   identity: [
     crossBoundaryPrismaException('clientInvite', 'Auth bootstrap links pending invites during sign-in.', 'Intake invite lookup API.'),
+    crossBoundaryPrismaException('clientInquiry', 'Client approval gate checks for an approved inquiry before activating a new client at sign-in.', 'Intake approval lookup API.'),
   ],
   intake: [
     crossBoundaryPrismaException('collaborationDocument', 'Inquiry approval seeds the initial collaboration document.', 'Collaboration kickoff API.'),
@@ -364,6 +412,7 @@ export const allowedCrossBoundaryPrismaModels: Partial<Record<ServiceBoundary, C
   orchestration: [
     crossBoundaryPrismaException('artifact', 'Orchestration writes generated delivery artifacts.', 'Project delivery artifact command API.'),
     crossBoundaryPrismaException('project', 'Orchestration advances project execution state.', 'Project delivery orchestration callback API.'),
+    crossBoundaryPrismaException('repository', 'Orchestration reuses the PM-provisioned repository for artifact delivery.', 'Project delivery repository read model.'),
     crossBoundaryPrismaException('projectTask', 'Orchestration updates task execution status.', 'Project delivery task command API.'),
     crossBoundaryPrismaException('projectTaskActivity', 'Orchestration records task execution activity.', 'Project delivery task activity API.'),
     crossBoundaryPrismaException('projectTimelineEvent', 'Orchestration records project execution milestones.', 'Project delivery timeline event API.'),
@@ -551,9 +600,16 @@ export function findMutationRouteIdempotencyViolations(
   options: MutationRouteIdempotencyOptions = {},
 ): MutationRouteIdempotencyViolation[] {
   const ignoredRouteFragments = options.ignoredRouteFragments ?? defaultIgnoredMutationRouteFragments;
+  const ignoredSourcePathFragments =
+    options.ignoredSourcePathFragments ?? defaultIgnoredMutationSourcePathFragments;
 
   return files.flatMap((file) => {
     const violations: MutationRouteIdempotencyViolation[] = [];
+
+    const normalizedPath = normalizePath(file.path);
+    if (ignoredSourcePathFragments.some((fragment) => normalizedPath.includes(fragment))) {
+      return violations;
+    }
 
     for (const routeMatch of file.text.matchAll(mutationRouteDecoratorPattern)) {
       const route = routeFromDecoratorArgument(routeMatch[2]);

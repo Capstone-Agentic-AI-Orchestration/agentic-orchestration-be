@@ -102,12 +102,16 @@ export default () => {
     },
     github: {
       appId: env.data.GITHUB_APP_ID || undefined,
+      appSlug: env.data.GITHUB_APP_SLUG || undefined,
       privateKey: normalizeGithubPrivateKey(env.data.GITHUB_PRIVATE_KEY),
       installationId: env.data.GITHUB_INSTALLATION_ID
         ? parseInt(env.data.GITHUB_INSTALLATION_ID, 10)
         : undefined,
       org: env.data.GITHUB_ORG || undefined,
+      devTeam: env.data.GITHUB_DEV_TEAM || undefined,
+      pmTeam: env.data.GITHUB_PM_TEAM || undefined,
       token: env.data.GITHUB_TOKEN || undefined,
+      webhookSecret: env.data.GITHUB_WEBHOOK_SECRET || undefined,
     },
     // Phase 2E — LangSmith tracing (auto-instrumented via env vars)
     langsmith: {

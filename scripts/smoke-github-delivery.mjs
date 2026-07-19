@@ -67,7 +67,10 @@ try {
   }
 
   const repoName = github.buildRepoName('DevFlow GitHub Smoke', Date.now().toString());
-  const repoUrl = await github.createRepo(repoName);
+  const repository = await github.createPlainRepository(
+    repoName,
+    'DevFlow plain repository smoke test',
+  );
   await github.commitFiles(
     repoName,
     [
@@ -82,13 +85,12 @@ try {
     ],
     'test: add DevFlow GitHub smoke artifacts',
   );
-  await github.injectCiWorkflow(repoName);
 
-  console.log('GitHub delivery smoke passed.');
+  console.log('GitHub plain repository delivery smoke passed (no CI/CD configured).');
   console.table([
     {
       repoName,
-      repoUrl,
+      repoUrl: repository.htmlUrl,
       owner: status.owner,
     },
   ]);

@@ -3,6 +3,11 @@
   "_comment": "Fill in the real URLs for each environment. frontendUrl = Vercel deploy URL (becomes the App/OAuth homepage). apiUrl = Render service URL (becomes the GitHub App webhook host). supabaseRef = the Supabase project ref for that environment (the xxxx in https://xxxx.supabase.co) — the OAuth callback is https://<supabaseRef>.supabase.co/auth/v1/callback.",
   "localCallbackPort": 8790,
   "environments": {
+    "local": {
+      "frontendUrl": "http://localhost:3000",
+      "apiUrl": "http://localhost:4000",
+      "supabaseRef": "gupmckxxaaxlameekihy"
+    },
     "test": {
       "frontendUrl": "https://REPLACE-test-frontend.vercel.app",
       "apiUrl": "https://REPLACE-test-api.onrender.com",

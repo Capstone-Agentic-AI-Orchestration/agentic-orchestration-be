@@ -31,9 +31,18 @@ export const MarkdownArtifactSchema = z.object({
     .min(40, 'content must be at least 40 chars'),
 }).strict();
 
+export const MobileArtifactSchema = z.object({
+  filePath: z.string().regex(/^work-orders\/[^/]+\/.+\.tsx?$/),
+  content: z.string()
+    .min(40, 'content must be at least 40 chars')
+    .refine(s => /export\s+(function|default|const)/.test(s), 'must export a component or hook')
+    .refine(s => /react-native|<View|<Text|expo/i.test(s), 'must contain React Native UI'),
+}).strict();
+
 export const AGENT_SCHEMAS: Record<WorkOrderAgentType, z.ZodTypeAny> = {
   [WorkOrderAgentType.FRONTEND]: FrontendArtifactSchema,
   [WorkOrderAgentType.BACKEND]: BackendArtifactSchema,
+  [WorkOrderAgentType.MOBILE]: MobileArtifactSchema,
   [WorkOrderAgentType.DATABASE]: DatabaseArtifactSchema,
   [WorkOrderAgentType.ARCHITECTURE]: MarkdownArtifactSchema,
   [WorkOrderAgentType.CONTRACT]: MarkdownArtifactSchema,

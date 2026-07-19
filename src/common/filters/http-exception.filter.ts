@@ -24,6 +24,10 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const isProduction = process.env.NODE_ENV === 'production';
 
     let message: string | string[];
+    // A machine-readable error code (e.g. ACCOUNT_PENDING_APPROVAL) surfaced from
+    // `throw new ForbiddenException({ code, message })`, so clients can branch on it instead
+    // of matching prose that may change.
+    let code: string | undefined;
     if (typeof exceptionResponse === 'string') {
       message = exceptionResponse;
     } else if (
@@ -32,6 +36,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     ) {
       const resp = exceptionResponse as Record<string, unknown>;
       message = (resp.message as string | string[]) ?? exception.message;
+      if (typeof resp.code === 'string') code = resp.code;
     } else {
       message = exception.message;
     }
@@ -49,6 +54,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       instance: request.url,
       timestamp: new Date().toISOString(),
       statusCode: status,
+      ...(code ? { code } : {}),
     };
 
     if (!isProduction && status >= 500) {

@@ -8,11 +8,15 @@
 
 // ─── Domain Types ─────────────────────────────────────────────────────────────
 
+import type { IntakeContextPackage, RequirementEvidence } from '../../intake/intake.types';
+
 export interface TechStack {
   frontend: string;
   backend: string;
   database: string;
   styling: string;
+  /** Only present for projects provisioned with a mobile repository. */
+  mobile?: string;
 }
 
 export interface RequirementsDocument {
@@ -21,6 +25,9 @@ export interface RequirementsDocument {
   techStack: TechStack;
   complexity: 'simple' | 'medium' | 'complex';
   estimatedFiles: number;
+  assumptions?: string[];
+  openQuestions?: string[];
+  evidence?: RequirementEvidence[];
 }
 
 export interface ProjectContract {
@@ -53,9 +60,12 @@ export interface AgentDomainContract {
  * to re-run and the validation feedback scoped to that agent's own failures.
  */
 export interface RetryDirective {
-  agentType: 'frontend' | 'backend' | 'database' | 'architecture';
+  agentType: CodeAgentType;
   feedback: string;
 }
+
+/** The agent kinds that can author artifacts. `mobile` only runs for projects with a mobile repo. */
+export type CodeAgentType = 'frontend' | 'backend' | 'database' | 'architecture' | 'mobile';
 
 export interface ExecutionValidationCheck {
   name: string;
@@ -102,7 +112,7 @@ export type DesignGuidanceInput = Partial<Omit<DesignGuidance, 'designSystem'>> 
 };
 
 export interface GeneratedArtifact {
-  agentType: 'frontend' | 'backend' | 'database' | 'architecture';
+  agentType: CodeAgentType;
   filePath: string;
   content: string;
   language: string;
@@ -137,6 +147,7 @@ export interface DevFlowStateType {
   brief: string;
   stackKey: string;
   companyName: string;
+  intakeContext: IntakeContextPackage | null;
   requirements: RequirementsDocument | null;
   contract: ProjectContract | null;
   artifacts: GeneratedArtifact[];
@@ -166,6 +177,23 @@ export interface DevFlowStateType {
   contractSummary: string;
   /** Self-critique feedback from the review node, addressed before formal validation. */
   selfCritique: string;
+  requirementsAssumptions: string[];
+  openQuestions: string[];
+  requirementsEvidence: RequirementEvidence[];
+  /**
+   * Whether this project was provisioned with a MOBILE repository. The mobile agent is opt-in
+   * per project (the PM chooses it at creation), so the Gate 1 fan-out only dispatches it when
+   * there is a repo to commit its output to — a 2-repo project never pays for mobile tokens.
+   */
+  hasMobileRepo: boolean;
+  /**
+   * Capability token letting the external agent service read/write this project's repositories
+   * for the duration of the run. Null when repository access is disabled, in which case agents
+   * generate from the contract alone. Scope is resolved server-side from this token.
+   */
+  repoToken: string | null;
+  /** Branch every agent write and the final delivery commit land on. Never the default branch. */
+  repoBranch: string | null;
   /** Runtime/build validation report for materialized generated artifacts. */
   executionValidation: ExecutionValidationReport | null;
   /** PM-selected frontend design contract, carried through prompts and validation. */
@@ -217,6 +245,7 @@ export function createInitialDevFlowState(
     brief: seed.brief ?? '',
     stackKey: seed.stackKey ?? '',
     companyName: seed.companyName ?? '',
+    intakeContext: seed.intakeContext ?? null,
     requirements: seed.requirements ?? null,
     contract: seed.contract ?? null,
     artifacts: seed.artifacts ?? [],
@@ -232,6 +261,12 @@ export function createInitialDevFlowState(
     retryPlan: seed.retryPlan ?? [],
     contractSummary: seed.contractSummary ?? '',
     selfCritique: seed.selfCritique ?? '',
+    requirementsAssumptions: seed.requirementsAssumptions ?? [],
+    openQuestions: seed.openQuestions ?? [],
+    requirementsEvidence: seed.requirementsEvidence ?? [],
+    hasMobileRepo: seed.hasMobileRepo ?? false,
+    repoToken: seed.repoToken ?? null,
+    repoBranch: seed.repoBranch ?? null,
     executionValidation: seed.executionValidation ?? null,
     designGuidance: normalizeDesignGuidance(seed.designGuidance),
   };

@@ -6,6 +6,8 @@ import { MemoryService } from '../src/memory/memory.service';
 import { RequirementsParserNode } from '../src/orchestration/nodes/requirements-parser.node';
 import { ContractNegotiatorNode } from '../src/orchestration/nodes/contract-negotiator.node';
 import { FrontendAgentNode } from '../src/orchestration/nodes/frontend-agent.node';
+import { MobileAgentNode } from '../src/orchestration/nodes/mobile-agent.node';
+import { AgentRepoService } from '../src/agent-repo/agent-repo.service';
 import { BackendAgentNode } from '../src/orchestration/nodes/backend-agent.node';
 import { DatabaseAgentNode } from '../src/orchestration/nodes/database-agent.node';
 import { ArchitectureAgentNode } from '../src/orchestration/nodes/architecture-agent.node';
@@ -89,6 +91,10 @@ function makePrismaMock() {
       createMany: vi.fn().mockResolvedValue({ count: 0 }),
       create: vi.fn().mockResolvedValue({ id: 'artifact-1' }),
     },
+    // No MOBILE repo in these fixtures, so the mobile agent stays out of the fan-out.
+    repository: {
+      count: vi.fn().mockResolvedValue(0),
+    },
     workOrder: {
       findFirst: vi.fn(),
       findMany: vi.fn().mockResolvedValue([]),
@@ -167,6 +173,8 @@ describe('OrchestrationService', () => {
   let requirementsParser: { execute: ReturnType<typeof vi.fn> };
   let contractNegotiator: { execute: ReturnType<typeof vi.fn> };
   let frontendAgent: { execute: ReturnType<typeof vi.fn> };
+  let mobileAgent: { execute: ReturnType<typeof vi.fn> };
+  let agentRepo: { isEnabled: ReturnType<typeof vi.fn>; mintSession: ReturnType<typeof vi.fn> };
   let backendAgent: { execute: ReturnType<typeof vi.fn> };
   let databaseAgent: { execute: ReturnType<typeof vi.fn> };
   let architectureAgent: { execute: ReturnType<typeof vi.fn> };
@@ -233,6 +241,13 @@ describe('OrchestrationService', () => {
         makeArtifact('frontend', 'README-frontend.md'),
       ],
     });
+    // Repository access is off in these fixtures: runs generate from the contract alone.
+    agentRepo = {
+      isEnabled: vi.fn().mockReturnValue(false),
+      mintSession: vi.fn(),
+    };
+    // Mobile is opt-in per project; these runs have no MOBILE repo, so it never fires.
+    mobileAgent = makeNodeMock({ artifacts: [] });
     backendAgent = makeNodeMock({
       artifacts: [
         makeArtifact('backend', 'src/products/products.module.ts'),
@@ -265,7 +280,7 @@ describe('OrchestrationService', () => {
     runDispatcher = {
       dispatch: vi.fn(({ label, task, onError }: OrchestrationDispatchOptions) => {
         if (!String(label).startsWith('resume_')) return;
-        void task().catch((error: unknown) => {
+        void task?.().catch((error: unknown) => {
           void onError?.(error);
         });
       }),
@@ -276,6 +291,8 @@ describe('OrchestrationService', () => {
       requirementsParser as unknown as RequirementsParserNode,
       contractNegotiator as unknown as ContractNegotiatorNode,
       frontendAgent as unknown as FrontendAgentNode,
+      mobileAgent as unknown as MobileAgentNode,
+      agentRepo as unknown as AgentRepoService,
       backendAgent as unknown as BackendAgentNode,
       databaseAgent as unknown as DatabaseAgentNode,
       architectureAgent as unknown as ArchitectureAgentNode,

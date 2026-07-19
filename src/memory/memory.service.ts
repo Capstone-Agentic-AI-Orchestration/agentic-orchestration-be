@@ -1,8 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmbeddingService } from './embedding.service';
 import { GeneratedArtifact, ProjectContract } from '../orchestration/graph/devflow.state';
+import { ContextMemoryService } from '../context-memory/context-memory.service';
+import { RecordContextMemoryDto } from '../context-memory/dto/context-memory.dto';
 
 // Types
 
@@ -137,6 +139,7 @@ export class MemoryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly embedding: EmbeddingService,
+    @Optional() private readonly contextMemory?: ContextMemoryService,
   ) {}
 
   // Reads
@@ -260,13 +263,19 @@ export class MemoryService {
 
   async buildContextForAgent(input: ReadForAgentInput): Promise<AgentMemoryContext> {
     const layers = await this.readForAgent(input);
-    const context = this.formatLayeredContext(layers);
-    const total =
+    const layeredContext = this.formatLayeredContext(layers);
+    let context = layeredContext;
+    let total =
       layers.projectCore.length +
       layers.projectAgent.length +
       layers.agentPrivate.length +
       layers.mistakes.length +
       layers.globalPatterns.length;
+    const contextPack = await this.buildFreeContextPack(input);
+    if (contextPack) {
+      context = [layeredContext, contextPack.text].filter(Boolean).join('\n\n');
+      total += this.countContextPackRecords(contextPack.included);
+    }
     return { layers, context, total };
   }
 
@@ -422,6 +431,26 @@ export class MemoryService {
       approvalSource: input.approvalSource ?? null,
       approvedAt: this.approvedAt(input.approvalSource),
     });
+
+    await this.writeContextMemorySafe({
+      projectId: input.projectId,
+      agentType: input.agentType,
+      type: 'agent_output',
+      title: `${input.agentType} output: ${input.filePath}`,
+      content: input.artifactContent,
+      importance: input.importance ?? 0.6,
+      tags: [input.agentType, input.stackKey, input.projectType],
+      artifact: {
+        path: input.filePath,
+        kind: 'generated_file',
+      },
+      metadata: {
+        sourceType: input.sourceType ?? 'agent_skill',
+        memoryType: 'SKILL',
+        stackKey: input.stackKey,
+        projectType: input.projectType,
+      },
+    });
   }
 
   /**
@@ -453,6 +482,26 @@ export class MemoryService {
       importance: 0.8,
       approvalSource: input.approvalSource ?? null,
       approvedAt: this.approvedAt(input.approvalSource),
+    });
+
+    await this.writeContextMemorySafe({
+      projectId: input.projectId,
+      agentType: 'contract',
+      type: 'project_memory',
+      title: `Approved delivery pattern: ${input.contract.projectName}`,
+      content,
+      importance: 0.8,
+      tags: [
+        'contract',
+        input.stackKey,
+        input.contract.requirements.projectType,
+        input.contract.requirements.complexity,
+      ],
+      metadata: {
+        sourceType: input.sourceType ?? 'contract_pattern',
+        memoryType: 'PATTERN',
+        approvalSource: input.approvalSource ?? null,
+      },
     });
   }
 
@@ -487,6 +536,22 @@ export class MemoryService {
       approvalSource: input.approvalSource ?? null,
       approvedAt: this.approvedAt(input.approvalSource),
     });
+
+    await this.writeContextMemorySafe({
+      projectId: input.projectId,
+      agentType: input.agentType,
+      type: 'error',
+      title: `${input.agentType} ${input.gateType} rejection`,
+      content,
+      importance: 0.9,
+      tags: [input.agentType, input.gateType.toLowerCase(), input.stackKey],
+      metadata: {
+        sourceType: input.sourceType ?? 'rejected_output',
+        memoryType: 'MISTAKE',
+        gateType: input.gateType,
+        rejectionNotes: input.rejectionNotes,
+      },
+    });
   }
 
   /**
@@ -507,6 +572,22 @@ export class MemoryService {
       importance: input.importance ?? 1,
       approvalSource: input.approvalSource,
       approvedAt: new Date(),
+    });
+
+    await this.writeContextMemorySafe({
+      projectId: input.projectId,
+      agentType: input.agentType ?? 'project_core',
+      type: 'decision',
+      title: `${input.approvalSource} approved project memory`,
+      content: input.content,
+      importance: input.importance ?? 1,
+      tags: ['project-core', input.approvalSource.toLowerCase(), input.sourceType],
+      metadata: {
+        ...input.metadata,
+        sourceType: input.sourceType,
+        memoryType: input.memoryType ?? 'PATTERN',
+        approvalSource: input.approvalSource,
+      },
     });
   }
 
@@ -813,5 +894,43 @@ export class MemoryService {
 
   private errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+  }
+
+  private async buildFreeContextPack(input: ReadForAgentInput): Promise<{
+    text: string;
+    included: Record<string, string[]>;
+  } | null> {
+    if (!this.contextMemory) return null;
+
+    try {
+      const pack = await this.contextMemory.buildContextPack({
+        projectId: input.projectId,
+        agentType: input.agentType,
+        task: input.query,
+        maxChars: 8000,
+      });
+      return pack.text.trim() ? pack : null;
+    } catch (error) {
+      this.logger.warn(
+        `ContextMemoryService.buildContextPack failed for ${input.agentType}/${input.projectId}: ${this.errorMessage(error)} - continuing without context pack`,
+      );
+      return null;
+    }
+  }
+
+  private countContextPackRecords(included: Record<string, string[]>): number {
+    return new Set(Object.values(included).flat()).size;
+  }
+
+  private async writeContextMemorySafe(input: RecordContextMemoryDto): Promise<void> {
+    if (!this.contextMemory) return;
+
+    try {
+      await this.contextMemory.record(input);
+    } catch (error) {
+      this.logger.warn(
+        `ContextMemoryService.record failed: ${this.errorMessage(error)} - continuing without context memory mirror`,
+      );
+    }
   }
 }

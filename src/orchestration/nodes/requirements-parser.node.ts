@@ -9,7 +9,7 @@ import { NODE } from '../graph/topology';
 import { AgentLlmRouter } from '../providers/agent-llm.router';
 import { StreamEmitter } from '../streaming/stream-emitter.service';
 import { humanReadableError } from './human-readable-error';
-import { REQUIREMENTS_PARSER_SYSTEM } from '../prompts/agent-prompts';
+import { REQUIREMENTS_PARSER_INTAKE_RULES, REQUIREMENTS_PARSER_SYSTEM } from '../prompts/agent-prompts';
 import { resolveModelForNode } from '../providers/base-llm.provider';
 
 // ─── Node ─────────────────────────────────────────────────────────────────────
@@ -56,6 +56,10 @@ export class RequirementsParserNode {
         query: memoryQuery,
       });
 
+      const intakeBlock = state.intakeContext
+        ? `Locked Client Intake (authoritative; do not invent beyond this package):\n${JSON.stringify(state.intakeContext, null, 2)}`
+        : 'No locked client intake package is available. Use the project brief and label any inferred assumptions.';
+
       const prompt = `You are a software architect analyzing a project brief to extract structured requirements.
 
 Project Brief:
@@ -64,6 +68,10 @@ ${state.brief}
 Preferred Stack Key: ${state.stackKey}
 
 Analyze this brief and produce a structured requirements document. Base the tech stack on the stack key hint, but infer reasonable defaults if not specified.
+
+${REQUIREMENTS_PARSER_INTAKE_RULES}
+
+${intakeBlock}
 
 ${memoryBundle.context ? `Context from similar past requirements:\n${memoryBundle.context}` : ''}`;
 
@@ -80,9 +88,12 @@ ${memoryBundle.context ? `Context from similar past requirements:\n${memoryBundl
           },
           complexity: 'simple',
           estimatedFiles: 5,
+          assumptions: [],
+          openQuestions: [],
+          evidence: [],
         };
         this.streamEmitter.emit(projectId, NODE.PARSE_REQUIREMENTS, runId ?? '', 'decision', 'Mock mode: returning predefined requirements');
-        return { requirements, complexity: 'simple' };
+        return { requirements, complexity: 'simple', requirementsAssumptions: [], openQuestions: [], requirementsEvidence: [] };
       }
 
       this.streamEmitter.emit(projectId, NODE.PARSE_REQUIREMENTS, runId ?? '', 'decision', `Calling LLM (${this.llm.model()}) to parse requirements...`);
@@ -119,6 +130,19 @@ ${memoryBundle.context ? `Context from similar past requirements:\n${memoryBundl
         ? parsed.complexity
         : 'medium';
 
+      const assumptions = Array.isArray(parsed.assumptions)
+        ? parsed.assumptions.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        : [];
+      const openQuestions = Array.isArray(parsed.openQuestions)
+        ? parsed.openQuestions.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        : [];
+      const evidence = Array.isArray(parsed.evidence)
+        ? parsed.evidence
+          .filter((item): item is { documentId: string; locator?: string; supports: string } => Boolean(
+            item && typeof item === 'object' && typeof (item as { documentId?: unknown }).documentId === 'string' && typeof (item as { supports?: unknown }).supports === 'string',
+          ))
+          .map((item) => ({ documentId: item.documentId, locator: typeof item.locator === 'string' ? item.locator : undefined, supports: item.supports }))
+        : [];
       const requirements: RequirementsDocument = {
         projectType: typeof parsed.projectType === 'string' ? parsed.projectType : 'Custom web application',
         features,
@@ -132,6 +156,9 @@ ${memoryBundle.context ? `Context from similar past requirements:\n${memoryBundl
         estimatedFiles: typeof parsed.estimatedFiles === 'number' && parsed.estimatedFiles > 0
           ? Math.ceil(parsed.estimatedFiles)
           : features.length + 6,
+        assumptions,
+        openQuestions,
+        evidence,
       };
 
       this.logger.log(
@@ -173,7 +200,7 @@ ${memoryBundle.context ? `Context from similar past requirements:\n${memoryBundl
 
       this.streamEmitter.emit(projectId, NODE.PARSE_REQUIREMENTS, runId ?? '', 'decision', `Requirements parsed: ${requirements.complexity} complexity, ${requirements.estimatedFiles} estimated files, ${requirements.features.length} features`);
 
-      return { requirements, complexity };
+      return { requirements, complexity, requirementsAssumptions: assumptions, openQuestions, requirementsEvidence: evidence };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`[${projectId}] Requirements parsing failed: ${message}`);

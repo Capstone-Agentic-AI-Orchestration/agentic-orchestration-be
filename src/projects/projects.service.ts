@@ -13,7 +13,7 @@ import {
   OrchestrationStatus,
 } from '../orchestration/orchestration.service';
 import { CreateProjectDto } from './dto/create-project.dto';
-import { ArtifactOutputReviewStatus, ArtifactReviewStatus, ArtifactValidationStatus, ClientInviteStatus, CollaborationDocumentStatus, NotificationType, OrchestrationRunTrigger, ProjectDeliveryReview, ProjectDeliveryReviewStatus, ProjectStatus, ProjectTimelineEvent, ProjectTimelineEventType, ProjectTimelineVisibility, ProjectTaskActivity, ProjectTaskActivityType, ProjectTaskStatus, Project, GateEvent, Artifact, EventLog, Prisma, ProjectKickoff, ProjectKickoffStatus, ProjectTask, UserRole, WorkOrder, WorkOrderAgentType, WorkOrderPriority, WorkOrderStatus } from '@prisma/client';
+import { ArtifactOutputReviewStatus, ArtifactReviewStatus, ArtifactValidationStatus, ClientInviteStatus, CollaborationDocumentStatus, NotificationType, OrchestrationRunTrigger, ProjectDeliveryReview, ProjectDeliveryReviewStatus, ProjectStatus, ProjectTimelineEvent, ProjectTimelineEventType, ProjectTimelineVisibility, ProjectTaskActivity, ProjectTaskActivityType, ProjectTaskStatus, Project, GateEvent, Artifact, EventLog, Prisma, ProjectKickoff, ProjectKickoffStatus, ProjectTask, RepositoryKind, RepositoryStatus, UserRole, WorkOrder, WorkOrderAgentType, WorkOrderPriority, WorkOrderStatus } from '@prisma/client';
 import { AuthUser } from '../auth/auth.types';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { AddProjectMemberDto } from './dto/project-member.dto';
@@ -29,6 +29,9 @@ import { UpdateProjectKickoffDto } from './dto/project-kickoff.dto';
 import { ControlOrchestrationDto } from './dto/control-orchestration.dto';
 import { StartOrchestrationDto } from './dto/start-orchestration.dto';
 import { NotificationsService } from '../notifications/notifications.service';
+import { IntakeService } from '../intake/intake.service';
+import { GroupsService } from '../groups/groups.service';
+import { RepositoriesService } from '../repositories/repositories.service';
 import {
   CursorPage,
   CursorPageInput,
@@ -140,7 +143,7 @@ type DeliveryReadinessSummary = {
   };
 };
 
-type ProjectListItem = Pick<Project, 'id' | 'companyName' | 'status' | 'createdAt' | 'updatedAt'> & {
+type ProjectListItem = Pick<Project, 'id' | 'companyName' | 'status' | 'createdAt' | 'updatedAt' | 'groupId'> & {
   lifecycle: ProjectLifecycleSummary;
 };
 
@@ -335,15 +338,26 @@ export class ProjectsService {
     private readonly prisma: PrismaService,
     private readonly orchestration: OrchestrationService,
     private readonly notifications: NotificationsService,
+    private readonly intake?: IntakeService,
+    private readonly groups?: GroupsService,
+    private readonly repositories?: RepositoriesService,
   ) {}
 
   async create(dto: CreateProjectDto, user: AuthUser): Promise<Project> {
+    if (dto.groupId) {
+      if (!this.groups) throw new BadRequestException('Group management is unavailable');
+      await this.groups.assertManager(dto.groupId, user);
+    }
+    if (dto.repositoryName && !dto.groupId) {
+      throw new BadRequestException('groupId is required when creating a repository');
+    }
     const project = await this.prisma.project.create({
       data: {
         companyName: dto.companyName,
         brief: dto.brief,
         stackKey: dto.stackKey,
         createdById: user.id,
+        groupId: dto.groupId,
       },
     });
 
@@ -355,6 +369,32 @@ export class ProjectsService {
       body: project.companyName,
       metadata: { status: project.status, stackKey: project.stackKey },
     });
+    if (dto.groupId && dto.repositoryName) {
+      if (!this.repositories) throw new BadRequestException('Repository provisioning is unavailable');
+      // Provision separate backend + frontend repos by default (+ mobile when opted in).
+      const base = dto.repositoryName.replace(/-(be|fe|backend|frontend|mobile|api|web)$/i, '');
+      const repos: Array<{ kind: RepositoryKind; name: string; stack?: string }> = [
+        { kind: RepositoryKind.BACKEND, name: `${base}-be`, stack: dto.backendStack },
+        { kind: RepositoryKind.FRONTEND, name: `${base}-fe`, stack: dto.frontendStack },
+      ];
+      if (dto.includeMobile) {
+        repos.push({ kind: RepositoryKind.MOBILE, name: `${base}-mobile`, stack: dto.mobileStack });
+      }
+      for (const repo of repos) {
+        await this.repositories.create(
+          {
+            groupId: dto.groupId,
+            projectId: project.id,
+            kind: repo.kind,
+            name: repo.name,
+            stack: repo.stack,
+            description: dto.repositoryDescription,
+          },
+          user,
+        );
+      }
+      return this.prisma.project.findUniqueOrThrow({ where: { id: project.id } });
+    }
     return project;
   }
 
@@ -370,6 +410,7 @@ export class ProjectsService {
         companyName: true,
         brief: true,
         stackKey: true,
+        createdById: true,
         runId: true,
         kickoff: {
           select: {
@@ -403,6 +444,7 @@ export class ProjectsService {
       throw new BadRequestException('At least one READY work order with instructions is required before orchestration can start');
     }
 
+    const intakeContext = this.intake ? await this.intake.contextForStart(project, user.id) : undefined;
     const runId = await this.orchestration.startRun(
       project.id,
       project.brief,
@@ -410,7 +452,65 @@ export class ProjectsService {
       project.companyName,
       user.id,
       OrchestrationRunTrigger.START,
+      intakeContext,
       options.designGuidance,
+    );
+
+    return { accepted: true, runId };
+  }
+
+  /**
+   * Developer-initiated orchestration start. Unlike {@link startOrchestration}
+   * (which requires a completed PM kickoff + READY work orders), this only needs
+   * the project's GitHub repository to be provisioned. The developer's prompt
+   * becomes the run brief, so the AI agents build against that repo from it.
+   */
+  async startOrchestrationFromPrompt(
+    id: string,
+    prompt: string,
+    user: AuthUser,
+  ): Promise<{ accepted: boolean; runId: string }> {
+    const project = await this.prisma.project.findFirst({
+      where: this.projectAccessWhere(user, id),
+      select: {
+        id: true,
+        companyName: true,
+        stackKey: true,
+        runId: true,
+        repositories: { select: { status: true } },
+      },
+    });
+
+    if (!project) {
+      throw new NotFoundException(`Project ${id} not found`);
+    }
+    if (project.runId) {
+      return { accepted: true, runId: project.runId };
+    }
+    if (
+      project.repositories.length === 0 ||
+      !project.repositories.some((repo) => repo.status === RepositoryStatus.ACTIVE)
+    ) {
+      throw new BadRequestException(
+        'The project repositories must be provisioned before orchestration can start',
+      );
+    }
+
+    const brief = (prompt ?? '').trim();
+    if (brief.length < 10) {
+      throw new BadRequestException('Describe what to build in at least 10 characters');
+    }
+
+    // Persist the prompt as the project brief so the run and its agents build from it.
+    await this.prisma.project.update({ where: { id: project.id }, data: { brief } });
+
+    const runId = await this.orchestration.startRun(
+      project.id,
+      brief,
+      project.stackKey,
+      project.companyName,
+      user.id,
+      OrchestrationRunTrigger.START,
     );
 
     return { accepted: true, runId };
@@ -421,6 +521,7 @@ export class ProjectsService {
     user: AuthUser,
   ): Promise<{ accepted: boolean; runId: string }> {
     const project = await this.findRunnableProject(id, user);
+    const intakeContext = this.intake ? await this.intake.contextForStart(project, user.id) : undefined;
     const runId = await this.orchestration.startRun(
       project.id,
       project.brief,
@@ -428,6 +529,7 @@ export class ProjectsService {
       project.companyName,
       user.id,
       OrchestrationRunTrigger.RERUN_READY_WORK_ORDERS,
+      intakeContext,
     );
 
     return { accepted: true, runId };
@@ -591,6 +693,7 @@ export class ProjectsService {
         status: true,
         createdAt: true,
         updatedAt: true,
+        groupId: true,
         runId: true,
         kickoff: {
           select: {
@@ -637,6 +740,7 @@ export class ProjectsService {
       status: project.status,
       createdAt: project.createdAt,
       updatedAt: project.updatedAt,
+      groupId: project.groupId,
       lifecycle: this.deriveProjectLifecycle(project),
     });
 
@@ -2538,9 +2642,10 @@ export class ProjectsService {
     user: AuthUser,
     approved: boolean,
     notes?: string,
+    acceptOpenQuestions?: boolean,
   ): Promise<{ accepted: boolean }> {
     await this.assertAccessible(id, user);
-    await this.orchestration.resumeGate1(id, approved, notes);
+    await this.orchestration.resumeGate1(id, approved, notes, acceptOpenQuestions);
     return { accepted: true };
   }
 
@@ -2760,6 +2865,7 @@ export class ProjectsService {
     companyName: string;
     brief: string;
     stackKey: string;
+    createdById: string | null;
   }> {
     const project = await this.prisma.project.findFirst({
       where: this.projectAccessWhere(user, id),
@@ -2768,6 +2874,7 @@ export class ProjectsService {
         companyName: true,
         brief: true,
         stackKey: true,
+        createdById: true,
         kickoff: {
           select: { status: true },
         },
@@ -3430,11 +3537,25 @@ export class ProjectsService {
       return where;
     }
 
+    const groupAccess: Prisma.ProjectWhereInput[] =
+      user.role === UserRole.PM || user.role === UserRole.DEV
+        ? [
+            {
+              group: {
+                members: {
+                  some: { userId: user.id, status: 'ACTIVE' },
+                },
+              },
+            },
+          ]
+        : [];
+
     return {
       ...where,
       OR: [
         { createdById: user.id },
         { members: { some: { userId: user.id } } },
+        ...groupAccess,
       ],
     };
   }

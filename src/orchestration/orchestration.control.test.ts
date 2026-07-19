@@ -47,12 +47,13 @@ function makeService() {
     }),
   };
 
-  // Positional constructor args: prisma(1), 15 unused node/service deps (2-16), sequencer(17),
-  // graphLlmProvider(18=null), gateway(19=null), emitter(20), streamEmitter(21=null).
+  // Positional constructor args: prisma(1), 17 unused node/service deps (2-18), sequencer(19),
+  // agentLlmRouter(20=null), directLlmProvider(21=null), gateway(22=null), emitter(23),
+  // streamEmitter(24=null), runDispatcher(25). executionValidation(26) is optional and omitted.
   const u = undefined as unknown as never;
   const service = new OrchestrationService(
     prisma as never,
-    u, u, u, u, u, u, u, u, u, u, u, u, u, u, u,
+    u, u, u, u, u, u, u, u, u, u, u, u, u, u, u, u, u,
     sequencer as never,
     null as never,
     null as never,

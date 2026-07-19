@@ -7,6 +7,7 @@ import configuration from './config/configuration';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProjectsModule } from './projects/projects.module';
 import { OrchestrationModule } from './orchestration/orchestration.module';
+import { AgentRepoModule } from './agent-repo/agent-repo.module';
 import { GithubModule } from './github/github.module';
 import { SupervisorModule } from './supervisor/supervisor.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
@@ -23,6 +24,10 @@ import { ReportsModule } from './reports/reports.module';
 import { DevelopersModule } from './developers/developers.module';
 import { SharedKernelModule } from './shared/shared-kernel.module';
 import { HealthModule } from './health/health.module';
+import { ContextMemoryModule } from './context-memory/context-memory.module';
+import { IntakeModule } from './intake/intake.module';
+import { GroupsModule } from './groups/groups.module';
+import { RepositoriesModule } from './repositories/repositories.module';
 
 @Module({
   imports: [
@@ -37,8 +42,10 @@ import { HealthModule } from './health/health.module';
     SharedKernelModule,
     PrismaModule,
     HealthModule,
+    ContextMemoryModule,
     AuthModule,
     GithubModule,
+    AgentRepoModule,
     // Phase 2E — WebSocket gateway (must be before OrchestrationModule so
     // GatewayModule is available for injection into OrchestrationService)
     GatewayModule,
@@ -49,6 +56,9 @@ import { HealthModule } from './health/health.module';
     NotificationsModule,
     CollaborationModule,
     InquiriesModule,
+    IntakeModule,
+    GroupsModule,
+    RepositoriesModule,
     ClientInvitesModule,
     AdminModule,
     DevFlowScheduleModule,

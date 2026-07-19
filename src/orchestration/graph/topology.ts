@@ -14,6 +14,7 @@ export const NODE = {
   NEGOTIATE_CONTRACT: 'negotiate_contract',
   GATE_1_CHECK: 'gate_1_check',
   FRONTEND_AGENT: 'frontend_agent',
+  MOBILE_AGENT: 'mobile_agent',
   BACKEND_AGENT: 'backend_agent',
   DATABASE_AGENT: 'database_agent',
   ARCHITECTURE_AGENT: 'architecture_agent',
@@ -40,11 +41,24 @@ export const CODE_AGENTS = [
   NODE.ARCHITECTURE_AGENT,
 ] as const;
 
-export type CodeAgentNode = (typeof CODE_AGENTS)[number];
+/** Every code agent that can exist in a run, including the opt-in mobile agent. */
+export const ALL_CODE_AGENTS = [...CODE_AGENTS, NODE.MOBILE_AGENT] as const;
+
+export type CodeAgentNode = (typeof ALL_CODE_AGENTS)[number];
+
+/**
+ * The code agents to dispatch for a given run. Mobile is opt-in: it only joins the fan-out when
+ * the project actually has a MOBILE repository, so backend+frontend projects never spend tokens
+ * generating React Native code that would have nowhere to be committed.
+ */
+export function codeAgentsFor(state: DevFlowStateType): readonly CodeAgentNode[] {
+  return state.hasMobileRepo ? ALL_CODE_AGENTS : CODE_AGENTS;
+}
 
 /** Maps a retry directive's agent type to the agent node to re-run. */
 export const RETRY_HINT_TO_NODE: Record<string, NodeName> = {
   frontend: NODE.FRONTEND_AGENT,
+  mobile: NODE.MOBILE_AGENT,
   backend: NODE.BACKEND_AGENT,
   database: NODE.DATABASE_AGENT,
   architecture: NODE.ARCHITECTURE_AGENT,
@@ -64,7 +78,7 @@ export interface FanoutTarget {
  */
 export function gate1Router(state: DevFlowStateType): NodeName | FanoutTarget[] {
   if (state.error) return NODE.MARK_FAILED;
-  return CODE_AGENTS.map((node) => ({ node }));
+  return codeAgentsFor(state).map((node) => ({ node }));
 }
 
 /**

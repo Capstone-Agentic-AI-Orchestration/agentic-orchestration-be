@@ -21,6 +21,7 @@ import { ProjectsService } from './projects.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { ApproveGateDto } from './dto/approve-gate.dto';
 import { ControlOrchestrationDto } from './dto/control-orchestration.dto';
+import { StartFromPromptDto } from './dto/start-from-prompt.dto';
 import { AddProjectMemberDto } from './dto/project-member.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { ShareArtifactDto } from './dto/share-artifact.dto';
@@ -623,6 +624,19 @@ export class ProjectsController {
     return this.projectsService.startOrchestration(id, user, dto);
   }
 
+  // Developer-initiated start: the prompt is the build requirement and starts the
+  // run once the repo is provisioned (no PM kickoff required).
+  @Post(':id/orchestration/start-from-prompt')
+  @Roles(UserRole.DEV, UserRole.PM, UserRole.ADMIN)
+  @HttpCode(HttpStatus.ACCEPTED)
+  startOrchestrationFromPrompt(
+    @Param('id') id: string,
+    @Body() dto: StartFromPromptDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.projectsService.startOrchestrationFromPrompt(id, dto.prompt, user);
+  }
+
   @Get(':id/orchestration/status')
   @Roles(UserRole.CLIENT, UserRole.PM, UserRole.DEV, UserRole.ADMIN)
   getOrchestrationStatus(@Param('id') id: string, @CurrentUser() user: AuthUser) {
@@ -666,14 +680,14 @@ export class ProjectsController {
   }
 
   @Post(':id/orchestration/rerun-ready')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.ACCEPTED)
   rerunReadyWorkOrders(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.projectsService.rerunReadyWorkOrders(id, user);
   }
 
   @Post(':id/orchestration/control')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   controlOrchestration(
@@ -685,7 +699,7 @@ export class ProjectsController {
   }
 
   @Post(':id/gates/architecture')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   approveGate1(
@@ -699,12 +713,14 @@ export class ProjectsController {
       `user:${user.id}:POST:/projects/${id}/gates/architecture`,
       dto,
       HttpStatus.OK,
-      () => this.projectsService.approveGate1(id, user, dto.approved, dto.notes),
+      () => dto.acceptOpenQuestions === undefined
+        ? this.projectsService.approveGate1(id, user, dto.approved, dto.notes)
+        : this.projectsService.approveGate1(id, user, dto.approved, dto.notes, dto.acceptOpenQuestions),
     );
   }
 
   @Post(':id/gates/code')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   approveGate2(

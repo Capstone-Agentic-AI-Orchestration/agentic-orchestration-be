@@ -38,3 +38,7 @@ pnpm-debug.log*
 *.njsproj
 *.sln
 *.sw?
+
+# any env file or backup (never commit secrets); keep the template
+.env*
+!.env.example

@@ -7,7 +7,13 @@ import { AgentLlmRouter } from '../providers/agent-llm.router';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StreamEmitter } from '../streaming/stream-emitter.service';
 import { humanReadableError } from './human-readable-error';
-import { FRONTEND_AGENT_SYSTEM, buildAgentSystemPrompt, buildStructuredMemoryContext, renderDesignMarkdown } from '../prompts/agent-prompts';
+import {
+  FRONTEND_AGENT_SYSTEM,
+  buildAgentSystemPrompt,
+  buildRepoAccessBlock,
+  buildStructuredMemoryContext,
+  renderDesignMarkdown,
+} from '../prompts/agent-prompts';
 import { resolveModelForNode } from '../providers/base-llm.provider';
 import { ProjectScaffolderService } from '../scaffolding/project-scaffolder.service';
 import { OutputValidationService } from '../output-validation/output-validation.service';
@@ -211,6 +217,10 @@ export class FrontendAgentNode {
         agentSkillRole: 'frontend',
       });
 
+      // Give the agent its repository capability so it can read the existing code before
+      // generating; empty string when repository access is disabled for this run.
+      const systemPromptWithRepo = systemPrompt + buildRepoAccessBlock(state.repoToken, 'frontend');
+
       const result = await this.llm.generateJson<Array<{
         filePath: string;
         content: string;
@@ -225,7 +235,7 @@ export class FrontendAgentNode {
           agent: 'frontend',
         },
         onToken: (delta) => this.streamEmitter.emit(projectId, 'frontend_agent', runId ?? '', 'token', delta),
-        systemPrompt,
+        systemPrompt: systemPromptWithRepo,
         userPrompt: `Generate frontend files for this project:
 
 Project: ${state.contract.projectName}

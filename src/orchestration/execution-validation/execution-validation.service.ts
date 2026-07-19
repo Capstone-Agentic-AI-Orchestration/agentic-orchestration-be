@@ -180,7 +180,7 @@ export class ExecutionValidationService {
   }
 
   private async checkNodeProject(
-    agentType: 'frontend' | 'backend',
+    agentType: 'frontend' | 'backend' | 'mobile',
     workdir: string,
   ): Promise<ExecutionValidationCheck[]> {
     const packageJson = await this.readPackageJson(workdir);

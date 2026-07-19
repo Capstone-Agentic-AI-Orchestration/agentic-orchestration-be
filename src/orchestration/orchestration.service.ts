@@ -24,6 +24,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RequirementsParserNode } from './nodes/requirements-parser.node';
 import { ContractNegotiatorNode } from './nodes/contract-negotiator.node';
 import { FrontendAgentNode } from './nodes/frontend-agent.node';
+import { MobileAgentNode } from './nodes/mobile-agent.node';
+import { AgentRepoService } from '../agent-repo/agent-repo.service';
 import { BackendAgentNode } from './nodes/backend-agent.node';
 import { DatabaseAgentNode } from './nodes/database-agent.node';
 import { ArchitectureAgentNode } from './nodes/architecture-agent.node';
@@ -50,6 +52,7 @@ import { AgentLlmRouter } from './providers/agent-llm.router';
 import { OrchestrationEmitter } from './streaming/orchestration-emitter.service';
 import { StreamEmitter } from './streaming/stream-emitter.service';
 import { OrchestrationRunDispatcher } from './run-dispatcher.service';
+import type { IntakeContextPackage } from '../intake/intake.types';
 import {
   AgentLlmEngineStatus,
   AgentProviderMode,
@@ -73,6 +76,7 @@ import {
   ProjectTaskStatus,
   ProjectTimelineEventType,
   ProjectTimelineVisibility,
+  RepositoryKind,
   WorkOrderAgentType,
   WorkOrderExecutionStatus,
   WorkOrderStatus,
@@ -238,6 +242,8 @@ export class OrchestrationService implements OnModuleInit {
     private readonly requirementsParser: RequirementsParserNode,
     private readonly contractNegotiator: ContractNegotiatorNode,
     private readonly frontendAgent: FrontendAgentNode,
+    private readonly mobileAgent: MobileAgentNode,
+    private readonly agentRepo: AgentRepoService,
     private readonly backendAgent: BackendAgentNode,
     private readonly databaseAgent: DatabaseAgentNode,
     private readonly architectureAgent: ArchitectureAgentNode,
@@ -499,6 +505,7 @@ Rough idea: ${input.brief}`;
       this.requirementsParser,
       this.contractNegotiator,
       this.frontendAgent,
+      this.mobileAgent,
       this.backendAgent,
       this.databaseAgent,
       this.architectureAgent,
@@ -633,6 +640,7 @@ Rough idea: ${input.brief}`;
     companyName: string,
     actorId?: string,
     trigger: OrchestrationRunTrigger = OrchestrationRunTrigger.START,
+    intakeContext?: IntakeContextPackage,
     designGuidance?: DesignGuidanceInput,
   ): Promise<string> {
     const runId = createId();
@@ -667,6 +675,7 @@ Rough idea: ${input.brief}`;
           ? MOCK_NODE.LOAD_READY_WORK_ORDERS
           : 'parse_requirements',
         actorId: actorId ?? null,
+        intakeSnapshotId: intakeContext?.intakeSnapshotId ?? null,
         readyWorkOrders,
       },
     });
@@ -734,9 +743,10 @@ Rough idea: ${input.brief}`;
       const simulationState = createInitialDevFlowState({
         projectId,
         runId,
-        brief,
+        brief: intakeContext?.canonicalBrief || brief,
         stackKey,
         companyName,
+        intakeContext,
         designGuidance: normalizedDesignGuidance,
         gate1Approved: true,
         gate2Approved: true,
@@ -752,12 +762,45 @@ Rough idea: ${input.brief}`;
       return runId;
     }
 
+    // The mobile agent is opt-in per project: it only joins the Gate 1 fan-out when the PM
+    // provisioned a MOBILE repository, so backend+frontend projects spend no mobile tokens.
+    const hasMobileRepo = (await this.prisma.repository
+      .count({ where: { projectId, kind: RepositoryKind.MOBILE } })
+      .catch(() => 0)) > 0;
+
+    // Mint the run's repository capability. Agents read/write through the backend using this
+    // token; scope is resolved from the DB, so it can only ever reach this project's repos.
+    // Failing to mint is non-fatal — agents fall back to generating from the contract alone.
+    const repoBranch = `run/${runId}`;
+    let repoToken: string | null = null;
+    // Repository tools live in the external Eve agent service. The in-process graph provider has
+    // no tool-calling, so minting a token there would put "call read_repo_file" in a prompt for a
+    // tool the model cannot invoke — it would hallucinate reads instead of failing loudly.
+    // Both conditions must hold: the engine must be Eve AND the callback must be configured.
+    const repoToolsAvailable =
+      process.env.ORCHESTRATION_LLM_ENGINE === 'eve' && this.agentRepo.isEnabled();
+    if (repoToolsAvailable) {
+      repoToken = await this.agentRepo
+        .mintSession({ runId, projectId, agentType: 'run', branch: repoBranch })
+        .then((session) => session.token)
+        .catch((error: unknown) => {
+          this.logger.warn(
+            `[${projectId}] Could not mint agent repository session: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return null;
+        });
+    }
+
     const initialState = createInitialDevFlowState({
       projectId,
       runId,
-      brief,
+      brief: intakeContext?.canonicalBrief || brief,
       stackKey,
       companyName,
+      intakeContext,
+      hasMobileRepo,
+      repoToken,
+      repoBranch,
       designGuidance: normalizedDesignGuidance,
     });
 
@@ -793,6 +836,7 @@ Rough idea: ${input.brief}`;
     projectId: string,
     approved: boolean,
     notes?: string,
+    acceptOpenQuestions = false,
   ): Promise<void> {
     this.logger.log(
       `Resuming gate 1 for project ${projectId}: approved=${approved}`,
@@ -800,6 +844,12 @@ Rough idea: ${input.brief}`;
 
     const runId = await this.getRunId(projectId);
     const state = await this.loadCheckpointState(runId);
+
+    if (approved && state?.openQuestions?.length && !acceptOpenQuestions) {
+      throw new BadRequestException(
+        'This intake has unresolved requirement questions. Resolve them or set acceptOpenQuestions to true with an approval note.',
+      );
+    }
 
     if (!approved) {
       await Promise.all([
@@ -874,7 +924,7 @@ Rough idea: ${input.brief}`;
     }
     const resumedState = applyDevFlowPartial(state, {
       gate1Approved: true,
-      gate1Notes: notes ?? '',
+      gate1Notes: [notes ?? '', state.openQuestions?.length && acceptOpenQuestions ? `Accepted open questions: ${state.openQuestions.join('; ')}` : ''].filter(Boolean).join('\n'),
     });
 
     // Notify subscribers that code generation has begun after Gate 1 approval

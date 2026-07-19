@@ -20,6 +20,10 @@ model Project {
   status      ProjectStatus   @default(PENDING)
   runId       String?         @unique
   repoUrl     String?
+  groupId     String?
+  group       Group?          @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  repositories Repository[]
+  agentRepoSessions AgentRepoSession[]
   createdById String?         @db.Uuid
   createdBy   Profile?        @relation("ProjectCreatedBy", fields: [createdById], references: [id])
   version     Int             @default(1)
@@ -38,6 +42,8 @@ model Project {
   clientInvites ClientInvite[]
   kickoff     ProjectKickoff?
   deliveryReview ProjectDeliveryReview?
+  intake       ProjectIntake?
+  intakeSnapshots ProjectIntakeSnapshot[]
   orchestrationRuns OrchestrationRun[]
   orchestrationJobs OrchestrationJob[]
   providerInvocations ProviderInvocation[]
@@ -45,6 +51,7 @@ model Project {
   scheduleEvents ScheduleEvent[]
 
   @@index([createdById])
+  @@index([groupId])
   @@index([id, version])
   @@schema("projects")
 }
@@ -123,6 +130,95 @@ model ClientInvite {
   @@index([createdById])
   @@index([acceptedById])
   @@map("client_invites")
+  @@schema("intake")
+}
+
+enum ProjectIntakeStatus {
+  DRAFT
+  SUBMITTED
+  CHANGES_REQUESTED
+  READY
+  LOCKED
+  SUPERSEDED
+
+  @@schema("intake")
+}
+
+enum DocumentExtractionStatus {
+  PENDING
+  EXTRACTING
+  READY
+  FAILED
+
+  @@schema("intake")
+}
+
+model ProjectIntake {
+  id            String              @id @default(cuid())
+  projectId     String              @unique
+  project       Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  payload       Json                @default("{}")
+  status        ProjectIntakeStatus @default(DRAFT)
+  createdById   String?             @db.Uuid
+  createdBy     Profile?            @relation("ProjectIntakeCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  submittedById String?             @db.Uuid
+  submittedBy   Profile?            @relation("ProjectIntakeSubmitter", fields: [submittedById], references: [id], onDelete: SetNull)
+  submittedAt   DateTime?
+  reviewedById  String?             @db.Uuid
+  reviewedBy    Profile?            @relation("ProjectIntakeReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewNote    String?             @db.Text
+  reviewedAt    DateTime?
+  version       Int                 @default(1)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  comments      ProjectIntakeComment[]
+  snapshots     ProjectIntakeSnapshot[]
+
+  @@index([status, updatedAt])
+  @@index([createdById])
+  @@index([submittedById])
+  @@index([reviewedById])
+  @@map("project_intakes")
+  @@schema("intake")
+}
+
+model ProjectIntakeComment {
+  id          String         @id @default(cuid())
+  intakeId    String
+  intake      ProjectIntake  @relation(fields: [intakeId], references: [id], onDelete: Cascade)
+  section     String
+  message     String         @db.Text
+  resolvedAt  DateTime?
+  createdById String?        @db.Uuid
+  createdBy   Profile?       @relation("ProjectIntakeCommentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime       @default(now())
+
+  @@index([intakeId, createdAt])
+  @@index([createdById])
+  @@map("project_intake_comments")
+  @@schema("intake")
+}
+
+model ProjectIntakeSnapshot {
+  id             String              @id @default(cuid())
+  projectId      String
+  project        Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  intakeId       String
+  intake         ProjectIntake       @relation(fields: [intakeId], references: [id], onDelete: Cascade)
+  version        Int
+  payload        Json
+  contextPackage Json
+  pmNotes        String?             @db.Text
+  lockedById     String?             @db.Uuid
+  lockedBy       Profile?            @relation("ProjectIntakeLocker", fields: [lockedById], references: [id], onDelete: SetNull)
+  lockedAt       DateTime            @default(now())
+  createdAt      DateTime            @default(now())
+  orchestrationRuns OrchestrationRun[]
+
+  @@unique([projectId, version])
+  @@index([intakeId, createdAt])
+  @@index([lockedById])
+  @@map("project_intake_snapshots")
   @@schema("intake")
 }
 
@@ -275,6 +371,9 @@ enum UserRole {
 }
 
 enum ProfileStatus {
+  /// Signed in, but not yet approved by a project manager. The auth guard refuses
+  /// these accounts: they exist so the person can see their request status, nothing more.
+  PENDING
   ACTIVE
   SUSPENDED
 
@@ -320,6 +419,8 @@ model Profile {
   id              String          @id @db.Uuid
   email           String?         @unique
   fullName        String?
+  githubLogin     String?         @unique
+  avatarUrl       String?
   role            UserRole        @default(CLIENT)
   status          ProfileStatus   @default(ACTIVE)
   preferences     Json            @default("{}")
@@ -339,6 +440,11 @@ model Profile {
   messageReads    ConversationRead[]
   uploadedDocuments CollaborationDocument[] @relation("DocumentUploader")
   reviewedDocuments CollaborationDocument[] @relation("DocumentReviewer")
+  createdIntakes ProjectIntake[] @relation("ProjectIntakeCreator")
+  submittedIntakes ProjectIntake[] @relation("ProjectIntakeSubmitter")
+  reviewedIntakes ProjectIntake[] @relation("ProjectIntakeReviewer")
+  intakeComments ProjectIntakeComment[] @relation("ProjectIntakeCommentCreator")
+  lockedIntakeSnapshots ProjectIntakeSnapshot[] @relation("ProjectIntakeLocker")
   reviewedInquiries ClientInquiry[] @relation("InquiryReviewer")
   createdClientInvites ClientInvite[] @relation("InviteCreator")
   acceptedClientInvites ClientInvite[] @relation("InviteAcceptor")
@@ -350,6 +456,14 @@ model Profile {
   scheduleEvents ScheduleEvent[] @relation("ScheduleOwner")
   developerProfile DeveloperProfile?
   adminAuditLogs AdminAuditLog[] @relation("AdminAuditActor")
+  ownedGroups Group[] @relation("GroupOwner")
+  groupMemberships GroupMember[] @relation("GroupMembershipUser")
+  groupInvitations GroupInvitation[] @relation("GroupInvitationRecipient")
+  sentGroupInvitations GroupInvitation[] @relation("GroupInvitationSender")
+  createdRepositories Repository[] @relation("RepositoryCreator")
+  repositoryAssignments RepositoryAssignment[] @relation("RepositoryAssignmentUser")
+  assignedRepositoryAccess RepositoryAssignment[] @relation("RepositoryAssignmentActor")
+  groupActivityEvents GroupActivityEvent[] @relation("GroupActivityActor")
 
   @@index([role])
   @@index([status])
@@ -407,6 +521,209 @@ model ProjectMember {
   @@index([userId])
   @@index([projectId, role])
   @@map("project_members")
+  @@schema("projects")
+}
+
+enum GroupRole {
+  LEAD
+  DELEGATED_LEAD
+  MEMBER
+  VIEWER
+
+  @@schema("projects")
+}
+
+enum GroupLifecycleStatus {
+  ACTIVE
+  ARCHIVED
+
+  @@schema("projects")
+}
+
+enum GroupMemberStatus {
+  ACTIVE
+  REMOVED
+
+  @@schema("projects")
+}
+
+enum GroupInvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  REVOKED
+
+  @@schema("projects")
+}
+
+enum RepositoryStatus {
+  PENDING
+  ACTIVE
+  FAILED
+  ARCHIVED
+
+  @@schema("projects")
+}
+
+enum RepositoryKind {
+  BACKEND
+  FRONTEND
+  MOBILE
+
+  @@schema("projects")
+}
+
+enum RepositoryAssignmentDesiredState {
+  ASSIGNED
+  UNASSIGNED
+
+  @@schema("projects")
+}
+
+enum RepositoryAssignmentEffectiveState {
+  PENDING
+  ACTIVE
+  REVOKING
+  REVOKED
+  FAILED
+
+  @@schema("projects")
+}
+
+model Group {
+  id                   String               @id @default(cuid())
+  name                 String
+  description          String?              @db.Text
+  businessUnit         String?
+  status               GroupLifecycleStatus @default(ACTIVE)
+  ownerId              String               @db.Uuid
+  owner                Profile              @relation("GroupOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  githubInstallationId String?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  members              GroupMember[]
+  invitations          GroupInvitation[]
+  projects             Project[]
+  repositories         Repository[]
+  activityEvents       GroupActivityEvent[]
+
+  @@index([ownerId, status])
+  @@index([githubInstallationId])
+  @@map("groups")
+  @@schema("projects")
+}
+
+model GroupMember {
+  id        String            @id @default(cuid())
+  groupId   String
+  group     Group             @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userId    String            @db.Uuid
+  user      Profile           @relation("GroupMembershipUser", fields: [userId], references: [id], onDelete: Cascade)
+  role      GroupRole         @default(MEMBER)
+  status    GroupMemberStatus @default(ACTIVE)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  @@unique([groupId, userId])
+  @@index([userId, status])
+  @@index([groupId, role, status])
+  @@map("group_members")
+  @@schema("projects")
+}
+
+model GroupInvitation {
+  id            String                @id @default(cuid())
+  groupId       String
+  group         Group                 @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  invitedUserId String                @db.Uuid
+  invitedUser   Profile               @relation("GroupInvitationRecipient", fields: [invitedUserId], references: [id], onDelete: Cascade)
+  invitedById   String                @db.Uuid
+  invitedBy     Profile               @relation("GroupInvitationSender", fields: [invitedById], references: [id], onDelete: Cascade)
+  role          GroupRole             @default(MEMBER)
+  status        GroupInvitationStatus @default(PENDING)
+  respondedAt   DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  @@unique([groupId, invitedUserId])
+  @@index([invitedUserId, status, createdAt])
+  @@index([invitedById])
+  @@index([groupId, status])
+  @@map("group_invitations")
+  @@schema("projects")
+}
+
+model Repository {
+  id            String                 @id @default(cuid())
+  groupId       String
+  group         Group                  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  projectId     String
+  project       Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  kind          RepositoryKind         @default(BACKEND)
+  stack         String?
+  name          String
+  fullName      String?                @unique
+  htmlUrl       String?
+  cloneUrl      String?
+  defaultBranch String                 @default("main")
+  visibility    String                 @default("private")
+  status        RepositoryStatus       @default(PENDING)
+  lastError     String?                @db.Text
+  createdById   String                 @db.Uuid
+  createdBy     Profile                @relation("RepositoryCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  provisionedAt DateTime?
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+  assignments   RepositoryAssignment[]
+
+  @@unique([projectId, kind])
+  @@index([groupId, status])
+  @@index([createdById])
+  @@map("repositories")
+  @@schema("projects")
+}
+
+model RepositoryAssignment {
+  id             String                             @id @default(cuid())
+  repositoryId   String
+  repository     Repository                         @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  userId         String                             @db.Uuid
+  user           Profile                            @relation("RepositoryAssignmentUser", fields: [userId], references: [id], onDelete: Cascade)
+  assignedById   String                             @db.Uuid
+  assignedBy     Profile                            @relation("RepositoryAssignmentActor", fields: [assignedById], references: [id], onDelete: Restrict)
+  desiredState   RepositoryAssignmentDesiredState   @default(ASSIGNED)
+  effectiveState RepositoryAssignmentEffectiveState @default(PENDING)
+  githubTeamSlug String?
+  lastError      String?                            @db.Text
+  lastSyncedAt   DateTime?
+  createdAt      DateTime                           @default(now())
+  updatedAt      DateTime                           @updatedAt
+
+  @@unique([repositoryId, userId])
+  @@index([userId, desiredState, effectiveState])
+  @@index([assignedById])
+  @@index([repositoryId, desiredState])
+  @@map("repository_assignments")
+  @@schema("projects")
+}
+
+model GroupActivityEvent {
+  id         String   @id @default(cuid())
+  groupId    String
+  group      Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  actorId    String?  @db.Uuid
+  actor      Profile? @relation("GroupActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+  eventCode  String
+  targetType String
+  targetId   String?
+  message    String
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  @@index([groupId, createdAt])
+  @@index([actorId])
+  @@index([eventCode, createdAt])
+  @@map("group_activity_events")
   @@schema("projects")
 }
 
@@ -486,6 +803,11 @@ enum NotificationType {
   COLLAB_MESSAGE_SENT
   COLLAB_DOCUMENT_UPLOADED
   COLLAB_DOCUMENT_REVIEWED
+  INTAKE_SUBMITTED
+  INTAKE_CHANGES_REQUESTED
+  INTAKE_READY
+  INTAKE_LOCKED
+  GROUP_INVITATION_SENT
 
   @@schema("notifications")
 }
@@ -518,6 +840,10 @@ enum ProjectTimelineEventType {
   COLLAB_MESSAGE_SENT
   COLLAB_DOCUMENT_UPLOADED
   COLLAB_DOCUMENT_REVIEWED
+  INTAKE_SUBMITTED
+  INTAKE_CHANGES_REQUESTED
+  INTAKE_READY
+  INTAKE_LOCKED
 
   @@schema("projects")
 }
@@ -658,6 +984,10 @@ model CollaborationDocument {
   description    String?                     @db.Text
   fileName       String?
   externalUrl    String?
+  storageKey     String?
+  mimeType       String?
+  sizeBytes      Int?
+  sha256         String?
   kind           CollaborationDocumentKind   @default(GENERAL)
   status         CollaborationDocumentStatus @default(UPLOADED)
   clientVisible  Boolean                     @default(false)
@@ -670,6 +1000,7 @@ model CollaborationDocument {
   version        Int                         @default(1)
   createdAt      DateTime                    @default(now())
   updatedAt      DateTime                    @updatedAt
+  extraction     DocumentExtraction?
 
   @@index([projectId, clientVisible, status])
   @@index([id, version])
@@ -679,9 +1010,28 @@ model CollaborationDocument {
   @@schema("collaboration")
 }
 
+model DocumentExtraction {
+  id              String                   @id @default(cuid())
+  documentId      String                   @unique
+  document        CollaborationDocument    @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  status          DocumentExtractionStatus @default(PENDING)
+  extractedText   String?                  @db.Text
+  sourceLocations Json                     @default("[]")
+  error           String?                  @db.Text
+  attempts        Int                      @default(0)
+  extractedAt     DateTime?
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+
+  @@index([status, updatedAt])
+  @@map("document_extractions")
+  @@schema("intake")
+}
+
 enum WorkOrderAgentType {
   FRONTEND
   BACKEND
+  MOBILE
   DATABASE
   ARCHITECTURE
   CONTRACT
@@ -820,6 +1170,8 @@ model OrchestrationRun {
   checkpointState Json?
   error           String?                 @db.Text
   actorId         String?                 @db.Uuid
+  intakeSnapshotId String?
+  intakeSnapshot   ProjectIntakeSnapshot? @relation(fields: [intakeSnapshotId], references: [id], onDelete: SetNull)
   dispatchLabel   String?
   dispatchQueuedAt DateTime?
   leaseOwner      String?
@@ -841,10 +1193,40 @@ model OrchestrationRun {
   @@index([projectId, createdAt])
   @@index([projectId, status])
   @@index([actorId])
+  @@index([intakeSnapshotId])
   @@index([status, dispatchQueuedAt])
   @@index([leaseExpiresAt])
   @@index([lastHeartbeatAt])
   @@map("orchestration_runs")
+  @@schema("orchestration")
+}
+
+/// A short-lived capability granting one agent turn read/write access to exactly one
+/// project's repositories.
+///
+/// The agent service (agentic-orchestration-ag) holds no GitHub credentials. It calls back
+/// into this backend with the opaque `token`, which resolves to a projectId here — so
+/// repository scope is enforced server-side against the database, never from a value the
+/// model produced. Tokens are single-run, time-boxed, and revocable.
+model AgentRepoSession {
+  id          String    @id @default(cuid())
+  token       String    @unique
+  runId       String
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// Branch every write from this turn lands on; never the default branch.
+  branch      String
+  agentType   String
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  lastUsedAt  DateTime?
+  useCount    Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  @@index([projectId])
+  @@index([runId])
+  @@index([expiresAt])
+  @@map("agent_repo_sessions")
   @@schema("orchestration")
 }
 

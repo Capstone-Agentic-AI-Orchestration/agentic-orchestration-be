@@ -18,6 +18,7 @@ function makeImpls(overrides: Partial<DevFlowNodeImpls> = {}): DevFlowNodeImpls 
     [NODE.PARSE_REQUIREMENTS]: passthrough(),
     [NODE.NEGOTIATE_CONTRACT]: passthrough(),
     [NODE.FRONTEND_AGENT]: passthrough(),
+    [NODE.MOBILE_AGENT]: passthrough(),
     [NODE.BACKEND_AGENT]: passthrough(),
     [NODE.DATABASE_AGENT]: passthrough(),
     [NODE.ARCHITECTURE_AGENT]: passthrough(),
