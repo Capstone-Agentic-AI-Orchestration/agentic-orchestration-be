@@ -2,7 +2,7 @@
 
 ## Context
 
-DevFlow is an AI-powered code generation orchestration backend built for Alphaexplora, a 12-person Philippine IT consultancy. It accepts project briefs, orchestrates a multi-agent LangGraph pipeline to generate full-stack codebases, routes the output through two human-in-the-loop approval gates, and commits approved code to a GitHub organization.
+DevFlow is an AI-powered code generation orchestration backend built for Alphaexplora, a 12-person Philippine IT consultancy. It accepts project briefs, orchestrates a multi-agent sequencer to generate full-stack codebases, routes the output through two human-in-the-loop approval gates, and commits approved code to a GitHub organization.
 
 Phase 1 delivered the core pipeline. Phase 2 adds four capability layers on top of Phase 1's foundation without replacing any existing infrastructure.
 
@@ -31,7 +31,7 @@ Phase 1 delivered the core pipeline. Phase 2 adds four capability layers on top 
                              │ fire-and-forget
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    LangGraph StateGraph                          │
+│                    Orchestration Sequencer                       │
 │                                                                  │
 │  parse_requirements ──► negotiate_contract ──► [GATE 1]         │
 │                                                     │           │
@@ -50,15 +50,15 @@ Phase 1 delivered the core pipeline. Phase 2 adds four capability layers on top 
 │                                                     │           │
 │                                           mark_delivered        │
 └─────────────────────────────────────────────────────────────────┘
-              │ reads/writes                        │ checkpoints
+              │ reads/writes                        │ checkpoint state
               ▼                                     ▼
 ┌─────────────────────────┐          ┌──────────────────────────┐
 │  PostgreSQL 16           │          │  PostgreSQL 16            │
-│  (pgvector extension)   │          │  (LangGraph checkpoints)  │
+│  (pgvector extension)   │          │  (run-state checkpoints)  │
 │                         │          │                           │
-│  Project                │          │  checkpoints              │
-│  GateEvent              │          │  checkpoint_writes        │
-│  Artifact               │          │  checkpoint_blobs         │
+│  Project                │          │  OrchestrationRun         │
+│  GateEvent              │          │  checkpointState          │
+│  Artifact               │          │                           │
 │  AgentMemory ← Phase 2A │          │  checkpoint_migrations    │
 │  EventLog    ← Phase 2B │          └──────────────────────────┘
 │  RunBudget   ← Phase 2B │
@@ -123,13 +123,13 @@ Development uses `lists=10` (IVFFlat). Rebuild with HNSW (`m=16, ef_construction
 |-------|-----------|
 | Runtime | Node.js 20, TypeScript strict mode |
 | Framework | NestJS 10 |
-| Graph engine | LangGraph JS 0.2 |
-| Checkpointing | PostgresSaver (langgraph-checkpoint-postgres) |
+| Orchestration engine | In-process OrchestrationSequencer |
+| Checkpointing | `OrchestrationRun.checkpointState` |
 | App ORM | Prisma 5 |
 | Vector search | pgvector (Postgres extension) |
-| LLM — codegen | claude-haiku-4-5 |
-| LLM — contract/arch | claude-haiku-4-5 (sonnet in Phase 2D) |
-| LLM — requirements | gpt-4o-mini |
+| LLM — codegen | Eve or direct provider via `LLM_PROVIDER` |
+| LLM — contract/arch | Eve or direct provider via `LLM_PROVIDER` |
+| LLM — requirements | Eve or direct provider via `LLM_PROVIDER` |
 | Embeddings | text-embedding-3-small (1536-dim) |
 | Tests | Vitest |
 | Container | Docker Compose |

@@ -2,15 +2,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ValidatorNode } from './validator.node';
 import { OutputValidationService } from '../output-validation/output-validation.service';
 import type { DevFlowStateType, GeneratedArtifact, ProjectContract } from '../graph/devflow.state';
+import { createBackendApiContractArtifact, createDatabaseModelContractArtifact, createOutputStructureContractArtifact } from '../domain-contracts';
 
-function contract(fileManifest: string[]): ProjectContract {
+function contract(fileManifest: string[], features: string[] = []): ProjectContract {
   return {
     projectId: 'proj-1',
     projectName: 'Test',
     description: 'Test project',
     requirements: {
       projectType: 'app',
-      features: [],
+      features,
       techStack: { frontend: 'Next.js', backend: 'NestJS', database: 'PostgreSQL', styling: 'Tailwind' },
       complexity: 'medium',
       estimatedFiles: 2,
@@ -136,6 +137,104 @@ describe('ValidatorNode multi-agent retry', () => {
     expect(frontend?.feedback).toContain('/api/invoices');
     // Backend exposed a valid route, so it should not be told to retry.
     expect(plan.find((d) => d.agentType === 'backend')).toBeUndefined();
+  });
+
+  it('routes domain contract drift to backend and database owners', async () => {
+    process.env.ORCHESTRATION_TYPECHECK = 'false';
+    const { node } = makeNode();
+    const contractState = state([], 0);
+    contractState.contract = contract([], ['Invoice tracking']);
+    const apiContractArtifact = createBackendApiContractArtifact(contractState);
+    const dataModelArtifact = createDatabaseModelContractArtifact({
+      ...contractState,
+      artifacts: [apiContractArtifact],
+    } as DevFlowStateType);
+    const result = await node.execute(
+      state([
+        apiContractArtifact,
+        {
+          agentType: 'backend',
+          filePath: 'src/orders.controller.ts',
+          content: 'import { Controller, Get } from "@nestjs/common"; @Controller("orders") export class OrdersController { @Get() list(): string { return "orders"; } }',
+          language: 'typescript',
+        },
+        dataModelArtifact,
+        {
+          agentType: 'database',
+          filePath: 'prisma/schema.prisma',
+          content: 'model Order {\n  id String @id @default(cuid())\n}',
+          language: 'prisma',
+        },
+      ]),
+    );
+
+    const plan = result.retryPlan ?? [];
+    const backend = plan.find((d) => d.agentType === 'backend');
+    const database = plan.find((d) => d.agentType === 'database');
+    expect(backend?.feedback).toContain('API_CONTRACT.json');
+    expect(backend?.feedback).toContain('invoice-tracking');
+    expect(database?.feedback).toContain('DATA_MODEL.json');
+    expect(database?.feedback).toContain('InvoiceTracking');
+  });
+
+  it('routes output structure violations to the owning agent', async () => {
+    process.env.ORCHESTRATION_TYPECHECK = 'false';
+    const { node } = makeNode();
+    const contractState = state([], 0);
+    contractState.contract = contract([], ['Invoice tracking']);
+    const result = await node.execute(
+      state([
+        createOutputStructureContractArtifact(contractState),
+        {
+          agentType: 'backend',
+          filePath: 'src/orders.service.ts',
+          content: 'import { Injectable } from "@nestjs/common"; @Injectable() export class OrdersService { findAll(): string[] { return ["one"]; } }\n',
+          language: 'typescript',
+        },
+      ]),
+    );
+
+    const plan = result.retryPlan ?? [];
+    const backend = plan.find((d) => d.agentType === 'backend');
+    expect(backend?.feedback).toContain('OUTPUT_STRUCTURE.json');
+    expect(backend?.feedback).toContain('src/modules/<resource>');
+    expect(plan.find((d) => d.agentType === 'frontend')).toBeUndefined();
+  });
+
+  it('scopes missing, duplicate, and forbidden file feedback to the responsible agent', async () => {
+    process.env.ORCHESTRATION_TYPECHECK = 'false';
+    const { node } = makeNode();
+    const invalidState = state([
+      {
+        agentType: 'frontend',
+        filePath: 'src/app/page.tsx',
+        content: `export default function Page() { return <main>Project dashboard</main>; }`,
+        language: 'typescript',
+      },
+      {
+        agentType: 'frontend',
+        filePath: 'src/app/page.tsx',
+        content: `export function DuplicatePage() { return <main>Duplicate dashboard</main>; }`,
+        language: 'typescript',
+      },
+      {
+        agentType: 'frontend',
+        filePath: 'package.json',
+        content: `{"scripts":{"build":"next build"},"dependencies":{"next":"16.0.0"}}`,
+        language: 'json',
+      },
+    ]);
+    invalidState.contract = contract(['src/app/page.tsx', 'src/app/dashboard.tsx']);
+
+    const result = await node.execute(invalidState);
+    const plan = result.retryPlan ?? [];
+    const frontend = plan.find((d) => d.agentType === 'frontend');
+
+    expect(plan.map((d) => d.agentType)).toEqual(['frontend']);
+    expect(frontend?.feedback).toContain('Duplicate generated filePath');
+    expect(frontend?.feedback).toContain('scaffolded by DevFlow');
+    expect(frontend?.feedback).toContain('MISSING FILE: src/app/dashboard.tsx');
+    expect(frontend?.feedback).toContain('RETRY SCOPE: frontend agent only');
   });
 
   it('terminates with an error and empty plan when retries are exhausted', async () => {

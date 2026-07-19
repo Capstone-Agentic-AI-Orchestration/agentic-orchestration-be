@@ -56,7 +56,11 @@ export class IdempotencyService {
     });
 
     if (existing && existing.expiresAt > now) {
-      return this.handleExisting(existing, input);
+      const reclaimed = await this.reclaimExpiredProcessingRecord(existing, input, now);
+      if (!reclaimed) {
+        return this.handleExisting(existing, input, now);
+      }
+      return this.executeClaimedRecord(reclaimed.record, input);
     }
 
     const claimed = existing
@@ -72,8 +76,13 @@ export class IdempotencyService {
       return claimed.result;
     }
 
-    const { record } = claimed;
+    return this.executeClaimedRecord(claimed.record, input);
+  }
 
+  private async executeClaimedRecord<TBody>(
+    record: IdempotencyRecord,
+    input: IdempotencyRunInput<TBody>,
+  ): Promise<IdempotencyRunResult<TBody>> {
     try {
       const body = await input.handler();
       await this.prisma.idempotencyRecord.update({
@@ -108,6 +117,7 @@ export class IdempotencyService {
   private handleExisting<TBody>(
     record: IdempotencyRecord,
     input: IdempotencyRunInput<TBody>,
+    now: Date,
   ): IdempotencyRunResult<TBody> {
     if (record.requestHash !== input.requestHash) {
       throw new BadRequestException(
@@ -126,11 +136,7 @@ export class IdempotencyService {
       };
     }
 
-    if (
-      record.status === IdempotencyRecordStatus.PROCESSING &&
-      record.lockedUntil &&
-      record.lockedUntil > new Date()
-    ) {
+    if (record.status === IdempotencyRecordStatus.PROCESSING && record.lockedUntil && record.lockedUntil > now) {
       throw new ConflictException(
         'Request with this Idempotency-Key is still processing',
       );
@@ -204,7 +210,7 @@ export class IdempotencyService {
         throw err;
       }
 
-      return { result: this.handleExisting(existing, input) };
+      return { result: this.handleExisting(existing, input, new Date()) };
     }
   }
 
@@ -241,5 +247,40 @@ export class IdempotencyService {
 
   private toJsonValue(value: unknown): Prisma.InputJsonValue {
     return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+  }
+
+  private async reclaimExpiredProcessingRecord<TBody>(
+    record: IdempotencyRecord,
+    input: IdempotencyRunInput<TBody>,
+    now: Date,
+  ): Promise<{ record: IdempotencyRecord } | null> {
+    if (record.requestHash !== input.requestHash || record.status !== IdempotencyRecordStatus.PROCESSING) {
+      return null;
+    }
+    if (record.lockedUntil && record.lockedUntil > now) {
+      return null;
+    }
+
+    const claimed = await this.prisma.idempotencyRecord.updateMany({
+      where: {
+        id: record.id,
+        requestHash: input.requestHash,
+        status: IdempotencyRecordStatus.PROCESSING,
+        OR: [
+          { lockedUntil: null },
+          { lockedUntil: { lte: now } },
+        ],
+      },
+      data: this.processingData(record.key, input, now),
+    });
+
+    if (claimed.count !== 1) {
+      return null;
+    }
+
+    const next = await this.prisma.idempotencyRecord.findUnique({
+      where: { id: record.id },
+    });
+    return next ? { record: next } : null;
   }
 }

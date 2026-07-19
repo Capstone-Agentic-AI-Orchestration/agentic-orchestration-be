@@ -7,10 +7,17 @@ import { AgentLlmRouter } from '../providers/agent-llm.router';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StreamEmitter } from '../streaming/stream-emitter.service';
 import { humanReadableError } from './human-readable-error';
-import { FRONTEND_AGENT_SYSTEM, buildAgentSystemPrompt, buildRepoAccessBlock, buildStructuredMemoryContext } from '../prompts/agent-prompts';
+import {
+  FRONTEND_AGENT_SYSTEM,
+  buildAgentSystemPrompt,
+  buildRepoAccessBlock,
+  buildStructuredMemoryContext,
+  renderDesignMarkdown,
+} from '../prompts/agent-prompts';
 import { resolveModelForNode } from '../providers/base-llm.provider';
 import { ProjectScaffolderService } from '../scaffolding/project-scaffolder.service';
 import { OutputValidationService } from '../output-validation/output-validation.service';
+import { buildOutputStructureContract, createOutputStructureContractArtifact, renderDomainContractContext } from '../domain-contracts';
 
 @Injectable()
 export class FrontendAgentNode {
@@ -66,17 +73,28 @@ export class FrontendAgentNode {
         /\.(tsx|jsx|css|scss|module\.css)$|README-frontend\.md$/i.test(f),
       );
 
+      const outputStructureContract = buildOutputStructureContract(state);
+      const mvvmFeatureFiles = outputStructureContract.agents.frontend.features
+        .flatMap((feature) => [
+          feature.modelPath,
+          feature.viewModelPath,
+          feature.viewPath,
+          feature.routePath,
+        ]);
       const coreSourceFiles = [
         'src/app/page.tsx',
         'src/app/layout.tsx',
-        'src/components/ui/Button.tsx',
-        'src/components/ui/Card.tsx',
+        'src/shared/ui/Button.tsx',
+        'src/shared/ui/Card.tsx',
         'src/styles/globals.css',
         'README-frontend.md',
+        ...mvvmFeatureFiles,
       ];
       const allFrontendFiles = [
         ...new Set([...coreSourceFiles, ...frontendSourceFiles]),
       ];
+      const designContractArtifact = this.createDesignContractArtifact(state);
+      const outputStructureArtifact = createOutputStructureContractArtifact(state);
 
       const skipCandidate = await this.memory.findSkipCandidate(
         'frontend',
@@ -99,13 +117,17 @@ export class FrontendAgentNode {
             language: 'typescript',
             source: 'skip',
           };
-          const validationErrors = this.outputValidation.validateBatch([candidateArtifact], state.projectId);
+          const validationErrors = this.outputValidation.validateBatch(
+            [designContractArtifact, outputStructureArtifact, candidateArtifact],
+            state.projectId,
+            { designGuidance: state.designGuidance },
+          );
           if (validationErrors.length === 0) {
             this.logger.log(
               `[${state.projectId}] Skip-generation: reusing frontend memory artifact (similarity=${skipCandidate.similarity?.toFixed(3)})`,
             );
             await this.memory.bumpUsageStats(skipCandidate.id);
-            return { artifacts: this.mergeWithScaffold([candidateArtifact], state), validationFeedback: null };
+            return { artifacts: this.mergeWithScaffold([designContractArtifact, candidateArtifact], state), validationFeedback: null };
           }
           this.logger.warn(
             `[${state.projectId}] Skip candidate failed content validation (${validationErrors.length} errors), falling through to LLM generation`,
@@ -118,11 +140,37 @@ export class FrontendAgentNode {
 
       if (process.env.MOCK_MODE === 'true') {
         this.streamEmitter.emit(projectId, 'frontend_agent', runId ?? '', 'decision', 'Mock mode: generating predefined frontend components');
+        const primaryFeature = outputStructureContract.agents.frontend.features[0];
+        const viewName = primaryFeature?.viewPath.split('/').pop()?.replace(/\.tsx$/i, '') ?? 'ItemsView';
+        const viewModelModule = primaryFeature?.viewModelPath.split('/').pop()?.replace(/\.ts$/i, '') ?? 'use-items';
         const mockArtifacts: GeneratedArtifact[] = [
+          designContractArtifact,
+          outputStructureArtifact,
+          {
+            agentType: 'frontend',
+            filePath: primaryFeature?.modelPath ?? 'src/features/items/model/types.ts',
+            content: `export interface MockFrontendViewModel { title: string; companyName: string; }\n`,
+            language: 'typescript',
+            source: 'mock',
+          },
+          {
+            agentType: 'frontend',
+            filePath: primaryFeature?.viewModelPath ?? 'src/features/items/view-model/use-items.ts',
+            content: `import type { MockFrontendViewModel } from '../model/types';\nexport function useMockFrontend(companyName: string): MockFrontendViewModel { return { title: 'Mock Frontend', companyName }; }\n`,
+            language: 'typescript',
+            source: 'mock',
+          },
+          {
+            agentType: 'frontend',
+            filePath: primaryFeature?.viewPath ?? 'src/features/items/view/ItemsView.tsx',
+            content: `import { useMockFrontend } from '../view-model/${viewModelModule}';\nexport function ${viewName}() { const model = useMockFrontend('${state.companyName}'); return <main><h1>{model.title}</h1><p>{model.companyName}</p></main>; }\n`,
+            language: 'tsx',
+            source: 'mock',
+          },
           {
             agentType: 'frontend',
             filePath: 'src/app/page.tsx',
-            content: `export default function Page() { return <div>Mock Frontend for ${state.companyName}</div>; }`,
+            content: `import { ${viewName} } from '../features/${primaryFeature?.feature ?? 'items'}/view/${viewName}';\nexport default function Page() { return <${viewName} />; }\n`,
             language: 'tsx',
             source: 'mock',
           },
@@ -144,6 +192,11 @@ export class FrontendAgentNode {
         : '';
 
       const structuredMemory = buildStructuredMemoryContext(memoryBundle.layers);
+      const domainContracts = renderDomainContractContext([
+        ...(state.artifacts ?? []),
+        designContractArtifact,
+        outputStructureArtifact,
+      ]);
 
       const selfCritiqueFeedback = state.selfCritique
         ? `Self-review found these quality issues before validation — address them:\n${state.selfCritique}`
@@ -153,13 +206,16 @@ export class FrontendAgentNode {
         .filter(Boolean)
         .join('\n\n');
 
-      const systemPrompt = buildAgentSystemPrompt(
-        FRONTEND_AGENT_SYSTEM,
-        structuredMemory,
+      const systemPrompt = buildAgentSystemPrompt({
+        basePrompt: FRONTEND_AGENT_SYSTEM,
+        memoryContext: structuredMemory,
         artifactManifest,
-        combinedFeedback || undefined,
-        state.contractSummary || undefined,
-      );
+        previousFeedback: combinedFeedback || undefined,
+        contractSummary: state.contractSummary || undefined,
+        domainContracts,
+        designGuidance: state.designGuidance,
+        agentSkillRole: 'frontend',
+      });
 
       // Give the agent its repository capability so it can read the existing code before
       // generating; empty string when repository access is disabled for this run.
@@ -172,6 +228,12 @@ export class FrontendAgentNode {
       }>>({
         agentName: resolveModelForNode('frontend_agent', 'frontend_agent'),
         subagent: 'frontend',
+        correlation: {
+          projectId,
+          runId,
+          nodeId: 'frontend_agent',
+          agent: 'frontend',
+        },
         onToken: (delta) => this.streamEmitter.emit(projectId, 'frontend_agent', runId ?? '', 'token', delta),
         systemPrompt: systemPromptWithRepo,
         userPrompt: `Generate frontend files for this project:
@@ -185,17 +247,29 @@ Acceptance Criteria: ${state.contract.acceptanceCriteria.join('; ')}
 Files to generate:
 ${allFrontendFiles.map((f) => `- ${f}`).join('\n')}
 
-Generate complete, production-quality code for each file. Config files (package.json, tsconfig.json, next.config.ts, postcss.config.mjs, layout.tsx, globals.css, README-frontend.md) will be provided automatically — do not include them in your output.`,
+Authoritative OUTPUT_STRUCTURE.json (DevFlow will persist this contract artifact automatically; do not emit OUTPUT_STRUCTURE.json in your JSON output):
+${outputStructureArtifact.content}
+
+Generate complete, production-quality code for each file. Follow OUTPUT_STRUCTURE.json exactly:
+- Put feature models/types under src/features/<feature>/model
+- Put state mapping and interaction logic under src/features/<feature>/view-model
+- Put feature UI under src/features/<feature>/view
+- Keep src/app/**/page.tsx as a thin shell that imports and renders a feature view
+- Config files (package.json, tsconfig.json, next.config.ts, postcss.config.mjs, layout.tsx, globals.css, README-frontend.md) will be provided automatically — do not include them in your output.`,
         expectedShape: 'array',
       });
 
-      const llmArtifacts: GeneratedArtifact[] = result.value.map((item) => ({
-        agentType: 'frontend' as const,
-        filePath: item.filePath,
-        content: item.content,
-        language: item.language ?? this.inferLanguage(item.filePath),
-        source: 'llm',
-      }));
+      const llmArtifacts: GeneratedArtifact[] = [
+        designContractArtifact,
+        outputStructureArtifact,
+        ...result.value.map((item) => ({
+          agentType: 'frontend' as const,
+          filePath: item.filePath,
+          content: item.content,
+          language: item.language ?? this.inferLanguage(item.filePath),
+          source: 'llm' as const,
+        })),
+      ];
 
       const artifacts = this.mergeWithScaffold(llmArtifacts, state);
 
@@ -246,6 +320,21 @@ Generate complete, production-quality code for each file. Config files (package.
       companyName: state.companyName,
     });
     return this.scaffolder.merge(llmArtifacts, scaffoldFiles, 'frontend');
+  }
+
+  private createDesignContractArtifact(state: DevFlowStateType): GeneratedArtifact {
+    return {
+      agentType: 'frontend',
+      filePath: 'DESIGN.md',
+      content: renderDesignMarkdown(state.designGuidance),
+      language: 'markdown',
+      source: 'scaffold',
+      domainContract: {
+        kind: 'frontend-design',
+        version: 'v1',
+        summary: 'OpenDesign-style DevFlow visual contract for frontend artifacts',
+      },
+    };
   }
 
   private inferLanguage(filePath: string): string {

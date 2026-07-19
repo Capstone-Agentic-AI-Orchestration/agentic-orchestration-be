@@ -7,8 +7,13 @@ import {
   ConnectedSocket,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import { UserRole } from '@prisma/client';
+import { SupabaseAuthService } from '../auth/supabase-auth.service';
+import type { AuthUser } from '../auth/auth.types';
+import { PrismaService } from '../prisma/prisma.service';
 import {
   ORCHESTRATION_EVENT_CHANNEL,
   type OrchestrationEvent,
@@ -49,18 +54,56 @@ interface StreamBatchPayload {
   chunks: StreamChunkPayload[];
 }
 
+type AuthenticatedSocket = Socket & {
+  data: Socket['data'] & {
+    user?: AuthUser;
+  };
+};
+
+function corsOrigins(): string | string[] {
+  const configured = process.env.CORS_ORIGIN?.trim() || 'http://localhost:3001';
+  const origins = configured
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  return origins.length <= 1 ? origins[0] ?? 'http://localhost:3001' : origins;
+}
+
 @WebSocketGateway({
-  cors: { origin: '*' },
+  cors: { origin: corsOrigins(), credentials: true },
   namespace: '/devflow',
 })
-export class DevFlowGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class DevFlowGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(DevFlowGateway.name);
+
+  constructor(
+    private readonly auth: SupabaseAuthService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   @WebSocketServer()
   private readonly server!: Server;
 
-  handleConnection(client: Socket): void {
-    this.logger.log(`Client connected: ${client.id}`);
+  afterInit(server: Server): void {
+    server.use(async (client: AuthenticatedSocket, next) => {
+      try {
+        const token = this.extractBearerToken(client);
+        if (!token) {
+          return next(new Error('Unauthorized'));
+        }
+        client.data.user = await this.auth.verifyAccessToken(token);
+        return next();
+      } catch (error) {
+        this.logger.warn(
+          `Rejected socket ${client.id}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return next(new Error('Unauthorized'));
+      }
+    });
+  }
+
+  handleConnection(client: AuthenticatedSocket): void {
+    this.logger.log(`Client connected: ${client.id} user=${client.data.user?.id ?? 'unknown'}`);
   }
 
   handleDisconnect(client: Socket): void {
@@ -74,26 +117,28 @@ export class DevFlowGateway implements OnGatewayConnection, OnGatewayDisconnect 
    * that client (and any others monitoring the same project) receive events.
    */
   @SubscribeMessage('subscribe')
-  handleSubscribe(
+  async handleSubscribe(
     @MessageBody() data: SubscribePayload,
-    @ConnectedSocket() client: Socket,
-  ): void {
+    @ConnectedSocket() client: AuthenticatedSocket,
+  ): Promise<void> {
     const { projectId } = data;
     if (!projectId) {
       this.logger.warn(`Client ${client.id} sent subscribe without projectId`);
       return;
     }
+    if (!(await this.authorizeProject(client, projectId))) return;
     void client.join(projectId);
     this.logger.log(`Client ${client.id} subscribed to project ${projectId}`);
   }
 
   @SubscribeMessage('resync')
-  handleResync(
+  async handleResync(
     @MessageBody() data: SubscribePayload & { status?: string; currentNode?: string; runId?: string },
-    @ConnectedSocket() client: Socket,
-  ): void {
+    @ConnectedSocket() client: AuthenticatedSocket,
+  ): Promise<void> {
     const { projectId, status, currentNode, runId } = data;
     if (!projectId) return;
+    if (!(await this.authorizeProject(client, projectId))) return;
     void client.join(projectId);
     if (status) {
       this.emitStateSnapshot(client.id, projectId, status, currentNode ?? 'unknown', runId ?? '');
@@ -196,5 +241,45 @@ export class DevFlowGateway implements OnGatewayConnection, OnGatewayDisconnect 
       timestamp: Date.now(),
     };
     this.server.to(clientId).emit('orchestration:state', payload);
+  }
+
+  private extractBearerToken(client: Socket): string | null {
+    const auth = client.handshake.auth as Record<string, unknown> | undefined;
+    const authToken = typeof auth?.token === 'string' ? auth.token : null;
+    if (authToken?.trim()) return authToken.trim().replace(/^Bearer\s+/i, '');
+
+    const header = client.handshake.headers.authorization;
+    if (typeof header !== 'string') return null;
+    const match = header.match(/^Bearer\s+(.+)$/i);
+    return match?.[1]?.trim() || null;
+  }
+
+  private async authorizeProject(client: AuthenticatedSocket, projectId: string): Promise<boolean> {
+    const user = client.data.user;
+    if (!user) {
+      client.emit('orchestration:error', { code: 'UNAUTHORIZED', message: 'Socket is not authenticated.' });
+      return false;
+    }
+
+    const project = await this.prisma.project.findFirst({
+      where: user.role === UserRole.ADMIN
+        ? { id: projectId }
+        : {
+            id: projectId,
+            OR: [
+              { createdById: user.id },
+              { members: { some: { userId: user.id } } },
+            ],
+          },
+      select: { id: true },
+    });
+
+    if (!project) {
+      client.emit('orchestration:error', { code: 'FORBIDDEN', message: 'Project is not accessible.' });
+      this.logger.warn(`Client ${client.id} user=${user.id} denied access to project ${projectId}`);
+      return false;
+    }
+
+    return true;
   }
 }

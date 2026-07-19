@@ -25,7 +25,8 @@ import {
  *
  * The pipeline runs as three resumable phases that map 1:1 onto the old topology:
  *   A: parse_requirements → negotiate_contract → gate_1_check
- *   B: (code agents, parallel) → self_critique → validate_outputs → [retry loop] → gate_2_check
+ *   B: (code agents, parallel) → self_critique → validate_outputs
+ *      → execution_validate_outputs → [retry loop] → gate_2_check
  *   C: commit_to_github → mark_delivered
  *
  * Gates are explicit control flow (pause + persist) rather than thrown `NodeInterrupt`s.
@@ -63,6 +64,7 @@ export const NODE_PROJECT_STATUS: Record<string, ProjectStatus> = {
   [NODE.ARCHITECTURE_AGENT]: ProjectStatus.GENERATING_CODE,
   [NODE.SELF_CRITIQUE]: ProjectStatus.GENERATING_CODE,
   [NODE.VALIDATE_OUTPUTS]: ProjectStatus.GENERATING_CODE,
+  [NODE.EXECUTION_VALIDATE_OUTPUTS]: ProjectStatus.GENERATING_CODE,
   [NODE.GATE_2_CHECK]: ProjectStatus.COMMITTING,
   [NODE.COMMIT_TO_GITHUB]: ProjectStatus.COMMITTING,
   [NODE.MARK_DELIVERED]: ProjectStatus.DELIVERED,
@@ -129,7 +131,7 @@ export class OrchestrationSequencer {
     return { kind: 'continue', state };
   }
 
-  // ── Phase B: code agents → self-critique → validate → retry → gate 2 ───────
+  // ── Phase B: code agents → self-critique → validate/build → retry → gate 2 ─
   private async runPhaseB(
     ctx: SequencerContext,
   ): Promise<{ kind: 'continue'; state: DevFlowStateType } | { kind: 'stop'; outcome: SequencerOutcome }> {
@@ -150,7 +152,23 @@ export class OrchestrationSequencer {
       if (this.aborted(ctx)) return { kind: 'stop', outcome: { kind: 'aborted', state } };
       if (state.error) return { kind: 'stop', outcome: await this.markFailed({ ...ctx, state }, state.error) };
 
-      const route = validatorRouter(state);
+      let route = validatorRouter(state);
+      if (route !== NODE.GATE_2_CHECK) {
+        // Non-empty retry plan → re-run only the failing agents with scoped feedback.
+        targets = route as FanoutTarget[];
+        continue;
+      }
+
+      state = await this.runNode(
+        ctx,
+        NODE.EXECUTION_VALIDATE_OUTPUTS,
+        ctx.impls[NODE.EXECUTION_VALIDATE_OUTPUTS],
+        state,
+      );
+      if (this.aborted(ctx)) return { kind: 'stop', outcome: { kind: 'aborted', state } };
+      if (state.error) return { kind: 'stop', outcome: await this.markFailed({ ...ctx, state }, state.error) };
+
+      route = validatorRouter(state);
       if (route === NODE.GATE_2_CHECK) break;
       // Non-empty retry plan → re-run only the failing agents with scoped feedback.
       targets = route as FanoutTarget[];
@@ -234,19 +252,18 @@ export class OrchestrationSequencer {
 
   /** Persists the run-state snapshot + current node, replacing the LangGraph checkpointer. */
   private async persist(runId: string, state: DevFlowStateType, currentNode: string): Promise<void> {
-    await this.prisma.orchestrationRun
-      .update({
-        where: { runId },
-        data: {
-          currentNode,
-          checkpointState: state as unknown as object,
-        },
-      })
-      .catch(() => undefined);
+    await this.prisma.orchestrationRun.update({
+      where: { runId },
+      data: {
+        currentNode,
+        checkpointState: state as unknown as object,
+        lastHeartbeatAt: new Date(),
+      },
+    });
   }
 
   private async setProjectStatus(projectId: string, status: ProjectStatus): Promise<void> {
-    await this.prisma.project.update({ where: { id: projectId }, data: { status } }).catch(() => undefined);
+    await this.prisma.project.update({ where: { id: projectId }, data: { status } });
   }
 
   private aborted(ctx: SequencerContext): boolean {
@@ -257,17 +274,16 @@ export class OrchestrationSequencer {
   private async markFailed(ctx: SequencerContext, reason: string): Promise<SequencerOutcome> {
     this.logger.warn(`[${ctx.projectId}] Marking run failed: ${reason}`);
     await this.setProjectStatus(ctx.projectId, ProjectStatus.FAILED);
-    await this.prisma.orchestrationRun
-      .updateMany({
-        where: { runId: ctx.runId },
-        data: {
-          status: OrchestrationRunStatus.FAILED,
-          currentNode: NODE.MARK_FAILED,
-          error: reason,
-          completedAt: new Date(),
-        },
-      })
-      .catch(() => undefined);
+    await this.prisma.orchestrationRun.updateMany({
+      where: { runId: ctx.runId },
+      data: {
+        status: OrchestrationRunStatus.FAILED,
+        currentNode: NODE.MARK_FAILED,
+        error: reason,
+        completedAt: new Date(),
+        lastHeartbeatAt: new Date(),
+      },
+    });
     this.emitter?.runError(ctx.projectId, ctx.runId, {
       code: /validation/i.test(reason) ? 'VALIDATION_FAILED' : 'NODE_FAILED',
       severity: 'permanent',

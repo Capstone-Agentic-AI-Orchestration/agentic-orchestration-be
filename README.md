@@ -43,7 +43,17 @@ Required:
 
 ```env
 DATABASE_URL="postgresql://..."
+DIRECT_URL="postgresql://..."
 SUPABASE_URL="https://your-project-ref.supabase.co"
+```
+
+`DATABASE_URL` is the backend runtime connection. `DIRECT_URL` is the direct Postgres connection Prisma CLI uses for migrations and introspection; in local development it can match `DATABASE_URL`. In Supabase production, use the direct/non-pooling connection string for `DIRECT_URL` when `DATABASE_URL` uses the pooled connection.
+
+Release-only schema verification values:
+
+```env
+SUPABASE_PROJECT_REF="your-project-ref"
+SUPABASE_ACCESS_TOKEN="sbp_..."
 ```
 
 Common optional values:
@@ -51,7 +61,7 @@ Common optional values:
 ```env
 AGENT_PROVIDER="mock"
 ORCHESTRATION_LLM_ENGINE="eve"
-ORCHESTRATION_DISPATCHER_MODE="in-process"
+ORCHESTRATION_DISPATCHER_MODE="db-lease"
 EVE_SERVICE_URL=""
 EVE_SERVICE_TOKEN=""
 LLM_PROVIDER="openrouter"
@@ -84,7 +94,7 @@ CORS_ORIGIN="http://localhost:3001"
 SUPABASE_SERVICE_ROLE_KEY=""
 SUPABASE_ANON_KEY=""
 AUTH_ALLOWED_PROVIDERS="github"
-# Alternate provider keys. The graph fallback and work-order agents use OpenRouter by default.
+# Alternate provider keys. The direct provider and work-order agents use OpenRouter by default.
 GITHUB_APP_ID=""
 GITHUB_PRIVATE_KEY=""
 GITHUB_INSTALLATION_ID=""
@@ -103,15 +113,17 @@ OUTBOX_RELAY_MAX_ATTEMPTS=5
 
 DevFlow login uses Supabase Auth. For the current GitHub OAuth-only rollout, configure GitHub as a Supabase Auth provider and keep `AUTH_ALLOWED_PROVIDERS="github"` on Render. When Google is enabled later, set `AUTH_ALLOWED_PROVIDERS="github,google"`. See `docs/setup/github-oauth-render-vercel.md` for the full Supabase, Render, and Vercel setup.
 
-`AGENT_PROVIDER=mock` runs the deterministic local orchestration provider and does not require LLM or GitHub credentials. Use `AGENT_PROVIDER=llm` with `ORCHESTRATION_LLM_ENGINE=eve` and `EVE_SERVICE_URL` to delegate generation turns to `agentic-orchestration-ag`. If Eve is not configured, the router falls back to the in-process graph provider and uses `LLM_PROVIDER` credentials. If OpenRouter is throttled, `LLM_PROVIDER=opencode` with `OPENCODE_API_KEY`, `LLM_PROVIDER=openai` with `OPENAI_API_KEY`, `LLM_PROVIDER=anthropic` with `ANTHROPIC_API_KEY`, or `LLM_PROVIDER=gemini` with `GEMINI_API_KEY` uses an alternate fallback provider instead. The default OpenRouter model is `deepseek/deepseek-v4-flash:free`; the default OpenCode model is `deepseek-v4-flash`; the default OpenAI model is `gpt-4.1-mini`; the default Anthropic model is `claude-3-5-haiku-20241022`; the default Gemini model is `gemini-3.5-flash`. `LLM_REQUEST_TIMEOUT_MS` and `LLM_CONCURRENCY_LIMIT` apply across Eve calls and graph fallback/work-order model calls.
+`AGENT_PROVIDER=mock` runs the deterministic local orchestration provider and does not require LLM or GitHub credentials. Use `AGENT_PROVIDER=llm` with `ORCHESTRATION_LLM_ENGINE=eve` and `EVE_SERVICE_URL` to delegate generation turns to `agentic-orchestration-ag`. If Eve is not configured or fails preflight before a run starts, the router explicitly falls back to the in-process direct provider and uses `LLM_PROVIDER` credentials; it does not silently switch engines mid-turn after a partial Eve stream. OpenCode-only mode is `AGENT_PROVIDER=llm` plus `ORCHESTRATION_LLM_ENGINE=direct`, `LLM_PROVIDER=opencode`, and `OPENCODE_API_KEY`. If OpenRouter is throttled, `LLM_PROVIDER=opencode` with `OPENCODE_API_KEY`, `LLM_PROVIDER=openai` with `OPENAI_API_KEY`, `LLM_PROVIDER=anthropic` with `ANTHROPIC_API_KEY`, or `LLM_PROVIDER=gemini` with `GEMINI_API_KEY` uses an alternate direct provider instead. The default OpenRouter model is `deepseek/deepseek-v4-flash:free`; the default OpenCode model is `deepseek-v4-flash`; the default OpenAI model is `gpt-4.1-mini`; the default Anthropic model is `claude-3-5-haiku-20241022`; the default Gemini model is `gemini-3.5-flash`. `LLM_REQUEST_TIMEOUT_MS` and `LLM_CONCURRENCY_LIMIT` apply across Eve calls and direct/work-order model calls.
 
 The orchestration path defines DevFlow's own agents: requirements parser, contract negotiator, frontend, backend, database, architecture, validator, and GitHub commit. NestJS controls ordering, parallel fan-out, retries, human approval gates, and durable run state. Eve, OpenRouter, OpenCode, OpenAI, Anthropic, or Gemini only supply model execution inside those custom agents. LLM generation can start before GitHub App delivery is configured; after Gate 2 approval, the GitHub commit node requires GitHub readiness, creates a private repository through the configured GitHub App, commits generated artifacts, injects CI, and stores `repoUrl` on the project.
 
-`ORCHESTRATION_DISPATCHER_MODE=in-process` means the API writes run state, returns `accepted/runId`, and dispatches the long-running graph in the same Node process. This is the current deployment mode. The dispatcher boundary exists so a durable queue such as BullMQ/Redis or Supabase Queues can replace the implementation later without changing FE contracts.
+`ORCHESTRATION_DISPATCHER_MODE=db-lease` means the API writes durable `OrchestrationJob` rows, workers claim due jobs with compare-and-swap locks, and the run row carries a second lease so duplicate workers cannot drive the same run. `ORCHESTRATION_DISPATCHER_MODE=in-process` remains available for local/dev compatibility only.
 
 GitHub delivery requires `GITHUB_APP_ID`, a valid PEM `GITHUB_PRIVATE_KEY`, `GITHUB_INSTALLATION_ID`, and `GITHUB_ORG`. `GITHUB_PRIVATE_KEY` can be base64-encoded PEM, raw PEM, or escaped-newline PEM; the app normalizes it before validating it. The orchestration provider endpoint includes `githubDelivery` readiness details so the app can show missing setup before Gate 2 delivery fails. The project orchestration API also exposes non-destructive live checks for the selected LLM provider and GitHub App delivery credentials, and the PM project view surfaces both checks before a real orchestration-to-GitHub run. `npm run smoke:github` performs the same GitHub App installation owner and repository access verification before it allows a real smoke repository create.
 
-`npm run smoke:orchestration-readiness` is non-destructive and verifies the selected LLM provider plus GitHub App delivery credentials without creating a project or repository. It exits successfully while reporting blockers by default; set `ORCHESTRATION_READINESS_STRICT=true` when you want CI to fail on incomplete readiness. `npm run smoke:langgraph-github` is safe by default and skips before creating a repository. Set `LANGGRAPH_GITHUB_SMOKE_CREATE=true` only when you intentionally want a real end-to-end smoke repository created through the full Gate 1 -> Gate 2 -> GitHub delivery flow. The destructive live smoke preflights OpenRouter, OpenCode, OpenAI, Anthropic, and Gemini and uses the first configured provider that accepts a real request; set `LANGGRAPH_GITHUB_SMOKE_PROVIDER_AUTO=false` to test only the configured `LLM_PROVIDER`.
+`GET /health/orchestration` returns operator readiness sections for database, Supabase/auth config, dispatcher mode, Eve reachability/auth, direct provider key/model readiness, GitHub delivery, and outbox relay state.
+
+`npm run smoke:orchestration-readiness` is non-destructive and verifies the selected LLM provider plus GitHub App delivery credentials without creating a project or repository. It exits successfully while reporting blockers by default; set `ORCHESTRATION_READINESS_STRICT=true` when you want CI to fail on incomplete readiness. `npm run smoke:direct-github` is safe by default and skips before creating a repository. Set `DIRECT_GITHUB_SMOKE_CREATE=true` only when you intentionally want a real end-to-end smoke repository created through the full Gate 1 -> Gate 2 -> GitHub delivery flow. The destructive live smoke preflights OpenRouter, OpenCode, OpenAI, Anthropic, and Gemini and uses the first configured provider that accepts a real request; set `DIRECT_GITHUB_SMOKE_PROVIDER_AUTO=false` to test only the configured `LLM_PROVIDER`. The old `LANGGRAPH_GITHUB_SMOKE_*` variables and `npm run smoke:langgraph-github` command remain temporary deprecated aliases.
 
 `OUTBOX_RELAY_ENABLED=false` keeps integration events durable in Postgres without publishing them. Enable it only for local contract testing until `OUTBOX_PUBLISHER` is replaced with a durable broker-backed publisher.
 
@@ -122,6 +134,9 @@ State-changing intake endpoints accept `Idempotency-Key`. Reusing the same key a
 ```powershell
 npm test              # Vitest unit/regression tests
 npm run build         # Compile NestJS to dist/
+npm run deploy:build  # Generate Prisma Client and compile the backend
+npm run deploy:release # Apply migrations and verify the live Supabase schema
+npm run deploy:smoke  # Run non-destructive orchestration readiness smoke
 npm run start         # Run compiled output
 npm run start:dev     # Development server
 npm run prisma:migrate      # Apply checked-in SQL migrations
@@ -135,7 +150,8 @@ npm run seed:demo:smoke
 npm run smoke:openrouter
 npm run smoke:github
 npm run smoke:orchestration-readiness
-npm run smoke:langgraph-github
+npm run smoke:direct-github
+npm run smoke:langgraph-github  # deprecated alias
 ```
 
 ## Persona Demo Data

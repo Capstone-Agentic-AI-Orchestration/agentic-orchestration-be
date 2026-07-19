@@ -6,6 +6,7 @@ import {
 } from './agent-provider.types';
 import { LlmAgentProvider } from './llm-agent.provider';
 import { MockAgentProvider } from './mock-agent.provider';
+import { llmConcurrencyLimit, llmRequestTimeoutMs } from './llm-runtime';
 
 @Injectable()
 export class AgentProviderRegistry {
@@ -51,6 +52,8 @@ export class AgentProviderRegistry {
         provider: this.llmAgentProvider.providerName(),
         model: this.llmAgentProvider.model(),
         fallbackModel: this.llmAgentProvider.fallbackModel(),
+        requestTimeoutMs: llmRequestTimeoutMs(),
+        concurrencyLimit: llmConcurrencyLimit(),
       },
     ];
     const activeProvider = providers.find((provider) => provider.active) ?? providers[0];
@@ -65,6 +68,8 @@ export class AgentProviderRegistry {
       provider: activeProvider.provider,
       model: activeProvider.model,
       fallbackModel: activeProvider.fallbackModel,
+      requestTimeoutMs: activeProvider.requestTimeoutMs,
+      concurrencyLimit: activeProvider.concurrencyLimit,
       providers,
     };
   }

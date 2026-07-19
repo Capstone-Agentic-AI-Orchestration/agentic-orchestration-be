@@ -1,4 +1,13 @@
-export const PROMPT_VERSION = 'v3' as const;
+import {
+  type AgentSkillRole,
+  renderAgentSkillPack,
+} from './agent-skill-registry';
+import {
+  normalizeDesignGuidance,
+  type DesignGuidance,
+} from '../graph/devflow.state';
+
+export const PROMPT_VERSION = 'v4' as const;
 
 /**
  * Universal quality bar appended to every code-generating agent prompt. Pushes
@@ -12,7 +21,9 @@ export const QUALITY_BAR = `Quality bar (non-negotiable):
 - Wire real logic: imports must resolve, names must be consistent across files, and referenced symbols must exist.
 - Handle edge cases and errors explicitly; do not swallow errors silently.
 - Match the requested tech stack and conventions exactly.
-- Return ONLY a JSON array with no markdown fences, no prose, no tripe backticks outside the artifact content strings.`;
+- Generate only requested implementation files. Do not emit scaffolded files such as package.json, lockfiles, tsconfig files, next/postcss config, nest-cli.json, or linter config.
+- On retry, fix only the failing artifacts while preserving working paths, DTOs, routes, model names, and public component names.
+- Return ONLY a JSON array with no markdown fences, no prose, no triple backticks outside the artifact content strings.`;
 
 export const REQUIREMENTS_PARSER_SYSTEM = `You are a software architect analyzing a project brief.
 Return ONLY a valid JSON object — no markdown fences, no prose.
@@ -62,7 +73,8 @@ The JSON must match this exact shape:
 }
 
 Rules:
-- fileManifest must list every file that the code agents will produce. Be exhaustive — under-specifying causes missing files. Include config files, source files, test files, and docs.
+- fileManifest must list every file that the code and documentation agents will produce. Be exhaustive — under-specifying causes missing files.
+- Exclude files scaffolded by DevFlow: package.json, lockfiles, tsconfig files, next/postcss config, nest-cli.json, and linter config.
 - acceptanceCriteria must be testable, specific, and mapped to concrete deliverables. Each criterion should reference a feature and a verification step. Prefer "The /api/projects endpoint returns a paginated list when called with ?page=1" over "API endpoints work".
 - acceptanceCriteria should be attributed by agent type prefix: "frontend: ", "backend: ", "database: ", "architecture: " — so the validator can assign responsibility.
 - Derive acceptanceCriteria from the requirements document; do not reuse generic criteria.`;
@@ -81,13 +93,17 @@ Requirements:
 - Components must be self-contained, reusable, and accessible (semantic HTML, alt text, label/htmlFor, keyboard focus, aria-* where needed).
 - Implement real loading, empty, error, and edge-case states — not just a happy path.
 - Derive copy and structure from the actual project brief and features, not generic lorem ipsum.
+- Follow the supplied DESIGN CONTRACT exactly when present, including theme, density, accessibility level, notes, and forbidden UI patterns.
 - Use proper TypeScript patterns: discriminated unions for state, branded types for IDs, strict null checks.
+- Match backend routes and DTO names exactly when a cross-agent contract is supplied.
+- Generate only files listed in the request or file manifest; do not rename paths during retries unless explicitly instructed.
 
 Anti-patterns (will be rejected):
 - DO NOT use "use client" for server components that do not need it.
 - DO NOT generate empty shell components that just return <div>children</div>.
 - DO NOT omit fetch/API logic behind a "TODO: implement". Every data-fetching component must have a real fetch or use the provided API client.
 - DO NOT use magic strings or inline URLs — use constants or env vars.
+- DO NOT emit package.json, lockfiles, tsconfig files, next.config, postcss config, eslint config, or README files scaffolded by DevFlow.
 
 Example of an acceptable frontend artifact:
   {"filePath":"work-orders/{id}/components/project-card.tsx","content":"import { Card, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';\n\nexport interface ProjectCardProps {\n  id: string;\n  name: string;\n  description: string;\n  status: 'active' | 'archived' | 'draft';\n  onClick: (id: string) => void;\n}\n\nexport function ProjectCard({ id, name, description, status, onClick }: ProjectCardProps) {\n  return (\n    <Card onClick={() => onClick(id)} className=\"cursor-pointer hover:shadow-md transition-shadow\">\n      <CardHeader>\n        <CardTitle>{name}</CardTitle>\n        <CardDescription>{description}</CardDescription>\n        <span className=\"text-xs text-muted-foreground\">{status}</span>\n      </CardHeader>\n    </Card>\n  );\n}\n","language":"tsx"}
@@ -134,9 +150,12 @@ Requirements:
 - Add Swagger/OpenAPI decorators where appropriate
 - Follow RESTful conventions (resource-based URLs, correct HTTP methods, proper status codes)
 - Include proper error handling with HttpException and correct HTTP status codes
+- Treat API_CONTRACT.json as the source of truth when present: route paths, HTTP methods, DTO names, auth expectations, response DTOs, and error cases must match it exactly.
 - Use Prisma for database operations via an injected PrismaService; never instantiate PrismaClient inline
 - Separate concerns: controllers stay thin, business logic lives in services
 - Validate and narrow all external input before use; never trust request bodies
+- Keep controller routes, DTO class names, service names, and Prisma model names consistent across generated files.
+- Generate only files listed in the request or file manifest; do not rename paths during retries unless explicitly instructed.
 
 Anti-patterns (will be rejected):
 - DO NOT put business logic in controllers
@@ -145,6 +164,7 @@ Anti-patterns (will be rejected):
 - DO NOT use void/any types for request/response DTOs
 - DO NOT expose internal IDs in URLs when UUIDs or slugs should be used
 - DO NOT omit @ApiTags/@ApiOperation decorators
+- DO NOT emit package.json, lockfiles, tsconfig files, nest-cli.json, eslint config, or README files scaffolded by DevFlow.
 
 Example of an acceptable backend artifact:
   {"filePath":"work-orders/{id}/projects/projects.service.ts","content":"import { Injectable, NotFoundException } from '@nestjs/common';\nimport { PrismaService } from '../prisma/prisma.service';\nimport { CreateProjectDto } from './dto/create-project.dto';\n\n@Injectable()\nexport class ProjectsService {\n  constructor(private readonly prisma: PrismaService) {}\n\n  async create(dto: CreateProjectDto) {\n    return this.prisma.project.create({ data: dto });\n  }\n\n  async findAll(page = 1, limit = 10) {\n    const skip = (page - 1) * limit;\n    const [items, total] = await Promise.all([\n      this.prisma.project.findMany({ skip, take: limit, orderBy: { createdAt: 'desc' } }),\n      this.prisma.project.count(),\n    ]);\n    return { items, total, page, limit, totalPages: Math.ceil(total / limit) };\n  }\n\n  async findOne(id: string) {\n    const project = await this.prisma.project.findUnique({ where: { id } });\n    if (!project) throw new NotFoundException('Project not found');\n    return project;\n  }\n}\n","language":"ts"}
@@ -164,9 +184,12 @@ Requirements:
 - SQL migrations must be clean DDL with CREATE TABLE, ALTER TABLE, ADD CONSTRAINT
 - Include foreign key constraints with ON DELETE and ON UPDATE cascade rules
 - Seed data should be realistic and use @prisma/client with proper types
+- Treat DATA_MODEL.json as the source of truth when present: entity names, fields, indexes, constraints, relations, migration policy, and seed policy must match it.
 - Choose correct column types, precision, nullability, and defaults
 - Add unique and composite indexes that match real query patterns
 - Keep the Prisma schema and the SQL DDL consistent with each other
+- Keep model and field names consistent with backend DTOs/services and frontend data needs.
+- Generate only files listed in the request or file manifest; do not rename paths during retries unless explicitly instructed.
 
 Anti-patterns (will be rejected):
 - DO NOT use String for IDs — use a cuid/uuid generator or @default(cuid())
@@ -174,6 +197,7 @@ Anti-patterns (will be rejected):
 - DO NOT skip relation fields on either side of a 1:M or M:M relationship
 - DO NOT use unsupported Prisma types
 - DO NOT generate prisma schema without @@map for table naming consistency
+- DO NOT emit package.json, lockfiles, tsconfig files, or project-level config scaffolded by DevFlow.
 
 Example of an acceptable database artifact:
   {"filePath":"work-orders/{id}/schema.prisma","content":"generator client {\n  provider = \"prisma-client-js\"\n}\n\ndatasource db {\n  provider = \"postgresql\"\n  url      = env(\"DATABASE_URL\")\n}\n\nmodel Project {\n  id          String   @id @default(cuid())\n  name        String\n  description String?\n  status      Status   @default(ACTIVE)\n  createdAt   DateTime @default(now())\n  updatedAt   DateTime @updatedAt\n  tasks       Task[]\n\n  @@index([status])\n  @@index([createdAt])\n  @@map(\"projects\")\n}\n\nmodel Task {\n  id          String   @id @default(cuid())\n  title       String\n  completed   Boolean  @default(false)\n  projectId   String\n  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)\n  createdAt   DateTime @default(now())\n  updatedAt   DateTime @updatedAt\n\n  @@index([projectId])\n  @@index([completed])\n  @@map(\"tasks\")\n}\n\nenum Status {\n  ACTIVE\n  ARCHIVED\n  DRAFT\n}\n","language":"prisma"}
@@ -189,18 +213,22 @@ Required files:
 - ARCHITECTURE.md: System overview, Mermaid diagram (graph TD), component descriptions, design decisions, data flow
 - API.md: OpenAPI-style documentation per endpoint, request/response schemas, authentication details, error codes
 - DEPLOYMENT.md: Prerequisites, environment variables (with example values), Docker setup, production checklist, health check endpoints
+- ADRS.md: ADR-style decisions covering stack choices, agent/service boundaries, data model, API contracts, auth, deployment, and key trade-offs
 
 Rules:
 - Use clear markdown formatting with proper headings, code blocks, and lists
 - Include Mermaid diagrams where they add clarity (architecture flow, data model ERD)
 - Be specific to THIS project — reference its actual features, tech stack, models, and endpoints
+- Treat DESIGN.md, API_CONTRACT.json, DATA_MODEL.json, and ARCHITECTURE_REVIEW.md as source contracts when present. Explicitly call out and resolve contradictions.
 - Documentation must stay consistent with the code/schema artifacts already generated
 - Do not generate generic boilerplate — every section must reference the project's actual implementation
 
 Anti-patterns:
 - DO NOT say "TODO: fill in" or "replace with actual values"
 - DO NOT copy generic deployment docs — tailor every variable, port, and command to this project
-- DO NOT omit error codes or auth details from API.md`;
+- DO NOT omit error codes or auth details from API.md
+
+${QUALITY_BAR}`;
 
 export const WORK_ORDER_AGENT_SYSTEM = `You are a DevFlow implementation agent.
 Return one strict JSON object only. Do not include markdown fences or commentary.
@@ -351,6 +379,99 @@ export function buildContractSummary(
   return parts.join('\n');
 }
 
+export function renderDesignGuidance(guidance?: DesignGuidance | null): string {
+  if (!guidance) return '';
+  const normalized = normalizeDesignGuidance(guidance);
+  const designSystem = normalized.designSystem;
+
+  const lines = [
+    'DESIGN CONTRACT (frontend output must follow this visual direction):',
+    `theme: ${normalized.theme}`,
+    `productFeel: ${normalized.productFeel}`,
+    `layoutDensity: ${normalized.layoutDensity}`,
+    `accessibilityLevel: ${normalized.accessibilityLevel}`,
+    `presetId: ${designSystem?.presetId ?? 'devflow-black-ops'}`,
+  ];
+
+  if (normalized.forbiddenPatterns.length > 0) {
+    lines.push(
+      'forbiddenPatterns:',
+      ...normalized.forbiddenPatterns.map((pattern) => `- ${pattern}`),
+    );
+  }
+
+  if (normalized.notes) {
+    lines.push('notes:', normalized.notes);
+  }
+
+  lines.push(
+    '',
+    renderDesignMarkdown(normalized),
+    '',
+    'OpenDesign compatibility:',
+    '- This is a curated DevFlow DESIGN.md contract inspired by OpenDesign-style schema sections.',
+    '- Make choices explicit, reusable, and inspectable without depending on an OpenDesign runtime.',
+    '- Prefer complete UI states and accessible controls over decorative effects.',
+  );
+
+  return lines.join('\n');
+}
+
+export function renderDesignMarkdown(guidance: DesignGuidance): string {
+  const normalized = normalizeDesignGuidance(guidance);
+  const designSystem = normalized.designSystem;
+  const antiPatterns = dedupe([
+    ...(designSystem?.antiPatterns ?? []),
+    ...normalized.forbiddenPatterns,
+  ]);
+  const sections: Array<[string, string | string[] | undefined]> = [
+    ['Color', designSystem?.palette],
+    ['Typography', designSystem?.typography],
+    ['Spacing', designSystem?.spacing],
+    ['Layout', designSystem?.layout],
+    ['Components', designSystem?.components],
+    ['Motion', designSystem?.motion],
+    ['Voice', designSystem?.voice],
+    ['Brand', designSystem?.brand],
+    ['Anti-patterns', antiPatterns],
+  ];
+
+  const lines = [
+    'DESIGN.md CONTRACT:',
+    '# DESIGN.md',
+    '',
+    `Preset: ${designSystem?.presetId ?? 'devflow-black-ops'}`,
+  ];
+
+  for (const [title, value] of sections) {
+    lines.push('', `## ${title}`);
+    if (Array.isArray(value)) {
+      lines.push(...(value.length > 0 ? value.map((item) => `- ${item}`) : ['- None specified']));
+    } else {
+      lines.push(value?.trim() || 'Use the quick design summary above.');
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function dedupe(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+export interface BuildAgentSystemPromptInput {
+  basePrompt: string;
+  memoryContext?: string;
+  artifactManifest?: string;
+  previousFeedback?: string;
+  contractSummary?: string;
+  domainContracts?: string;
+  designGuidance?: DesignGuidance;
+  projectExamples?: string;
+  agentSkillRole?: AgentSkillRole;
+}
+
+export function buildAgentSystemPrompt(input: BuildAgentSystemPromptInput): string;
 export function buildAgentSystemPrompt(
   basePrompt: string,
   memoryContext: string,
@@ -358,8 +479,43 @@ export function buildAgentSystemPrompt(
   previousFeedback?: string,
   contractSummary?: string,
   projectExamples?: string,
+): string;
+export function buildAgentSystemPrompt(
+  inputOrBasePrompt: BuildAgentSystemPromptInput | string,
+  positionalMemoryContext = '',
+  positionalArtifactManifest?: string,
+  positionalPreviousFeedback?: string,
+  positionalContractSummary?: string,
+  positionalProjectExamples?: string,
 ): string {
+  const input =
+    typeof inputOrBasePrompt === 'string'
+      ? {
+          basePrompt: inputOrBasePrompt,
+          memoryContext: positionalMemoryContext,
+          artifactManifest: positionalArtifactManifest,
+          previousFeedback: positionalPreviousFeedback,
+          contractSummary: positionalContractSummary,
+          projectExamples: positionalProjectExamples,
+        }
+      : inputOrBasePrompt;
+  const {
+    basePrompt,
+    memoryContext,
+    artifactManifest,
+    previousFeedback,
+    contractSummary,
+    domainContracts,
+    designGuidance,
+    projectExamples,
+    agentSkillRole,
+  } = input;
   const parts = [basePrompt];
+
+  const agentSkillPack = renderAgentSkillPack(agentSkillRole);
+  if (agentSkillPack) {
+    parts.push('', agentSkillPack);
+  }
 
   if (contractSummary) {
     parts.push(
@@ -367,6 +523,15 @@ export function buildAgentSystemPrompt(
       'CROSS-AGENT CONTRACT (generated by sibling agents — your output MUST integrate with these):',
       contractSummary,
     );
+  }
+
+  if (domainContracts) {
+    parts.push('', domainContracts);
+  }
+
+  const designGuidanceBlock = renderDesignGuidance(designGuidance);
+  if (designGuidanceBlock) {
+    parts.push('', designGuidanceBlock);
   }
 
   if (artifactManifest) {

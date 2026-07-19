@@ -6,6 +6,7 @@ import { AgentLlmRouter } from '../providers/agent-llm.router';
 import { resolveModelForNode } from '../providers/base-llm.provider';
 import { buildContractSummary } from '../prompts/agent-prompts';
 import { humanReadableError } from './human-readable-error';
+import { renderDomainContractContext } from '../domain-contracts';
 
 const SELF_CRITIQUE_SYSTEM = `You are a senior code reviewer. You will receive a set of generated artifacts and the project contract.
 Your job is to review the artifacts against the contract's acceptance criteria and identify quality issues.
@@ -21,9 +22,11 @@ Shape:
 
 Rules:
 - Check each artifact against the acceptance criteria.
-- Check for: placeholder code (TODOs, stubs, "implementation goes here"), missing imports, inconsistent naming, missing error handling, generic placeholder content (lorem ipsum, "example.com"), and type safety violations (any types, untyped params).
+- Check for duplicate file paths and scaffolded files that agents must not emit (package.json, lockfiles, tsconfig files, next/postcss config, nest-cli.json, eslint config).
+- Check for: placeholder code (TODOs, stubs, "implementation goes here"), missing imports, inconsistent naming, missing error handling, generic placeholder content (lorem ipsum, "example.com"), unfinished ellipses, and type safety violations (any types, untyped params).
 - Check cross-file consistency: do frontend API calls match backend routes? Do Prisma usages match schema models?
-- Be specific: reference file paths and exact issues.
+- Check domain contracts: DESIGN.md, API_CONTRACT.json, DATA_MODEL.json, ARCHITECTURE_REVIEW.md, and ADRS.md must agree with generated implementation artifacts.
+- Be specific and concise: reference file paths, the failing agent, and the exact change needed.
 - If everything looks solid, return {"verdict":"pass","issues":[],"suggestions":[]}.`;
 
 @Injectable()
@@ -75,6 +78,10 @@ export class SelfCritiqueNode {
           return `--- ${a.filePath} ---\n${excerpt}${a.content.length > 800 ? '\n...(truncated)' : ''}`;
         })
         .join('\n\n');
+      const domainContracts = renderDomainContractContext(
+        state.artifacts,
+        '## Domain Contracts To Enforce',
+      );
 
       const acceptanceCriteria = state.contract.acceptanceCriteria
         .map((c, i) => `${i + 1}. ${c}`)
@@ -90,6 +97,8 @@ ${acceptanceCriteria}
 ## Generated Artifacts (summary)
 ${artifactSummary}
 
+${domainContracts}
+
 ## Artifact Excerpts
 ${artifactExcerpts}
 
@@ -102,6 +111,12 @@ Review these artifacts against the acceptance criteria. Return your verdict as J
       }>({
         agentName: resolveModelForNode('self_critique', 'self_critique'),
         subagent: 'self-critique',
+        correlation: {
+          projectId,
+          runId,
+          nodeId: NODE.SELF_CRITIQUE,
+          agent: 'self-critique',
+        },
         systemPrompt: SELF_CRITIQUE_SYSTEM,
         userPrompt,
         expectedShape: 'object',
@@ -127,10 +142,10 @@ Review these artifacts against the acceptance criteria. Return your verdict as J
 
       const feedback = [
         ...(critique.issues.length > 0
-          ? ['QUALITY ISSUES:', ...critique.issues.map((i) => `• ${i}`)]
+          ? ['QUALITY ISSUES:', ...critique.issues.map((i) => `- ${i}`)]
           : []),
         ...(critique.suggestions.length > 0
-          ? ['IMPROVEMENT SUGGESTIONS:', ...critique.suggestions.map((s) => `• ${s}`)]
+          ? ['IMPROVEMENT SUGGESTIONS:', ...critique.suggestions.map((s) => `- ${s}`)]
           : []),
       ].join('\n');
 

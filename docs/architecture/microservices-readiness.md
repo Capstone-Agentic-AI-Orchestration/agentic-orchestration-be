@@ -31,7 +31,7 @@ DevFlow uses one Supabase Postgres database with service-owned PostgreSQL schema
 | `projects` | Project delivery | `Project`, `GateEvent`, `Artifact`, `project_members`, `project_tasks`, `project_task_activities`, `project_timeline_events`, `project_kickoffs`, `project_delivery_reviews` |
 | `collaboration` | Collaboration | `project_conversations`, `project_messages`, `conversation_reads`, `collaboration_documents` |
 | `notifications` | Notifications | `notifications` |
-| `orchestration` | Orchestration | `work_orders`, `orchestration_runs`, `work_order_executions`, `event_logs`, `run_budgets`, LangGraph checkpoint tables |
+| `orchestration` | Orchestration | `work_orders`, `orchestration_runs`, `work_order_executions`, `event_logs`, `run_budgets`, persisted run-state checkpoints |
 | `memory` | Orchestration memory | `agent_profiles`, `agent_memories` |
 | `admin` | Admin | `admin_domains`, `admin_audit_logs`, `platform_settings` |
 | `scheduling` | Project delivery scheduling | `schedule_events` |
@@ -63,11 +63,11 @@ Rules:
 13. Added local Supabase-auth compatibility migrations for Docker Postgres (`auth.users`, `auth.uid()`, and Supabase API roles) so the same checked-in migrations can replay outside hosted Supabase.
 14. Kept `profiles` application-owned and schema-local. `profiles.id` stores the upstream Supabase Auth user UUID, but it intentionally does not use a database FK into `auth.users`, which keeps the identity boundary extractable and avoids coupling Prisma's public schema to Supabase-managed internals.
 15. Partitioned hosted Supabase tables and enums into service-owned schemas while keeping a single database.
-16. Moved LangGraph checkpoint persistence into the `orchestration` schema and configured `PostgresSaver` with `{ schema: 'orchestration' }`.
+16. Added persisted orchestration run-state checkpoints in the `orchestration` schema.
 
 ## Database Migration Workflow
 
-The migration set contains hand-written PostgreSQL DDL, including pgvector indexes and schema moves that Prisma cannot safely infer. LangGraph checkpoint tables are runtime-owned but must remain in the `orchestration` schema. Use `npm run prisma:migrate` (`prisma migrate deploy`) to apply checked-in migrations locally or in deployed environments. Use `npm run prisma:migrate:dev` only when intentionally creating Prisma-authored migrations and reviewing the generated SQL before committing it; do not accept generated drops for pgvector indexes, service schemas, or runtime checkpoint tables.
+The migration set contains hand-written PostgreSQL DDL, including pgvector indexes and schema moves that Prisma cannot safely infer. Runtime-owned orchestration state must remain in the `orchestration` schema. Use `npm run prisma:migrate` (`prisma migrate deploy`) to apply checked-in migrations locally or in deployed environments. Use `npm run prisma:migrate:dev` only when intentionally creating Prisma-authored migrations and reviewing the generated SQL before committing it; do not accept generated drops for pgvector indexes, service schemas, or runtime state tables.
 
 ## Event Contracts
 

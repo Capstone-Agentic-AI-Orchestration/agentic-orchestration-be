@@ -56,9 +56,16 @@ export default () => {
     },
     orchestration: {
       agentProvider: env.data.AGENT_PROVIDER,
+      llmEngine: env.data.ORCHESTRATION_LLM_ENGINE,
+      dispatcherMode: env.data.ORCHESTRATION_DISPATCHER_MODE,
       llmProvider: env.data.LLM_PROVIDER,
       llmRequestTimeoutMs: env.data.LLM_REQUEST_TIMEOUT_MS,
       llmConcurrencyLimit: env.data.LLM_CONCURRENCY_LIMIT,
+      eve: {
+        serviceUrl: env.data.EVE_SERVICE_URL || undefined,
+        tokenConfigured: Boolean(env.data.EVE_SERVICE_TOKEN),
+        model: env.data.EVE_MODEL,
+      },
       openrouter: {
         apiKey: env.data.OPENROUTER_API_KEY,
         baseUrl: env.data.OPENROUTER_BASE_URL,

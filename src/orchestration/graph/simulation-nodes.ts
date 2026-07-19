@@ -8,6 +8,13 @@ import type {
 } from './devflow.state';
 import type { DevFlowNodeImpls } from './devflow.graph';
 import { NODE } from './topology';
+import {
+  createArchitectureReviewContractArtifact,
+  createBackendApiContractArtifact,
+  createDatabaseModelContractArtifact,
+  createOutputStructureContractArtifact,
+} from '../domain-contracts';
+import { renderDesignMarkdown } from '../prompts/agent-prompts';
 
 /**
  * Simulation node implementations (Phase 3c).
@@ -124,10 +131,19 @@ export function buildSimulationNodeImpls(
         description: 'Simulated architecture contract for UI testing.',
         requirements,
         fileManifest: [
-          'app/page.tsx',
+          'DESIGN.md',
+          'OUTPUT_STRUCTURE.json',
+          'src/app/page.tsx',
+          'src/features/dashboard/model/types.ts',
+          'src/features/dashboard/view-model/use-dashboard.ts',
+          'src/features/dashboard/view/DashboardView.tsx',
+          'API_CONTRACT.json',
           'src/main.ts',
+          'DATA_MODEL.json',
           'prisma/schema.prisma',
+          'ARCHITECTURE_REVIEW.md',
           'ARCHITECTURE.md',
+          'ADRS.md',
         ],
         acceptanceCriteria: [
           'App boots and renders the dashboard',
@@ -147,8 +163,48 @@ export function buildSimulationNodeImpls(
       ]);
       return {
         artifacts: [
-          artifact('frontend', 'app/page.tsx', 'tsx'),
-          artifact('frontend', 'app/layout.tsx', 'tsx'),
+          {
+            agentType: 'frontend',
+            filePath: 'DESIGN.md',
+            language: 'markdown',
+            content: renderDesignMarkdown(state.designGuidance),
+            source: 'scaffold',
+            domainContract: {
+              kind: 'frontend-design',
+              version: 'v1',
+              summary: 'OpenDesign-style DevFlow visual contract for frontend artifacts',
+            },
+          },
+          createOutputStructureContractArtifact(state),
+          {
+            agentType: 'frontend',
+            filePath: 'src/features/dashboard/model/types.ts',
+            language: 'typescript',
+            content: 'export interface DashboardViewModel { title: string; status: string; }\n',
+            source: 'mock',
+          },
+          {
+            agentType: 'frontend',
+            filePath: 'src/features/dashboard/view-model/use-dashboard.ts',
+            language: 'typescript',
+            content: "import type { DashboardViewModel } from '../model/types';\nexport function useDashboard(): DashboardViewModel { return { title: 'Dashboard', status: 'ready' }; }\n",
+            source: 'mock',
+          },
+          {
+            agentType: 'frontend',
+            filePath: 'src/features/dashboard/view/DashboardView.tsx',
+            language: 'tsx',
+            content: "import { useDashboard } from '../view-model/use-dashboard';\nexport function DashboardView() { const model = useDashboard(); return <main><h1>{model.title}</h1><p>{model.status}</p></main>; }\n",
+            source: 'mock',
+          },
+          {
+            agentType: 'frontend',
+            filePath: 'src/app/page.tsx',
+            language: 'tsx',
+            content: "import { DashboardView } from '../features/dashboard/view/DashboardView';\nexport default function Page() { return <DashboardView />; }\n",
+            source: 'mock',
+          },
+          artifact('frontend', 'src/app/layout.tsx', 'tsx'),
         ],
       };
     },
@@ -175,6 +231,7 @@ export function buildSimulationNodeImpls(
       ]);
       return {
         artifacts: [
+          createBackendApiContractArtifact(state),
           artifact('backend', 'src/main.ts', 'ts'),
           artifact('backend', 'src/app.module.ts', 'ts'),
         ],
@@ -188,7 +245,10 @@ export function buildSimulationNodeImpls(
         { type: 'decision', text: 'Database artifacts generated.', pct: 100 },
       ]);
       return {
-        artifacts: [artifact('database', 'prisma/schema.prisma', 'prisma')],
+        artifacts: [
+          createDatabaseModelContractArtifact(state),
+          artifact('database', 'prisma/schema.prisma', 'prisma'),
+        ],
       };
     },
 
@@ -199,7 +259,11 @@ export function buildSimulationNodeImpls(
         { type: 'decision', text: 'Architecture docs generated.', pct: 100 },
       ]);
       return {
-        artifacts: [artifact('architecture', 'ARCHITECTURE.md', 'markdown')],
+        artifacts: [
+          createArchitectureReviewContractArtifact(state),
+          artifact('architecture', 'ARCHITECTURE.md', 'markdown'),
+          artifact('architecture', 'ADRS.md', 'markdown'),
+        ],
       };
     },
 
@@ -217,6 +281,31 @@ export function buildSimulationNodeImpls(
         { type: 'decision', text: 'All checks passed.', pct: 100 },
       ]);
       return { error: null };
+    },
+
+    [NODE.EXECUTION_VALIDATE_OUTPUTS]: async (state) => {
+      await play(emitter, state, NODE.EXECUTION_VALIDATE_OUTPUTS, [
+        { type: 'decision', text: 'Materializing generated artifacts (simulated)…', pct: 35 },
+        { type: 'tool-call', text: 'Running build validation (simulated)…', pct: 75 },
+        { type: 'decision', text: 'Sandbox execution validation passed.', pct: 100 },
+      ]);
+      return {
+        error: null,
+        retryPlan: [],
+        executionValidation: {
+          valid: true,
+          checkedAt: new Date().toISOString(),
+          checks: [
+            {
+              name: 'simulation-execution-validation',
+              agentType: 'architecture',
+              status: 'passed',
+              durationMs: 0,
+              summary: 'Simulation mode skipped real sandbox commands.',
+            },
+          ],
+        },
+      };
     },
 
     [NODE.COMMIT_TO_GITHUB]: async (state) => {

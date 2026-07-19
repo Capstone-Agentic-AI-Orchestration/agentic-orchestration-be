@@ -1,4 +1,6 @@
-import { IsString, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsIn, IsOptional, IsString, MinLength, ValidateNested } from 'class-validator';
+import { DesignGuidanceDto } from './design-guidance.dto';
 
 export class AutoAnalyzeBriefDto {
   @IsString()
@@ -10,4 +12,13 @@ export class AutoAnalyzeBriefDto {
 
   @IsString()
   stackKey!: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DesignGuidanceDto)
+  designGuidance?: DesignGuidanceDto;
+
+  @IsOptional()
+  @IsIn(['fast', 'thorough'])
+  mode?: 'fast' | 'thorough';
 }

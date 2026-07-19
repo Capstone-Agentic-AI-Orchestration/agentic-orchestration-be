@@ -34,7 +34,7 @@ BE writes Project.runId + OrchestrationRun(status=RUNNING)
 BE returns { accepted: true, runId }
 BE dispatcher starts run execution asynchronously
 BE sequencer loads memory/scaffolding context and calls provider layer
-Provider layer delegates to Eve when configured, otherwise graph fallback
+Provider layer delegates to Eve when configured, otherwise direct-provider fallback
 BE validates artifacts, persists results, updates run state
 BE emits typed orchestration:event messages over /devflow
 FE renders stored state and live events
@@ -42,17 +42,26 @@ FE renders stored state and live events
 
 ## Dispatch Mode
 
-Current mode:
+Canonical mode:
+
+```env
+ORCHESTRATION_DISPATCHER_MODE="db-lease"
+```
+
+`db-lease` uses `OrchestrationRunDispatcher` to persist `OrchestrationJob` rows, claim
+due jobs with compare-and-swap locks, and acquire a run-level lease before driving the
+sequencer. This preserves the public contract while making dispatch restart-safe.
+
+Local/dev compatibility:
 
 ```env
 ORCHESTRATION_DISPATCHER_MODE="in-process"
 ```
 
-`in-process` uses `OrchestrationRunDispatcher` to schedule background run execution after
-the API response path has persisted run state. This preserves the public contract while
-keeping deployment simple.
+`in-process` runs the fallback closure in the same Node process and should not be used
+as the production control-plane mode.
 
-Future durable mode should keep the same dispatcher interface and swap implementation:
+Future broker mode should keep the same dispatcher interface and swap implementation:
 
 - BullMQ + Redis when we want explicit queue workers and retries.
 - Supabase Queues when we want fewer moving parts inside the Supabase/Postgres platform.

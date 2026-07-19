@@ -11,6 +11,7 @@ import { BACKEND_AGENT_SYSTEM, buildAgentSystemPrompt, buildRepoAccessBlock, bui
 import { resolveModelForNode } from '../providers/base-llm.provider';
 import { ProjectScaffolderService } from '../scaffolding/project-scaffolder.service';
 import { OutputValidationService } from '../output-validation/output-validation.service';
+import { createBackendApiContractArtifact, createOutputStructureContractArtifact, renderDomainContractContext } from '../domain-contracts';
 
 @Injectable()
 export class BackendAgentNode {
@@ -77,6 +78,8 @@ export class BackendAgentNode {
       const allBackendFiles = [
         ...new Set([...coreFiles, ...backendFiles]),
       ];
+      const apiContractArtifact = createBackendApiContractArtifact(state);
+      const outputStructureArtifact = createOutputStructureContractArtifact(state);
 
       const skipCandidate = await this.memory.findSkipCandidate(
         'backend',
@@ -102,13 +105,13 @@ export class BackendAgentNode {
             language: 'typescript',
             source: 'skip',
           };
-          const validationErrors = this.outputValidation.validateBatch([candidateArtifact], state.projectId);
+          const validationErrors = this.outputValidation.validateBatch([apiContractArtifact, outputStructureArtifact, candidateArtifact], state.projectId);
           if (validationErrors.length === 0) {
             this.logger.log(
               `[${state.projectId}] Skip-generation: reusing backend memory artifact (similarity=${skipCandidate.similarity?.toFixed(3)})`,
             );
             await this.memory.bumpUsageStats(skipCandidate.id);
-            return { artifacts: this.mergeWithScaffold([candidateArtifact], state), validationFeedback: null };
+            return { artifacts: this.mergeWithScaffold([apiContractArtifact, candidateArtifact], state), validationFeedback: null };
           }
           this.logger.warn(
             `[${state.projectId}] Skip candidate failed content validation (${validationErrors.length} errors), falling through to LLM generation`,
@@ -122,6 +125,7 @@ export class BackendAgentNode {
       if (process.env.MOCK_MODE === 'true') {
         this.streamEmitter.emit(projectId, 'backend_agent', runId ?? '', 'decision', 'Mock mode: generating predefined backend files');
         const mockArtifacts: GeneratedArtifact[] = [
+          apiContractArtifact,
           {
             agentType: 'backend',
             filePath: 'src/main.ts',
@@ -146,6 +150,11 @@ export class BackendAgentNode {
         : '';
 
       const structuredMemory = buildStructuredMemoryContext(memoryBundle.layers);
+      const domainContracts = renderDomainContractContext([
+        ...(state.artifacts ?? []),
+        outputStructureArtifact,
+        apiContractArtifact,
+      ]);
 
       const selfCritiqueFeedback = state.selfCritique
         ? `Self-review found these quality issues before validation — address them:\n${state.selfCritique}`
@@ -155,12 +164,14 @@ export class BackendAgentNode {
         .filter(Boolean)
         .join('\n\n');
 
-      const systemPrompt = buildAgentSystemPrompt(
-        BACKEND_AGENT_SYSTEM,
-        structuredMemory,
+      const systemPrompt = buildAgentSystemPrompt({
+        basePrompt: BACKEND_AGENT_SYSTEM,
+        memoryContext: structuredMemory,
         artifactManifest,
-        combinedFeedback || undefined,
-      );
+        previousFeedback: combinedFeedback || undefined,
+        domainContracts,
+        agentSkillRole: 'backend',
+      });
 
       // Give the agent its repository capability so it can read the existing code before
       // generating; empty string when repository access is disabled for this run.
@@ -173,6 +184,12 @@ export class BackendAgentNode {
       }>>({
         agentName: resolveModelForNode('backend_agent', 'backend_agent'),
         subagent: 'backend',
+        correlation: {
+          projectId,
+          runId,
+          nodeId: 'backend_agent',
+          agent: 'backend',
+        },
         onToken: (delta) => this.streamEmitter.emit(projectId, 'backend_agent', runId ?? '', 'token', delta),
         systemPrompt: systemPromptWithRepo,
         userPrompt: `Generate NestJS backend files for this project:
@@ -186,22 +203,34 @@ Acceptance Criteria: ${state.contract.acceptanceCriteria.join('; ')}
 Files to generate:
 ${allBackendFiles.map((f) => `- ${f}`).join('\n')}
 
+Authoritative API_CONTRACT.json (DevFlow will persist this contract artifact automatically; do not emit API_CONTRACT.json in your JSON output):
+${apiContractArtifact.content}
+
+Authoritative OUTPUT_STRUCTURE.json (frontend owns and persists this contract; do not emit OUTPUT_STRUCTURE.json in your JSON output):
+${outputStructureArtifact.content}
+
 Generate complete NestJS code with:
 - Proper @Module, @Controller, @Injectable decorators
 - Full CRUD operations where applicable
 - Zod-validated DTOs
 - Swagger/OpenAPI decorators where appropriate
+- Route groups, methods, paths, DTO names, module/service ownership, auth details, pagination conventions, Prisma access policy, response DTOs, and documented errors must match API_CONTRACT.json exactly
+- Backend file paths must match OUTPUT_STRUCTURE.json, especially src/modules/<resource>/<resource>.module.ts, controller.ts, service.ts, and dto/*.dto.ts
+- Use API_CONTRACT.json repairHints as the checklist when fixing validator feedback
 - Config files (package.json, tsconfig.json, nest-cli.json, tsconfig.build.json, README-backend.md) will be provided automatically — do not include them in your output`,
         expectedShape: 'array',
       });
 
-      const llmArtifacts: GeneratedArtifact[] = result.value.map((item) => ({
-        agentType: 'backend' as const,
-        filePath: item.filePath,
-        content: item.content,
-        language: item.language ?? this.inferLanguage(item.filePath),
-        source: 'llm',
-      }));
+      const llmArtifacts: GeneratedArtifact[] = [
+        apiContractArtifact,
+        ...result.value.map((item) => ({
+          agentType: 'backend' as const,
+          filePath: item.filePath,
+          content: item.content,
+          language: item.language ?? this.inferLanguage(item.filePath),
+          source: 'llm' as const,
+        })),
+      ];
 
       const artifacts = this.mergeWithScaffold(llmArtifacts, state);
 

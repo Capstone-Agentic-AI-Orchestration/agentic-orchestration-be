@@ -4,6 +4,18 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { IoAdapter } from '@nestjs/platform-socket.io';
 import { AppModule } from './app.module';
 
+function corsOrigins(): string | string[] {
+  const configured = process.env.CORS_ORIGIN?.trim() || '*';
+  if (configured === '*') return configured;
+
+  const origins = configured
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  return origins.length <= 1 ? origins[0] ?? configured : origins;
+}
+
 async function bootstrap(): Promise<void> {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -15,12 +27,8 @@ async function bootstrap(): Promise<void> {
   // CORS_ORIGIN may list several origins comma-separated (e.g. localhost + 127.0.0.1,
   // or a prod frontend URL). The cors package only multi-matches when given an ARRAY —
   // a comma-joined string is treated as one literal origin and matches nothing.
-  const corsOrigin = process.env.CORS_ORIGIN ?? '*';
   app.enableCors({
-    origin:
-      corsOrigin === '*'
-        ? true
-        : corsOrigin.split(',').map((o) => o.trim()).filter(Boolean),
+    origin: corsOrigins(),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
   });

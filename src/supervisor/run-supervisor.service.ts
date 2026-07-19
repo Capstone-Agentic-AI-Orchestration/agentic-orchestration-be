@@ -14,15 +14,15 @@ import { OrchestrationService } from '../orchestration/orchestration.service';
 
 /**
  * How often the supervisor polls for stuck runs.
- * 60 seconds is suitable for development; tighten in production if SLA requires.
+ * Defaults to the same value as env.schema.ts; override with SUPERVISOR_POLL_INTERVAL_MS.
  */
-const POLL_INTERVAL_MS = 60_000;
+const POLL_INTERVAL_MS = positiveIntegerFromEnv('SUPERVISOR_POLL_INTERVAL_MS', 30_000);
 
 /**
  * A run is considered "stuck" when its project row has not transitioned to a
- * terminal status AND no EventLog entry has been written in the past 10 minutes.
+ * terminal status AND no EventLog entry has been written in the configured threshold.
  */
-const STUCK_THRESHOLD_MS = 10 * 60 * 1_000; // 10 minutes
+const STUCK_THRESHOLD_MS = positiveIntegerFromEnv('SUPERVISOR_STUCK_THRESHOLD_MS', 300_000);
 
 /**
  * Project statuses that represent active automation. Human-wait states such as
@@ -35,6 +35,13 @@ const SUPERVISED_STATUSES = [
   ProjectStatus.COMMITTING,
 ] as const;
 const SUPERVISOR_NODE = 'supervisor';
+
+function positiveIntegerFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw?.trim()) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 // ─── Service ──────────────────────────────────────────────────────────────────
 
@@ -174,7 +181,10 @@ export class RunSupervisorService {
         rb."retryCount",
         rb."maxRetries",
         rb."tokensConsumed",
-        rb."tokenBudget"
+        rb."tokenBudget",
+        latest_run."runId",
+        latest_run."lastHeartbeatAt",
+        latest_run."leaseExpiresAt"
       FROM projects."Project" p
       INNER JOIN orchestration.run_budgets rb ON rb."projectId" = p.id
       LEFT JOIN LATERAL (
@@ -182,6 +192,13 @@ export class RunSupervisorService {
         FROM orchestration.event_logs el
         WHERE el."projectId" = p.id
       ) last_event ON true
+      LEFT JOIN LATERAL (
+        SELECT r."runId", r."lastHeartbeatAt", r."leaseExpiresAt", r.status
+        FROM orchestration.orchestration_runs r
+        WHERE r."projectId" = p.id
+        ORDER BY r."createdAt" DESC
+        LIMIT 1
+      ) latest_run ON true
       WHERE p.status IN (
         CAST(${SUPERVISED_STATUSES[0]} AS projects."ProjectStatus"),
         CAST(${SUPERVISED_STATUSES[1]} AS projects."ProjectStatus"),
@@ -189,8 +206,22 @@ export class RunSupervisorService {
         CAST(${SUPERVISED_STATUSES[3]} AS projects."ProjectStatus")
       )
         AND (
-          last_event."lastEventAt" IS NULL
-          OR last_event."lastEventAt" < ${threshold}
+          latest_run.status IS NULL
+          OR latest_run.status <> CAST('PAUSED' AS orchestration."OrchestrationRunStatus")
+        )
+        AND (
+          (
+            latest_run."lastHeartbeatAt" IS NULL
+            OR latest_run."lastHeartbeatAt" < ${threshold}
+          )
+          AND (
+            last_event."lastEventAt" IS NULL
+            OR last_event."lastEventAt" < ${threshold}
+          )
+          AND (
+            latest_run."leaseExpiresAt" IS NULL
+            OR latest_run."leaseExpiresAt" < NOW()
+          )
         )
     `;
 
@@ -201,6 +232,9 @@ export class RunSupervisorService {
       maxRetries: Number(row.maxRetries),
       tokensConsumed: Number(row.tokensConsumed),
       tokenBudget: Number(row.tokenBudget),
+      runId: row.runId,
+      lastHeartbeatAt: row.lastHeartbeatAt,
+      leaseExpiresAt: row.leaseExpiresAt,
     }));
   }
 
@@ -231,7 +265,7 @@ export class RunSupervisorService {
 
     // Auto-retry path: increment retryCount, log STUCK event, then reset the
     // project status back to an active state so OrchestrationService can resume
-    // the LangGraph run from the last checkpoint.
+    // the sequencer run from the last persisted checkpoint.
     this.logger.warn(
       `[${project.id}] Auto-retrying stuck run (attempt ${project.retryCount + 1}/${project.maxRetries})`,
     );
@@ -250,7 +284,7 @@ export class RunSupervisorService {
       this.failRunningRuntimeState(project.id, reason, recoveredAt),
       // Reset project status to its current active state to signal re-invocation.
       // The previous status is preserved — OrchestrationService polls status and
-      // resumes the graph from the LangGraph checkpoint when it sees an active state.
+      // resumes the sequencer from checkpointState when it sees an active state.
       this.prisma.project.update({
         where: { id: project.id },
         data: { status: project.status },
@@ -378,6 +412,9 @@ interface StuckProjectRow {
   maxRetries: bigint | number;
   tokensConsumed: bigint | number;
   tokenBudget: bigint | number;
+  runId: string | null;
+  lastHeartbeatAt: Date | null;
+  leaseExpiresAt: Date | null;
 }
 
 interface StuckProject {
@@ -387,4 +424,7 @@ interface StuckProject {
   maxRetries: number;
   tokensConsumed: number;
   tokenBudget: number;
+  runId: string | null;
+  lastHeartbeatAt: Date | null;
+  leaseExpiresAt: Date | null;
 }

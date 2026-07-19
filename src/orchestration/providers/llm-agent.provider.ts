@@ -19,6 +19,10 @@ import {
   type LlmProviderName,
 } from './llm-runtime';
 import { QUALITY_BAR } from '../prompts/agent-prompts';
+import {
+  type AgentSkillRole,
+  renderAgentSkillPack,
+} from '../prompts/agent-skill-registry';
 
 @Injectable()
 export class LlmAgentProvider extends BaseLlmProvider implements WorkOrderAgentProvider {
@@ -64,6 +68,9 @@ export class LlmAgentProvider extends BaseLlmProvider implements WorkOrderAgentP
 
     const memoryContext = await this.workOrderMemoryContext(context);
     const contract = agentArtifactContractFor(context.workOrder.agentType);
+    const skillPack = renderAgentSkillPack(
+      this.skillRoleForWorkOrder(context.workOrder.agentType),
+    );
 
     const systemPrompt = [
       'You are a senior DevFlow implementation engineer producing one real, production-ready project file from a work order.',
@@ -77,6 +84,7 @@ export class LlmAgentProvider extends BaseLlmProvider implements WorkOrderAgentP
       `At minimum the content must include ${contract.requiredSignals
         .map((signal) => signal.anyOf.map((value) => `"${value}"`).join(' or '))
         .join('; ')} — but treat these only as a floor and deliver substantially more complete, well-structured work than the minimum.`,
+      skillPack,
       this.agentInstruction(context.workOrder.agentType),
       QUALITY_BAR,
       memoryContext ? `Relevant layered memory:\n${memoryContext}` : null,
@@ -109,6 +117,7 @@ export class LlmAgentProvider extends BaseLlmProvider implements WorkOrderAgentP
         systemPrompt,
         userPrompt,
         expectedShape: 'object',
+        onToken: context.onToken,
       },
       (content) => this.parseOutputToObject(content),
     );
@@ -141,6 +150,25 @@ export class LlmAgentProvider extends BaseLlmProvider implements WorkOrderAgentP
     });
 
     return bundle.context;
+  }
+
+  private skillRoleForWorkOrder(
+    agentType: WorkOrderAgentType,
+  ): AgentSkillRole | undefined {
+    switch (agentType) {
+      case WorkOrderAgentType.CONTRACT:
+        return 'contract';
+      case WorkOrderAgentType.FRONTEND:
+        return 'frontend';
+      case WorkOrderAgentType.BACKEND:
+        return 'backend';
+      case WorkOrderAgentType.DATABASE:
+        return 'database';
+      case WorkOrderAgentType.ARCHITECTURE:
+        return 'architecture';
+      default:
+        return undefined;
+    }
   }
 
   private agentInstruction(agentType: WorkOrderAgentType): string {

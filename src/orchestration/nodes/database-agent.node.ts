@@ -11,6 +11,12 @@ import { DATABASE_AGENT_SYSTEM, buildAgentSystemPrompt, buildRepoAccessBlock, bu
 import { resolveModelForNode } from '../providers/base-llm.provider';
 import { ProjectScaffolderService } from '../scaffolding/project-scaffolder.service';
 import { OutputValidationService } from '../output-validation/output-validation.service';
+import {
+  createBackendApiContractArtifact,
+  createDatabaseModelContractArtifact,
+  createOutputStructureContractArtifact,
+  renderDomainContractContext,
+} from '../domain-contracts';
 
 @Injectable()
 export class DatabaseAgentNode {
@@ -72,6 +78,9 @@ export class DatabaseAgentNode {
         'README-database.md',
       ];
       const allDbFiles = [...new Set([...coreFiles, ...dbFiles])];
+      const apiContractArtifact = createBackendApiContractArtifact(state);
+      const dataModelArtifact = createDatabaseModelContractArtifact(state);
+      const outputStructureArtifact = createOutputStructureContractArtifact(state);
 
       const skipCandidate = await this.memory.findSkipCandidate(
         'database',
@@ -97,13 +106,13 @@ export class DatabaseAgentNode {
             language: 'prisma',
             source: 'skip',
           };
-          const validationErrors = this.outputValidation.validateBatch([candidateArtifact], state.projectId);
+          const validationErrors = this.outputValidation.validateBatch([dataModelArtifact, outputStructureArtifact, candidateArtifact], state.projectId);
           if (validationErrors.length === 0) {
             this.logger.log(
               `[${state.projectId}] Skip-generation: reusing database memory artifact (similarity=${skipCandidate.similarity?.toFixed(3)})`,
             );
             await this.memory.bumpUsageStats(skipCandidate.id);
-            return { artifacts: this.mergeWithScaffold([candidateArtifact], state), validationFeedback: null };
+            return { artifacts: this.mergeWithScaffold([dataModelArtifact, candidateArtifact], state), validationFeedback: null };
           }
           this.logger.warn(
             `[${state.projectId}] Skip candidate failed content validation (${validationErrors.length} errors), falling through to LLM generation`,
@@ -117,6 +126,7 @@ export class DatabaseAgentNode {
       if (process.env.MOCK_MODE === 'true') {
         this.streamEmitter.emit(projectId, 'database_agent', runId ?? '', 'decision', 'Mock mode: generating predefined database files');
         const mockArtifacts: GeneratedArtifact[] = [
+          dataModelArtifact,
           {
             agentType: 'database',
             filePath: 'prisma/schema.prisma',
@@ -142,6 +152,12 @@ export class DatabaseAgentNode {
         .join('\n');
 
       const structuredMemory = buildStructuredMemoryContext(memoryBundle.layers);
+      const domainContracts = renderDomainContractContext([
+        ...(state.artifacts ?? []),
+        outputStructureArtifact,
+        apiContractArtifact,
+        dataModelArtifact,
+      ]);
 
       const selfCritiqueFeedback = state.selfCritique
         ? `Self-review found these quality issues before validation — address them:\n${state.selfCritique}`
@@ -151,12 +167,14 @@ export class DatabaseAgentNode {
         .filter(Boolean)
         .join('\n\n');
 
-      const systemPrompt = buildAgentSystemPrompt(
-        DATABASE_AGENT_SYSTEM,
-        structuredMemory,
+      const systemPrompt = buildAgentSystemPrompt({
+        basePrompt: DATABASE_AGENT_SYSTEM,
+        memoryContext: structuredMemory,
         artifactManifest,
-        combinedFeedback || undefined,
-      );
+        previousFeedback: combinedFeedback || undefined,
+        domainContracts,
+        agentSkillRole: 'database',
+      });
 
       // Give the agent its repository capability so it can read the existing code before
       // generating; empty string when repository access is disabled for this run.
@@ -169,6 +187,12 @@ export class DatabaseAgentNode {
       }>>({
         agentName: resolveModelForNode('database_agent', 'database_agent'),
         subagent: 'database',
+        correlation: {
+          projectId,
+          runId,
+          nodeId: 'database_agent',
+          agent: 'database',
+        },
         onToken: (delta) => this.streamEmitter.emit(projectId, 'database_agent', runId ?? '', 'token', delta),
         systemPrompt: systemPromptWithRepo,
         userPrompt: `Generate database files for this project:
@@ -182,21 +206,35 @@ Acceptance Criteria: ${state.contract.acceptanceCriteria.join('; ')}
 Files to generate:
 ${allDbFiles.map((f) => `- ${f}`).join('\n')}
 
+Authoritative DATA_MODEL.json (DevFlow will persist this contract artifact automatically; do not emit DATA_MODEL.json in your JSON output):
+${dataModelArtifact.content}
+
+Related API_CONTRACT.json (backend owns and persists this contract; use it to align entities, query patterns, pagination support, and seed data with backend API needs):
+${apiContractArtifact.content}
+
+Authoritative OUTPUT_STRUCTURE.json (frontend owns and persists this contract; do not emit OUTPUT_STRUCTURE.json in your JSON output):
+${outputStructureArtifact.content}
+
 Requirements:
 - prisma/schema.prisma: Full Prisma schema with all models, relations, and indexes (the generator client and datasource blocks will be provided automatically)
 - migrations SQL: Clean DDL with CREATE TABLE, indexes, and foreign keys
 - prisma/seed.ts: Realistic seed data using @prisma/client
+- Entity names, fields, indexes, constraints, relations, migration policy, and seed data must match DATA_MODEL.json and support API_CONTRACT.json route groups
+- Database file paths must match OUTPUT_STRUCTURE.json: prisma/schema.prisma, prisma/migrations/**/*.sql, prisma/seed.ts, and README-database.md
 - README-database.md: ERD description, migration guide, seeding instructions`,
         expectedShape: 'array',
       });
 
-      const llmArtifacts: GeneratedArtifact[] = result.value.map((item) => ({
-        agentType: 'database' as const,
-        filePath: item.filePath,
-        content: item.content,
-        language: item.language ?? this.inferLanguage(item.filePath),
-        source: 'llm',
-      }));
+      const llmArtifacts: GeneratedArtifact[] = [
+        dataModelArtifact,
+        ...result.value.map((item) => ({
+          agentType: 'database' as const,
+          filePath: item.filePath,
+          content: item.content,
+          language: item.language ?? this.inferLanguage(item.filePath),
+          source: 'llm' as const,
+        })),
+      ];
 
       const artifacts = this.mergeWithScaffold(llmArtifacts, state);
 

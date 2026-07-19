@@ -97,7 +97,7 @@ function makePrismaMock() {
       findFirst: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
-      updateMany: vi.fn(),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     orchestrationRun: {
       findMany: vi.fn().mockResolvedValue([]),
@@ -242,6 +242,45 @@ describe('ProjectsService', () => {
       'nextjs-nestjs-supabase',
       'Acme Logistics',
       pmUser.id,
+      OrchestrationRunTrigger.START,
+      undefined,
+      undefined,
+    );
+  });
+
+  it('startOrchestration forwards optional design guidance', async () => {
+    prisma.project.findFirst.mockResolvedValue({
+      id: 'project-1',
+      companyName: 'Acme Logistics',
+      brief: 'Build a delivery dashboard',
+      stackKey: 'nextjs-nestjs-supabase',
+      runId: null,
+      kickoff: { status: ProjectKickoffStatus.READY },
+      workOrders: [{ instructions: 'Build the first dashboard shell.' }],
+    });
+
+    await service.startOrchestration('project-1', pmUser, {
+      designGuidance: {
+        theme: 'black',
+        productFeel: 'operational',
+        layoutDensity: 'balanced',
+        accessibilityLevel: 'strict',
+        forbiddenPatterns: ['gradient orb'],
+      },
+    });
+
+    expect(orchestration.startRun).toHaveBeenCalledWith(
+      'project-1',
+      'Build a delivery dashboard',
+      'nextjs-nestjs-supabase',
+      'Acme Logistics',
+      pmUser.id,
+      OrchestrationRunTrigger.START,
+      undefined,
+      expect.objectContaining({
+        theme: 'black',
+        forbiddenPatterns: ['gradient orb'],
+      }),
     );
   });
 
@@ -284,6 +323,7 @@ describe('ProjectsService', () => {
       pmUser.id,
       OrchestrationRunTrigger.START,
       intakeContext,
+      undefined,
     );
   });
 
@@ -2163,6 +2203,31 @@ describe('ProjectsService', () => {
         id: 'work-order-1',
         projectId: 'project-1',
         taskId: 'task-1',
+        artifactId: 'artifact-1',
+        title: 'Implement dashboard handoff',
+        instructions: 'Build the dev dashboard from the approved artifact.',
+        agentType: WorkOrderAgentType.FRONTEND,
+        status: WorkOrderStatus.DISPATCHED,
+        priority: WorkOrderPriority.NORMAL,
+        createdById: pmUser.id,
+        dispatchedAt: new Date('2026-05-28T01:00:00.000Z'),
+        completedAt: null,
+        failedAt: null,
+        createdAt: new Date('2026-05-28T00:00:00.000Z'),
+        updatedAt: new Date('2026-05-28T01:00:00.000Z'),
+        task: {
+          id: 'task-1',
+          title: 'Implement dashboard',
+          assignedToId: devUser.id,
+          status: ProjectTaskStatus.TODO,
+        },
+        artifact: null,
+        createdBy: null,
+      })
+      .mockResolvedValueOnce({
+        id: 'work-order-1',
+        projectId: 'project-1',
+        taskId: 'task-1',
         artifactId: 'artifact-generated-1',
         title: 'Implement dashboard handoff',
         instructions: 'Build the dev dashboard from the approved artifact.',
@@ -2223,13 +2288,12 @@ describe('ProjectsService', () => {
 
     await service.dispatchWorkOrder('project-1', 'work-order-1', pmUser);
 
-    expect(prisma.workOrder.update).toHaveBeenCalledWith({
-      where: { id: 'work-order-1' },
+    expect(prisma.workOrder.updateMany).toHaveBeenCalledWith({
+      where: { id: 'work-order-1', projectId: 'project-1', status: WorkOrderStatus.READY },
       data: {
         status: WorkOrderStatus.DISPATCHED,
         dispatchedAt: expect.any(Date),
       },
-      include: expect.any(Object),
     });
     expect(prisma.projectTimelineEvent.create).toHaveBeenCalledWith({
       data: {
@@ -2307,7 +2371,7 @@ describe('ProjectsService', () => {
       service.dispatchWorkOrder('project-1', 'work-order-1', pmUser),
     ).rejects.toThrow('Only READY work orders can be dispatched');
 
-    expect(prisma.workOrder.update).not.toHaveBeenCalled();
+    expect(prisma.workOrder.updateMany).not.toHaveBeenCalled();
     expect(orchestration.executeWorkOrder).not.toHaveBeenCalled();
   });
 

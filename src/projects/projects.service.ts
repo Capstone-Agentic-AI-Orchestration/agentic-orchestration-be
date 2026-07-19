@@ -27,6 +27,7 @@ import { AddTaskCommentDto } from './dto/task-comment.dto';
 import { CreateWorkOrderDto, UpdateWorkOrderDto } from './dto/work-order.dto';
 import { UpdateProjectKickoffDto } from './dto/project-kickoff.dto';
 import { ControlOrchestrationDto } from './dto/control-orchestration.dto';
+import { StartOrchestrationDto } from './dto/start-orchestration.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { IntakeService } from '../intake/intake.service';
 import { GroupsService } from '../groups/groups.service';
@@ -400,6 +401,7 @@ export class ProjectsService {
   async startOrchestration(
     id: string,
     user: AuthUser,
+    options: StartOrchestrationDto = {},
   ): Promise<{ accepted: boolean; runId: string }> {
     const project = await this.prisma.project.findFirst({
       where: this.projectAccessWhere(user, id),
@@ -443,17 +445,16 @@ export class ProjectsService {
     }
 
     const intakeContext = this.intake ? await this.intake.contextForStart(project, user.id) : undefined;
-    const runId = intakeContext
-      ? await this.orchestration.startRun(
-        project.id,
-        project.brief,
-        project.stackKey,
-        project.companyName,
-        user.id,
-        OrchestrationRunTrigger.START,
-        intakeContext,
-      )
-      : await this.orchestration.startRun(project.id, project.brief, project.stackKey, project.companyName, user.id);
+    const runId = await this.orchestration.startRun(
+      project.id,
+      project.brief,
+      project.stackKey,
+      project.companyName,
+      user.id,
+      OrchestrationRunTrigger.START,
+      intakeContext,
+      options.designGuidance,
+    );
 
     return { accepted: true, runId };
   }
@@ -656,7 +657,13 @@ export class ProjectsService {
 
   async autoAnalyzeBrief(
     user: AuthUser,
-    input: { companyName: string; brief: string; stackKey: string },
+    input: {
+      companyName: string;
+      brief: string;
+      stackKey: string;
+      designGuidance?: StartOrchestrationDto['designGuidance'];
+      mode?: 'fast' | 'thorough';
+    },
   ) {
     if (user.role !== UserRole.PM && user.role !== UserRole.ADMIN) {
       throw new ForbiddenException('Only PMs and admins can use auto-analyze.');
@@ -668,6 +675,8 @@ export class ProjectsService {
       companyName: input.companyName || 'Unknown company',
       brief: input.brief.trim(),
       stackKey: input.stackKey || 'nextjs-nestjs-supabase',
+      designGuidance: input.designGuidance,
+      mode: input.mode,
     });
   }
 
@@ -2465,14 +2474,26 @@ export class ProjectsService {
       throw new BadRequestException('Work order instructions are required before dispatch');
     }
 
-    const updated = await this.prisma.workOrder.update({
-      where: { id: workOrderId },
+    const claimed = await this.prisma.workOrder.updateMany({
+      where: { id: workOrderId, projectId: id, status: WorkOrderStatus.READY },
       data: {
         status: WorkOrderStatus.DISPATCHED,
         dispatchedAt: new Date(),
       },
+    });
+
+    if (claimed.count !== 1) {
+      throw new ConflictException('Work order was already dispatched by another request');
+    }
+
+    const updated = await this.prisma.workOrder.findFirst({
+      where: { id: workOrderId, projectId: id },
       include: workOrderInclude,
     });
+
+    if (!updated) {
+      throw new NotFoundException(`Work order ${workOrderId} not found`);
+    }
 
     await this.recordTimelineEvent(id, user, {
       type: ProjectTimelineEventType.WORK_ORDER_DISPATCHED,

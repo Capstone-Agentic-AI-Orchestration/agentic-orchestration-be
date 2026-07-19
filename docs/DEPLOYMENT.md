@@ -1,75 +1,187 @@
-# DevFlow Deployment
+# Agentic Orchestration Deployment
 
-Topology after the Eve migration:
+Production topology:
 
+```text
+Frontend (Vercel) -- REST/Socket.IO --> NestJS backend (Render) -- HTTPS --> Eve agent service (Render)
+                                           |
+                                           +--> Supabase Postgres/Auth/pgvector
 ```
-Frontend (Vercel)  ──socket.io/REST──►  NestJS backend (Render)  ──HTTPS──►  Eve agent (Vercel)
-                                              │
-                                              └──►  Postgres / pgvector (Supabase)
-```
 
-The frontend only talks to the backend. The Eve agent is server-to-server only (the backend calls
-it; never the browser). See `docs/architecture/EVE_MIGRATION.md` for the architecture rationale.
+The frontend talks only to the backend. Supabase hosts Postgres and Auth, but the backend owns orchestration state, role checks, run control, sockets, GitHub delivery, provider calls, and recovery. The Eve service is server-to-server only and must not be called from the browser.
 
-## Engines
+## Supabase
 
-`ORCHESTRATION_LLM_ENGINE` selects generation:
-- `eve` (default) — delegate each agent turn to the Eve service (sandbox typecheck + self-repair).
-- `graph` — in-process raw-fetch provider (`GraphLlmProvider`).
+Create the production Supabase project first.
 
-`AgentLlmRouter` falls back to `graph` automatically when `EVE_SERVICE_URL` is unset/unreachable,
-so the backend runs fine **before** the Eve service exists. Roll out on `graph`, then flip to `eve`.
+Required setup:
 
-## One-time backend prep
+- Enable Auth providers, starting with GitHub for the current production path.
+- Enable `pgvector` for agent memory embeddings.
+- Keep service schemas private to the backend. Do not expose orchestration tables through the Supabase Data API unless a deliberate RLS and grant design is added.
+- Record `SUPABASE_URL`, frontend publishable/anon key, backend service-role key, pooled database URL, and direct database URL.
+
+Supabase's newer platform defaults require explicit grants for tables that should be reachable through the Data API. This app avoids that dependency for orchestration data: Vercel uses public Supabase Auth values, and business data flows through the Render backend.
+
+## Backend: Render Web Service
+
+Deploy `agentic-orchestration-be` as a Render Web Service.
+
+Build command:
 
 ```bash
-cd devflow-backend
-npm install                 # lockfile already free of @langchain/*; pulls openai (embeddings)
-npx prisma generate
-npx prisma migrate deploy   # applies 20260625120000_add_orchestration_checkpoint_state
-npm run build
+./render-build.sh
 ```
 
-## Render (NestJS backend) env
-
-| Var | Value | Notes |
-|---|---|---|
-| `DATABASE_URL` | Postgres connection | existing |
-| `AGENT_PROVIDER` | `llm` | `mock`/`simulation` skip the real code-gen pipeline |
-| `ORCHESTRATION_LLM_ENGINE` | `eve` | or `graph` to stay in-process |
-| `EVE_SERVICE_URL` | `https://<eve>.vercel.app` | required to actually use Eve; empty ⇒ graph fallback |
-| `EVE_SERVICE_TOKEN` | shared secret | must match the Eve route-auth secret |
-| `OPENROUTER_API_KEY` (or provider key) | … | used by the `graph` engine + fallback |
-| `OPENAI_API_KEY` | … | required for pgvector embeddings (`EmbeddingService`) |
-| `CORS_ORIGIN` | frontend Vercel domain | |
-
-## Eve agent (Vercel) — only when going to the `eve` engine
+Start command:
 
 ```bash
-cd devflow-eve-agent
-npm install
-npx eve dev          # validate the SDK surface + subagents locally first
-vercel deploy
+npm run start
 ```
 
-Eve (Vercel) env: the route-auth secret (= `EVE_SERVICE_TOKEN`), `EVE_MODEL` (AI Gateway model
-string) or direct provider keys.
+Required production env:
 
-> Eve is a public beta. Run `npx eve dev` and confirm the `defineAgent`/`defineTool` API and the
-> `/eve/v1/session` request + SSE shape match `src/orchestration/providers/eve-llm.provider.ts`
-> before relying on it. The thin `EveLlmProvider` boundary is intentional so the contract is easy
-> to adjust.
+```env
+DATABASE_URL="postgresql://..."
+DIRECT_URL="postgresql://..."
+SUPABASE_URL="https://<project-ref>.supabase.co"
+SUPABASE_SERVICE_ROLE_KEY="..."
+AUTH_ALLOWED_PROVIDERS="github"
+AGENT_PROVIDER="llm"
+ORCHESTRATION_LLM_ENGINE="eve"
+ORCHESTRATION_DISPATCHER_MODE="db-lease"
+EVE_SERVICE_URL="https://<agent-service>.onrender.com"
+EVE_SERVICE_TOKEN="..."
+CORS_ORIGIN="https://<frontend-domain>"
+GITHUB_APP_ID="..."
+GITHUB_PRIVATE_KEY="..."
+GITHUB_INSTALLATION_ID="..."
+GITHUB_ORG="..."
+```
 
-## Rollout order
+Provider env depends on the selected direct fallback provider:
 
-1. Deploy backend on `graph` (no Eve needed) → verify a full run end-to-end.
-2. Deploy the Eve agent to Vercel; set `EVE_SERVICE_URL` + `EVE_SERVICE_TOKEN` on Render.
-3. Flip `ORCHESTRATION_LLM_ENGINE=eve`; verify a run routes to Eve (check the Vercel Agent Runs).
-4. Rollback at any time: unset `EVE_SERVICE_URL` or set `ORCHESTRATION_LLM_ENGINE=graph`.
+```env
+LLM_PROVIDER="openrouter"
+OPENROUTER_API_KEY="..."
+OPENROUTER_MODEL="..."
+OPENAI_API_KEY="..."
+```
 
-## Smoke check (graph engine, local)
+`DATABASE_URL` is used by the running backend. `DIRECT_URL` is used by Prisma CLI migration/introspection commands. If production uses a pooled Supabase runtime URL, `DIRECT_URL` must be the direct/non-pooling Supabase Postgres URL.
+
+Release-only env for schema verification:
+
+```env
+SUPABASE_PROJECT_REF="<project-ref>"
+SUPABASE_ACCESS_TOKEN="sbp_..."
+```
+
+`SUPABASE_ACCESS_TOKEN` is a Supabase Management API token. Keep it in the CI/release job environment, not in the frontend.
+
+## Prisma Release Step
+
+Prisma Client is generated during the backend build. Prisma migrations are a separate release step and should not run in every app startup.
+
+Run this before releasing a backend version:
 
 ```bash
-AGENT_PROVIDER=llm ORCHESTRATION_LLM_ENGINE=graph OPENROUTER_API_KEY=... npm run start
-# create a project via the API and watch the run reach AWAITING_GATE_1
+npm ci
+npm run prisma:generate
+npm run deploy:release
 ```
+
+`npm run deploy:release` runs:
+
+```bash
+npm run prisma:migrate
+npm run verify:supabase-schema
+```
+
+Use `prisma migrate deploy` in production. Do not use `prisma migrate dev` against production Supabase.
+
+## Eve Service: Render Web Service
+
+Deploy `agentic-orchestration-ag` as a separate Render Web Service.
+
+Render settings:
+
+```bash
+Build command: npm ci && npm test && npm run typecheck && npm run build
+Start command: npm run start
+```
+
+Required env:
+
+```env
+NODE_VERSION="24"
+EVE_SERVICE_TOKEN="<same value as backend>"
+EVE_MODEL="openai/gpt-5.4-mini"
+```
+
+Optional per-agent model overrides:
+
+```env
+EVE_BACKEND_MODEL=""
+EVE_FRONTEND_MODEL=""
+EVE_DATABASE_MODEL=""
+EVE_ARCHITECTURE_MODEL=""
+EVE_REQUIREMENTS_MODEL=""
+EVE_CONTRACT_MODEL=""
+EVE_CRITIQUE_MODEL=""
+```
+
+After Render assigns the service URL, set backend `EVE_SERVICE_URL` to that URL.
+
+## Frontend: Vercel
+
+Deploy `agentic-orchestration-fe` to Vercel.
+
+Required env:
+
+```env
+NEXT_PUBLIC_API_URL="https://<backend-service>.onrender.com"
+NEXT_PUBLIC_SOCKET_URL="https://<backend-service>.onrender.com"
+NEXT_PUBLIC_SUPABASE_URL="https://<project-ref>.supabase.co"
+NEXT_PUBLIC_SUPABASE_ANON_KEY="..."
+NEXT_PUBLIC_AUTH_REDIRECT_PATH="/client/sign-in"
+```
+
+Only `NEXT_PUBLIC_*` browser-safe values belong in the frontend. Never put `SUPABASE_SERVICE_ROLE_KEY`, database URLs, GitHub private keys, Eve secrets, or model provider keys in Vercel frontend env.
+
+After Vercel gives the production URL, update backend `CORS_ORIGIN` to the exact frontend origin.
+
+## Rollout Order
+
+1. Create Supabase project and configure Auth/provider settings.
+2. Deploy Eve service on Render and copy its URL.
+3. Configure backend env on Render, including `EVE_SERVICE_URL`.
+4. Run backend Prisma release step: `npm run deploy:release`.
+5. Deploy backend on Render.
+6. Deploy frontend on Vercel with backend and Supabase public env.
+7. Tighten backend `CORS_ORIGIN` to the Vercel production origin.
+8. Run production smoke checks.
+
+## Smoke Checks
+
+Backend readiness:
+
+```bash
+npm run deploy:smoke
+```
+
+Manual production checks:
+
+- Supabase Auth login succeeds.
+- `GET /auth/me` returns the expected backend profile and role.
+- Frontend API calls reach the Render backend.
+- Socket.IO connects to `NEXT_PUBLIC_SOCKET_URL`.
+- `GET /health/orchestration` reports database, auth, dispatcher, Eve, provider, GitHub, and outbox readiness.
+- Starting a test orchestration run creates durable `orchestration_runs` and `orchestration_jobs` rows.
+- The run reaches the expected gate or delivery state.
+
+Rollback options:
+
+- Set `ORCHESTRATION_LLM_ENGINE="direct"` to bypass Eve and use direct provider credentials.
+- Revert the backend service to the previous Render deploy if a code release fails.
+- Do not roll back database migrations without a dedicated reverse migration.

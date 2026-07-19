@@ -20,6 +20,7 @@ export const NODE = {
   ARCHITECTURE_AGENT: 'architecture_agent',
   SELF_CRITIQUE: 'self_critique',
   VALIDATE_OUTPUTS: 'validate_outputs',
+  EXECUTION_VALIDATE_OUTPUTS: 'execution_validate_outputs',
   GATE_2_CHECK: 'gate_2_check',
   COMMIT_TO_GITHUB: 'commit_to_github',
   MARK_DELIVERED: 'mark_delivered',

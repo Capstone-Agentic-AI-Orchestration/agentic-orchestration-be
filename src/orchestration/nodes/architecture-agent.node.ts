@@ -11,6 +11,13 @@ import { ARCHITECTURE_AGENT_SYSTEM, buildAgentSystemPrompt, buildStructuredMemor
 import { resolveModelForNode } from '../providers/base-llm.provider';
 import { ProjectScaffolderService } from '../scaffolding/project-scaffolder.service';
 import { OutputValidationService } from '../output-validation/output-validation.service';
+import {
+  createArchitectureReviewContractArtifact,
+  createBackendApiContractArtifact,
+  createDatabaseModelContractArtifact,
+  createOutputStructureContractArtifact,
+  renderDomainContractContext,
+} from '../domain-contracts';
 
 @Injectable()
 export class ArchitectureAgentNode {
@@ -61,7 +68,11 @@ export class ArchitectureAgentNode {
 
       this.streamEmitter.emit(projectId, 'architecture_agent', runId ?? '', 'decision', `Loaded ${memoryBundle.total} memory references for architecture context`);
 
-      const docFiles = ['ARCHITECTURE.md', 'API.md', 'DEPLOYMENT.md'];
+      const docFiles = ['ARCHITECTURE.md', 'API.md', 'DEPLOYMENT.md', 'ADRS.md'];
+      const apiContractArtifact = createBackendApiContractArtifact(state);
+      const dataModelArtifact = createDatabaseModelContractArtifact(state);
+      const outputStructureArtifact = createOutputStructureContractArtifact(state);
+      const architectureReviewArtifact = createArchitectureReviewContractArtifact(state);
 
       const skipCandidate = await this.memory.findSkipCandidate(
         'architecture',
@@ -87,13 +98,13 @@ export class ArchitectureAgentNode {
             language: 'markdown',
             source: 'skip',
           };
-          const validationErrors = this.outputValidation.validateBatch([candidateArtifact], state.projectId);
+          const validationErrors = this.outputValidation.validateBatch([architectureReviewArtifact, outputStructureArtifact, candidateArtifact], state.projectId);
           if (validationErrors.length === 0) {
             this.logger.log(
               `[${state.projectId}] Skip-generation: reusing architecture memory artifact (similarity=${skipCandidate.similarity?.toFixed(3)})`,
             );
             await this.memory.bumpUsageStats(skipCandidate.id);
-            return { artifacts: [candidateArtifact] };
+            return { artifacts: [architectureReviewArtifact, candidateArtifact] };
           }
           this.logger.warn(
             `[${state.projectId}] Skip candidate failed content validation (${validationErrors.length} errors), falling through to LLM generation`,
@@ -111,6 +122,7 @@ export class ArchitectureAgentNode {
       if (process.env.MOCK_MODE === 'true') {
         this.streamEmitter.emit(projectId, 'architecture_agent', runId ?? '', 'decision', 'Mock mode: generating predefined architecture docs');
         const artifacts: GeneratedArtifact[] = [
+          architectureReviewArtifact,
           {
             agentType: 'architecture',
             filePath: 'ARCHITECTURE.md',
@@ -135,6 +147,13 @@ export class ArchitectureAgentNode {
         .join('\n');
 
       const structuredMemory = buildStructuredMemoryContext(memoryBundle.layers);
+      const domainContracts = renderDomainContractContext([
+        ...(state.artifacts ?? []),
+        outputStructureArtifact,
+        apiContractArtifact,
+        dataModelArtifact,
+        architectureReviewArtifact,
+      ]);
 
       const selfCritiqueFeedback = state.selfCritique
         ? `Self-review found these quality issues before validation — address them:\n${state.selfCritique}`
@@ -144,13 +163,15 @@ export class ArchitectureAgentNode {
         .filter(Boolean)
         .join('\n\n');
 
-      const systemPrompt = buildAgentSystemPrompt(
-        ARCHITECTURE_AGENT_SYSTEM,
-        structuredMemory,
+      const systemPrompt = buildAgentSystemPrompt({
+        basePrompt: ARCHITECTURE_AGENT_SYSTEM,
+        memoryContext: structuredMemory,
         artifactManifest,
-        combinedFeedback || undefined,
-        state.contractSummary || undefined,
-      );
+        previousFeedback: combinedFeedback || undefined,
+        contractSummary: state.contractSummary || undefined,
+        domainContracts,
+        agentSkillRole: 'architecture',
+      });
 
       const result = await this.llm.generateJson<Array<{
         filePath: string;
@@ -159,6 +180,12 @@ export class ArchitectureAgentNode {
       }>>({
         agentName: resolveModelForNode('architecture_agent', 'architecture_agent'),
         subagent: 'architecture',
+        correlation: {
+          projectId,
+          runId,
+          nodeId: 'architecture_agent',
+          agent: 'architecture',
+        },
         onToken: (delta) => this.streamEmitter.emit(projectId, 'architecture_agent', runId ?? '', 'token', delta),
         systemPrompt,
         userPrompt: `Generate architecture documentation for this project:
@@ -172,7 +199,21 @@ Acceptance Criteria: ${state.contract.acceptanceCriteria.join('; ')}
 Already generated files:
 ${artifactSummary}
 
-Generate these 3 documentation files:
+Architecture review contract (DevFlow will persist this contract artifact automatically; do not emit ARCHITECTURE_REVIEW.md in your JSON output):
+${architectureReviewArtifact.content}
+
+Sibling contracts that docs and ADRs must cite and reconcile:
+
+OUTPUT_STRUCTURE.json:
+${outputStructureArtifact.content}
+
+API_CONTRACT.json:
+${apiContractArtifact.content}
+
+DATA_MODEL.json:
+${dataModelArtifact.content}
+
+Generate these 4 documentation files:
 
 1. ARCHITECTURE.md
    - System overview
@@ -191,17 +232,25 @@ Generate these 3 documentation files:
    - Environment variable reference
    - Docker setup instructions
    - Production deployment checklist
-   - Health check endpoints`,
+   - Health check endpoints
+
+4. ADRS.md
+   - ADR-style records for stack, API, data model, auth/security, deployment, and major trade-offs
+   - Each decision must cite the relevant generated artifact or domain contract
+   - Architecture docs must stay in the root Markdown files allowed by OUTPUT_STRUCTURE.json`,
         expectedShape: 'array',
       });
 
-      const artifacts: GeneratedArtifact[] = result.value.map((item) => ({
-        agentType: 'architecture' as const,
-        filePath: item.filePath,
-        content: item.content,
-        language: item.language ?? 'markdown',
-        source: 'llm',
-      }));
+      const artifacts: GeneratedArtifact[] = [
+        architectureReviewArtifact,
+        ...result.value.map((item) => ({
+          agentType: 'architecture' as const,
+          filePath: item.filePath,
+          content: item.content,
+          language: item.language ?? 'markdown',
+          source: 'llm' as const,
+        })),
+      ];
 
       this.logger.log(
         `[${state.projectId}] Architecture agent generated ${artifacts.length} docs (${memoryBundle.total} layered memories injected)`,

@@ -102,6 +102,12 @@ ${memoryBundle.context ? `Context from similar past requirements:\n${memoryBundl
       const result = await this.llm.generateJson<Partial<RequirementsDocument>>({
         agentName: resolveModelForNode('parse_requirements', 'requirements_parser'),
         subagent: 'requirements-parser',
+        correlation: {
+          projectId,
+          runId,
+          nodeId: NODE.PARSE_REQUIREMENTS,
+          agent: 'requirements-parser',
+        },
         onToken: (delta) => this.streamEmitter.emit(projectId, NODE.PARSE_REQUIREMENTS, runId ?? '', 'token', delta),
         systemPrompt: REQUIREMENTS_PARSER_SYSTEM,
         userPrompt: prompt,

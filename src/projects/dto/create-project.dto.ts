@@ -1,4 +1,14 @@
-import { IsBoolean, IsOptional, IsString, MaxLength, MinLength, ValidateIf } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsBoolean,
+  IsOptional,
+  IsString,
+  MaxLength,
+  MinLength,
+  ValidateIf,
+  ValidateNested,
+} from 'class-validator';
+import { DesignGuidanceDto } from './design-guidance.dto';
 
 export class CreateProjectDto {
   @IsString()
@@ -49,4 +59,9 @@ export class CreateProjectDto {
   @IsString()
   @MaxLength(40)
   mobileStack?: string;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DesignGuidanceDto)
+  designGuidance?: DesignGuidanceDto;
 }

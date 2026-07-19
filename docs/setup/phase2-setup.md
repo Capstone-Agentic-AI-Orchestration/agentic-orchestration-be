@@ -186,14 +186,13 @@ The client joins a Socket.IO room named after the `projectId`. All subscribers w
 
 ---
 
-## Phase 2E — LangSmith Tracing Setup
+## Phase 2E — Observability Notes
 
-LangSmith provides distributed tracing for every LangGraph node invocation. No code changes are required — the tracer activates automatically when the environment variables are present.
+LangChain/LangGraph runtime tracing has been removed from the active orchestration path. Keep LangSmith variables unset unless you are intentionally testing legacy instrumentation in an isolated branch. Current runtime visibility comes from event logs, provider status checks, Socket.IO orchestration events, and Eve agent run telemetry when `ORCHESTRATION_LLM_ENGINE=eve`.
 
-### Enable tracing
+### Legacy LangSmith variables
 
-1. Create an account at [smith.langchain.com](https://smith.langchain.com) and generate an API key.
-2. Add the following to your `.env`:
+If you temporarily need LangSmith-compatible variables for a legacy experiment, add the following to `.env`:
 
 ```bash
 LANGCHAIN_API_KEY="ls__your_key_here"
@@ -201,21 +200,4 @@ LANGCHAIN_TRACING_V2="true"
 LANGCHAIN_PROJECT="devflow"   # groups traces in the LangSmith UI
 ```
 
-3. Restart the backend:
-
-```bash
-npm run start:dev
-```
-
-### What is traced
-
-Every node invocation in the LangGraph pipeline — `parse_requirements`, `contract_negotiator`, `frontend_agent`, `backend_agent`, `database_agent`, `architecture_agent`, `validator`, `github_commit` — is automatically captured as a LangSmith run, including:
-
-- Input/output state
-- Token usage per LLM call
-- Latency per node
-- Errors and retries
-
-### Where to view traces
-
-Log in at [app.smith.langchain.com](https://app.smith.langchain.com) and open the **devflow** project. Each pipeline run appears as a top-level trace with child spans for each graph node.
+The active backend does not create LangSmith spans from these variables.

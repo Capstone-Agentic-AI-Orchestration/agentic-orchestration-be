@@ -5,7 +5,7 @@
 > (generate → sandbox typecheck → self-repair) lives in Eve subagents; NestJS-on-Render remains
 > the **control plane** (sequencing, gates, run state, memory retrieval, validation, persistence,
 > streaming, GitHub delivery). `ORCHESTRATION_LLM_ENGINE` defaults to `eve` and auto-falls-back to
-> the in-process `graph` provider when `EVE_SERVICE_URL` is unset/unreachable.
+> the in-process `direct` provider when `EVE_SERVICE_URL` is unset/unreachable.
 > Remaining external steps (not code): deploy the Eve service, run the DB migration for
 > `OrchestrationRun.checkpointState`, and `npm install` to drop `@langchain/*` from the lockfile.
 > Branch: `langchain-eve`. Strategy: **Full Eve agents + NestJS/Render control plane.**
@@ -17,7 +17,7 @@
 |---|---|---|
 | Where agents live | **Eve owns cognition** (generate + sandbox `typecheck` + self-repair per subagent); NestJS keeps orchestration | Each Eve subagent is a complete agent; nodes are control-plane adapters |
 | Memory / RAG | **NestJS retrieves (pgvector) and passes context into the Eve message** | pgvector stays in one place; Eve needs no DB access; generation spec + memory travel in the turn message |
-| Canonical engine | **`eve` default**, `graph` automatic fallback | Safe before the Eve service exists; flip-proof |
+| Canonical engine | **`eve` default**, `direct` automatic fallback | Safe before the Eve service exists; flip-proof |
 | Validation | **Eve self-checks in sandbox + NestJS `output-validation` is authoritative** | Belt-and-suspenders; control plane independently verifies what it commits |
 | Prompt source of truth | **`agent-prompts.ts`** (built into the turn message by the node, used by *both* engines); `instructions.md` owns only the Eve loop behavior | No prompt duplication — the generation spec has one home |
 
@@ -40,7 +40,7 @@ Hosting is unchanged: NestJS on Render, Eve as a separate Vercel service, talkin
 
 **Verification:** `tsc` clean on all changed source; `prisma validate` ✅; migration unit tests
 (20) + orchestration spec (23) green. The only remaining typecheck/test failures predate this
-work (test-harness debt in `protocol.test.ts`, `stream-emitter.spec.ts`, `graph-llm-provider.spec.ts`,
+work (test-harness debt in `protocol.test.ts`, `stream-emitter.spec.ts`, `direct-llm-provider.spec.ts`,
 the validator retry-budget test, and a `projectTask.id` literal).
 
 This document is the single source of truth for replacing the LangGraph orchestration
@@ -185,8 +185,9 @@ module but not yet on the request path.**
 
 ### 6.3 Node → engine routing (`AgentLlmRouter`) — IMPLEMENTED
 The 6 LLM agent nodes (`requirements-parser`, `contract-negotiator`,
-`frontend/backend/database-agent`, `self-critique`) no longer inject `GraphLlmProvider`
-directly — they inject [AgentLlmRouter](../../src/orchestration/providers/agent-llm.router.ts)
+`frontend/backend/database-agent`, `self-critique`) do not inject the raw
+`DirectLlmProvider` directly — they inject
+[AgentLlmRouter](../../src/orchestration/providers/agent-llm.router.ts)
 as `this.llm`. The router exposes the same `generateJson`/`model` surface and picks the backend
 per turn:
 
@@ -194,11 +195,11 @@ per turn:
 // AgentLlmRouter.generateJson
 return this.useEve() && this.eve
   ? this.eve.generateJson<T>(options)   // EveLlmProvider → Eve service
-  : this.graph.generateJson<T>(options); // GraphLlmProvider → in-process fetch
+  : this.direct.generateJson<T>(options); // DirectLlmProvider → in-process fetch
 ```
 
 `useEve()` is true only when `ORCHESTRATION_LLM_ENGINE=eve` **and** `EVE_SERVICE_URL` is set;
-otherwise it transparently falls back to the graph provider, so flipping the flag without a
+otherwise it transparently falls back to the direct provider, so flipping the flag without a
 deployed Eve service degrades gracefully. `validator` and `github-commit` call no LLM, so they
 were left untouched. This makes the node layer engine-agnostic — no node knows which backend
 served its turn.
@@ -237,8 +238,9 @@ parse → negotiate → Gate1
    `package.json`; delete `graph/checkpointer.ts`, `graph/devflow.graph.ts`; convert
    `graph/devflow.state.ts` Annotations → plain types; port the mock work-order graph in
    `orchestration.service.ts`; update tests (`topology.test.ts`,
-   `orchestration.rungraph.test.ts`, `simulation-nodes*`) and the `smoke:langgraph-github`
-   script name; drop the now-unused checkpoint tables from the `orchestration` schema.
+   `orchestration.rungraph.test.ts`, `simulation-nodes*`) and the legacy
+   `smoke:langgraph-github` alias; drop the now-unused checkpoint tables from the
+   `orchestration` schema.
 
 ## 8. Optional Phase 5 — Eve-native (sandbox codegen)
 Relocate memory/scaffold/validation into Eve **tools** so generation, typechecking, and
@@ -246,8 +248,8 @@ self-repair happen inside the sandbox before artifacts return to NestJS. Highest
 (real compile-checked output) but largest change; only pursue after Hybrid is stable.
 
 ## 9. Rollback
-Every step before Phase 4 is reversible by flipping `ORCHESTRATION_LLM_ENGINE=graph` and
-`ORCHESTRATION_ENGINE=graph`. Phase 4 is the point of no return — tag the repo
+Every step before Phase 4 is reversible by flipping `ORCHESTRATION_LLM_ENGINE=direct` and
+using the in-process sequencer. Phase 4 is the point of no return — tag the repo
 (`git tag pre-eve-cutover`) before executing it.
 
 ## 10. Risks

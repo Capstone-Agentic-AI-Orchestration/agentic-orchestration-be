@@ -100,6 +100,7 @@ function makePrismaMock() {
       findMany: vi.fn().mockResolvedValue([]),
       count: vi.fn().mockResolvedValue(1),
       update: vi.fn().mockResolvedValue({}),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     orchestrationRun: {
       create: vi.fn().mockResolvedValue({ id: 'orchestration-run-1' }),
@@ -139,6 +140,8 @@ function makeMemoryMock() {
     writeSkill: vi.fn().mockResolvedValue(undefined),
     writePattern: vi.fn().mockResolvedValue(undefined),
     writeProjectCoreMemory: vi.fn().mockResolvedValue(undefined),
+    readRelevant: vi.fn().mockResolvedValue([]),
+    formatAsContext: vi.fn().mockReturnValue(''),
   };
 }
 
@@ -277,7 +280,7 @@ describe('OrchestrationService', () => {
     runDispatcher = {
       dispatch: vi.fn(({ label, task, onError }: OrchestrationDispatchOptions) => {
         if (!String(label).startsWith('resume_')) return;
-        void task().catch((error: unknown) => {
+        void task?.().catch((error: unknown) => {
           void onError?.(error);
         });
       }),
@@ -303,9 +306,11 @@ describe('OrchestrationService', () => {
       notifications as unknown as NotificationsService,
       github as unknown as GithubService,
       sequencerStub as unknown as OrchestrationSequencer,
+      null, // agentLlmRouter
       null, // graphLlmProvider
       null, // gateway
       null, // emitter
+      null, // streamEmitter
       runDispatcher as unknown as OrchestrationRunDispatcher,
     );
 
@@ -366,6 +371,139 @@ describe('OrchestrationService', () => {
       process.env.GEMINI_FALLBACK_MODEL = originalGeminiFallbackModel;
     }
     vi.restoreAllMocks();
+  });
+
+  it('autoAnalyzeBrief uses a fast token budget and skips memory by default', async () => {
+    const originalAutoAnalyzeMaxTokens = process.env.AUTO_ANALYZE_MAX_OUTPUT_TOKENS;
+    delete process.env.AUTO_ANALYZE_MAX_OUTPUT_TOKENS;
+    const directLlmProvider = {
+      isAvailable: vi.fn().mockReturnValue(true),
+      providerName: vi.fn().mockReturnValue('openrouter'),
+      generateJson: vi.fn().mockResolvedValue({
+        value: {
+          enhancedBrief: 'Acme needs a delivery dashboard.',
+          suggestedFeatures: ['Dashboard analytics'],
+          suggestedTechStack: {
+            frontend: 'Next.js',
+            backend: 'NestJS',
+            database: 'Supabase',
+            styling: 'Tailwind CSS',
+          },
+          complexity: 'simple',
+          estimatedFiles: 8,
+        },
+        model: 'test-model',
+        usage: { inputTokens: 10, outputTokens: 20 },
+      }),
+    };
+    (service as unknown as { directLlmProvider: typeof directLlmProvider }).directLlmProvider = directLlmProvider;
+
+    try {
+      const result = await service.autoAnalyzeBrief({
+        companyName: 'Acme',
+        brief: 'Build a delivery dashboard',
+        stackKey: 'nextjs-nestjs-supabase',
+      });
+
+      expect(result.enhancedBrief).toBe('Acme needs a delivery dashboard.');
+      expect(memory.readRelevant).not.toHaveBeenCalled();
+      expect(directLlmProvider.generateJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentName: 'auto_analyze',
+          expectedShape: 'object',
+          maxTokens: 1200,
+        }),
+      );
+    } finally {
+      if (originalAutoAnalyzeMaxTokens === undefined) {
+        delete process.env.AUTO_ANALYZE_MAX_OUTPUT_TOKENS;
+      } else {
+        process.env.AUTO_ANALYZE_MAX_OUTPUT_TOKENS = originalAutoAnalyzeMaxTokens;
+      }
+    }
+  });
+
+  it('autoAnalyzeBrief coalesces concurrent identical requests', async () => {
+    let resolveProvider!: (value: unknown) => void;
+    const providerPromise = new Promise((resolve) => {
+      resolveProvider = resolve;
+    });
+    const directLlmProvider = {
+      isAvailable: vi.fn().mockReturnValue(true),
+      providerName: vi.fn().mockReturnValue('openrouter'),
+      generateJson: vi.fn().mockReturnValue(providerPromise),
+    };
+    (service as unknown as { directLlmProvider: typeof directLlmProvider }).directLlmProvider = directLlmProvider;
+
+    const input = {
+      companyName: 'Acme',
+      brief: 'Build a delivery dashboard',
+      stackKey: 'nextjs-nestjs-supabase',
+    };
+    const first = service.autoAnalyzeBrief(input);
+    const second = service.autoAnalyzeBrief({ ...input, brief: '  Build   a delivery dashboard  ' });
+
+    resolveProvider({
+      value: {
+        enhancedBrief: 'Acme needs a delivery dashboard.',
+        suggestedFeatures: ['Dashboard analytics'],
+        suggestedTechStack: {
+          frontend: 'Next.js',
+          backend: 'NestJS',
+          database: 'Supabase',
+          styling: 'Tailwind CSS',
+        },
+        complexity: 'simple',
+        estimatedFiles: 8,
+      },
+      model: 'test-model',
+      usage: { inputTokens: 10, outputTokens: 20 },
+    });
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ enhancedBrief: 'Acme needs a delivery dashboard.' }),
+      expect.objectContaining({ enhancedBrief: 'Acme needs a delivery dashboard.' }),
+    ]);
+    expect(directLlmProvider.generateJson).toHaveBeenCalledTimes(1);
+  });
+
+  it('autoAnalyzeBrief uses memory only for thorough mode', async () => {
+    const directLlmProvider = {
+      isAvailable: vi.fn().mockReturnValue(true),
+      providerName: vi.fn().mockReturnValue('openrouter'),
+      generateJson: vi.fn().mockResolvedValue({
+        value: {
+          enhancedBrief: 'Acme needs a delivery dashboard.',
+          suggestedFeatures: ['Dashboard analytics'],
+          suggestedTechStack: {
+            frontend: 'Next.js',
+            backend: 'NestJS',
+            database: 'Supabase',
+            styling: 'Tailwind CSS',
+          },
+          complexity: 'simple',
+          estimatedFiles: 8,
+        },
+        model: 'test-model',
+        usage: { inputTokens: 10, outputTokens: 20 },
+      }),
+    };
+    memory.readRelevant.mockResolvedValue([{ content: 'Past project pattern' }]);
+    memory.formatAsContext.mockReturnValue('Past project pattern');
+    (service as unknown as { directLlmProvider: typeof directLlmProvider }).directLlmProvider = directLlmProvider;
+
+    await service.autoAnalyzeBrief({
+      companyName: 'Acme',
+      brief: 'Build a delivery dashboard',
+      stackKey: 'nextjs-nestjs-supabase',
+      mode: 'thorough',
+    });
+
+    expect(memory.readRelevant).toHaveBeenCalledWith(
+      'requirements',
+      expect.stringContaining('Build a delivery dashboard'),
+      3,
+    );
   });
 
   it('startRun updates project runId and returns a non-empty runId', async () => {
@@ -709,8 +847,13 @@ describe('OrchestrationService', () => {
         }),
       }),
     });
-    expect(prisma.workOrder.update).toHaveBeenCalledWith({
-      where: { id: 'work-order-1' },
+    expect(prisma.workOrder.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'work-order-1',
+        projectId: 'test-project-id',
+        status: WorkOrderStatus.DISPATCHED,
+        executionRunId: expect.any(String),
+      },
       data: expect.objectContaining({
         status: WorkOrderStatus.COMPLETED,
         artifactId: 'artifact-generated-1',
@@ -878,7 +1021,7 @@ describe('OrchestrationService', () => {
 
     expect(prisma.orchestrationRun.create).not.toHaveBeenCalled();
     expect(prisma.workOrderExecution.create).not.toHaveBeenCalled();
-    expect(prisma.workOrder.update).not.toHaveBeenCalled();
+    expect(prisma.workOrder.updateMany).not.toHaveBeenCalled();
     expect(prisma.artifact.create).not.toHaveBeenCalled();
   });
 
@@ -1100,8 +1243,13 @@ describe('OrchestrationService', () => {
     ).rejects.toThrow(/OpenRouter deepseek\/deepseek-v4-flash:free.*returned invalid JSON|OpenRouter deepseek\/deepseek-v4-flash:free.*repair returned invalid JSON/);
 
     expect(prisma.artifact.create).not.toHaveBeenCalled();
-    expect(prisma.workOrder.update).toHaveBeenCalledWith({
-      where: { id: 'work-order-1' },
+    expect(prisma.workOrder.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'work-order-1',
+        projectId: 'test-project-id',
+        status: WorkOrderStatus.DISPATCHED,
+        executionRunId: expect.any(String),
+      },
       data: expect.objectContaining({
         status: WorkOrderStatus.FAILED,
         executionError: expect.stringMatching(/OpenRouter deepseek\/deepseek-v4-flash:free.*returned invalid JSON|OpenRouter deepseek\/deepseek-v4-flash:free.*repair returned invalid JSON/),
@@ -1341,8 +1489,13 @@ describe('OrchestrationService', () => {
     ).rejects.toThrow('Output validation failed');
 
     expect(prisma.artifact.create).not.toHaveBeenCalled();
-    expect(prisma.workOrder.update).toHaveBeenCalledWith({
-      where: { id: 'work-order-1' },
+    expect(prisma.workOrder.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'work-order-1',
+        projectId: 'test-project-id',
+        status: WorkOrderStatus.DISPATCHED,
+        executionRunId: expect.any(String),
+      },
       data: expect.objectContaining({
         status: WorkOrderStatus.FAILED,
         executionError: expect.stringContaining('Output validation failed'),

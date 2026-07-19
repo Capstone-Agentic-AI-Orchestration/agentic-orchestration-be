@@ -2,7 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { WorkOrderAgentType } from '@prisma/client';
 import { OutputValidationService } from './output-validation.service';
 import type { GeneratedWorkOrderOutput, WorkOrderAgentContext } from '../providers/agent-provider.types';
-import type { GeneratedArtifact } from '../graph/devflow.state';
+import type { DevFlowStateType, GeneratedArtifact, ProjectContract } from '../graph/devflow.state';
+import {
+  createArchitectureReviewContractArtifact,
+  createBackendApiContractArtifact,
+  createDatabaseModelContractArtifact,
+  createOutputStructureContractArtifact,
+} from '../domain-contracts';
 
 function mockContext(overrides?: Partial<WorkOrderAgentContext>): WorkOrderAgentContext {
   return {
@@ -19,6 +25,40 @@ function mockContext(overrides?: Partial<WorkOrderAgentContext>): WorkOrderAgent
     executionRunId: 'exec-1',
     ...overrides,
   };
+}
+
+function domainContract(features = ['Invoice tracking']): ProjectContract {
+  return {
+    projectId: 'proj-1',
+    projectName: 'Operations Hub',
+    description: 'Track operational invoices.',
+    requirements: {
+      projectType: 'internal tool',
+      features,
+      techStack: {
+        frontend: 'Next.js',
+        backend: 'NestJS',
+        database: 'PostgreSQL',
+        styling: 'Tailwind',
+      },
+      complexity: 'medium',
+      estimatedFiles: 6,
+    },
+    fileManifest: [],
+    acceptanceCriteria: ['Users can list and create invoices'],
+    lockedAt: new Date('2026-07-09T00:00:00.000Z').toISOString(),
+  };
+}
+
+function domainState(features = ['Invoice tracking']): DevFlowStateType {
+  return {
+    projectId: 'proj-1',
+    runId: 'run-1',
+    stackKey: 'next-nest-pg',
+    companyName: 'TestCo',
+    contract: domainContract(features),
+    artifacts: [],
+  } as unknown as DevFlowStateType;
 }
 
 describe('OutputValidationService', () => {
@@ -152,6 +192,288 @@ describe('OutputValidationService', () => {
       ];
       const errors = service.validateBatch(artifacts, 'proj-1');
       expect(errors.some(e => e.code === 'TS_SYNTAX')).toBe(true);
+    });
+
+    it('rejects duplicate generated file paths', () => {
+      const artifacts: GeneratedArtifact[] = [
+        { agentType: 'frontend', filePath: 'src/app/page.tsx', content: 'export default function Page() { return <div>One</div>; }', language: 'typescript' },
+        { agentType: 'frontend', filePath: 'src/app/page.tsx', content: 'export default function PageTwo() { return <div>Two</div>; }', language: 'typescript' },
+      ];
+      const errors = service.validateBatch(artifacts, 'proj-1');
+      expect(errors.some(e => e.code === 'BASE' && e.message.includes('Duplicate generated filePath'))).toBe(true);
+    });
+
+    it('rejects scaffolded config files from generated artifacts', () => {
+      const artifacts: GeneratedArtifact[] = [
+        { agentType: 'backend', filePath: 'package.json', content: '{"scripts":{"build":"nest build"}}'.padEnd(50, ' '), language: 'json' },
+      ];
+      const errors = service.validateBatch(artifacts, 'proj-1');
+      expect(errors.some(e => e.code === 'BASE' && e.message.includes('scaffolded by DevFlow'))).toBe(true);
+    });
+
+    it('rejects placeholder content in generated artifacts', () => {
+      const artifacts: GeneratedArtifact[] = [
+        {
+          agentType: 'backend',
+          filePath: 'src/orders.service.ts',
+          content: 'import { Injectable } from "@nestjs/common"; @Injectable() export class OrdersService { list() { throw new Error("TODO: implementation goes here"); } }',
+          language: 'typescript',
+        },
+      ];
+      const errors = service.validateBatch(artifacts, 'proj-1');
+      expect(errors.some(e => e.code === 'BASE' && e.message.includes('placeholder or stub'))).toBe(true);
+    });
+
+    it('rejects frontend artifacts that use forbidden design patterns', () => {
+      const artifacts: GeneratedArtifact[] = [
+        {
+          agentType: 'frontend',
+          filePath: 'src/app/page.tsx',
+          content: 'export default function Page() { return <main><h1>Project dashboard</h1><p>Gradient orb background</p></main>; }',
+          language: 'typescript',
+        },
+      ];
+      const errors = service.validateBatch(artifacts, 'proj-1', {
+        designGuidance: {
+          theme: 'black',
+          productFeel: 'operational',
+          layoutDensity: 'balanced',
+          accessibilityLevel: 'strict',
+          forbiddenPatterns: ['gradient orb'],
+        },
+      });
+      expect(errors.some(e => e.agentType === 'frontend' && e.message.includes('forbidden design pattern'))).toBe(true);
+    });
+
+    it('rejects frontend artifacts that use design-system anti-patterns', () => {
+      const artifacts: GeneratedArtifact[] = [
+        {
+          agentType: 'frontend',
+          filePath: 'src/app/page.tsx',
+          content: 'export default function Page() { return <main><h1>Project dashboard</h1><p>Oversized hero intro</p></main>; }',
+          language: 'typescript',
+        },
+      ];
+      const errors = service.validateBatch(artifacts, 'proj-1', {
+        designGuidance: {
+          theme: 'black',
+          productFeel: 'operational',
+          layoutDensity: 'balanced',
+          accessibilityLevel: 'strict',
+          forbiddenPatterns: [],
+          designSystem: {
+            presetId: 'devflow-black-ops',
+            palette: 'Black operational cockpit.',
+            typography: 'Compact system sans.',
+            spacing: '8px grid.',
+            layout: 'Dashboard layout.',
+            components: 'Tables and panels.',
+            motion: 'Subtle feedback.',
+            voice: 'Direct PM language.',
+            brand: 'DevFlow black theme.',
+            antiPatterns: ['oversized hero'],
+          },
+        },
+      });
+      expect(errors.some(e => e.agentType === 'frontend' && e.message.includes('oversized hero'))).toBe(true);
+    });
+
+    it('requires loading, empty, and error states for data-fetching frontend artifacts', () => {
+      const artifacts: GeneratedArtifact[] = [
+        {
+          agentType: 'frontend',
+          filePath: 'src/app/projects/page.tsx',
+          content: 'export default async function Page() { const response = await fetch("/api/projects"); const data = await response.json(); return <main>{data.items.map((item) => <div key={item.id}>{item.name}</div>)}</main>; }',
+          language: 'typescript',
+        },
+      ];
+      const errors = service.validateBatch(artifacts, 'proj-1', {
+        designGuidance: {
+          theme: 'black',
+          productFeel: 'operational',
+          layoutDensity: 'balanced',
+          accessibilityLevel: 'strict',
+          forbiddenPatterns: [],
+        },
+      });
+      expect(errors.filter(e => e.agentType === 'frontend').map(e => e.message).join('\n')).toContain('loading state');
+      expect(errors.filter(e => e.agentType === 'frontend').map(e => e.message).join('\n')).toContain('error state');
+      expect(errors.filter(e => e.agentType === 'frontend').map(e => e.message).join('\n')).toContain('empty state');
+    });
+
+    it('accepts valid domain contract artifacts', () => {
+      const state = domainState();
+      const artifacts: GeneratedArtifact[] = [
+        {
+          agentType: 'frontend',
+          filePath: 'DESIGN.md',
+          content: '# DESIGN.md\n\n## Color\nBlack cockpit.\n\n## Components\nTables and forms.',
+          language: 'markdown',
+          source: 'scaffold',
+          domainContract: {
+            kind: 'frontend-design',
+            version: 'v1',
+            summary: 'visual contract',
+          },
+        },
+        createOutputStructureContractArtifact(state),
+        createBackendApiContractArtifact(state),
+        createDatabaseModelContractArtifact(state),
+        createArchitectureReviewContractArtifact(state),
+      ];
+
+      const errors = service.validateBatch(artifacts, 'proj-1');
+      expect(errors).toHaveLength(0);
+    });
+
+    it('rejects malformed domain contract artifacts', () => {
+      const artifacts: GeneratedArtifact[] = [
+        {
+          agentType: 'backend',
+          filePath: 'API_CONTRACT.json',
+          content: '{not-json',
+          language: 'json',
+          source: 'scaffold',
+        },
+      ];
+
+      const errors = service.validateBatch(artifacts, 'proj-1');
+      expect(errors.some(e => e.agentType === 'backend' && e.message.includes('valid JSON'))).toBe(true);
+    });
+
+    it('accepts frontend MVVM paths from the output structure contract', () => {
+      process.env.ORCHESTRATION_TYPECHECK = 'false';
+      try {
+        const state = domainState(['Invoice tracking']);
+        const artifacts: GeneratedArtifact[] = [
+          createOutputStructureContractArtifact(state),
+          {
+            agentType: 'frontend',
+            filePath: 'src/features/invoice-tracking/model/types.ts',
+            content: 'export interface InvoiceTrackingViewModel { title: string; status: string; }\n',
+            language: 'typescript',
+          },
+          {
+            agentType: 'frontend',
+            filePath: 'src/features/invoice-tracking/view-model/use-invoice-tracking.ts',
+            content: "import type { InvoiceTrackingViewModel } from '../model/types';\nexport function useInvoiceTracking(): InvoiceTrackingViewModel { return { title: 'Invoices', status: 'ready' }; }\n",
+            language: 'typescript',
+          },
+          {
+            agentType: 'frontend',
+            filePath: 'src/features/invoice-tracking/view/InvoiceTrackingView.tsx',
+            content: "import { useInvoiceTracking } from '../view-model/use-invoice-tracking';\nexport function InvoiceTrackingView() { const model = useInvoiceTracking(); return <main><h1>{model.title}</h1><p>{model.status}</p></main>; }\n",
+            language: 'typescript',
+          },
+          {
+            agentType: 'frontend',
+            filePath: 'src/app/invoice-tracking/page.tsx',
+            content: "import { InvoiceTrackingView } from '../../features/invoice-tracking/view/InvoiceTrackingView';\nexport default function Page() { return <InvoiceTrackingView />; }\n",
+            language: 'typescript',
+          },
+        ];
+
+        const errors = service.validateBatch(artifacts, 'proj-1');
+        expect(errors.filter(e => e.agentType === 'frontend' && e.path === 'OUTPUT_STRUCTURE.json')).toHaveLength(0);
+      } finally {
+        delete process.env.ORCHESTRATION_TYPECHECK;
+      }
+    });
+
+    it('rejects frontend business UI directly in src/app when output structure is active', () => {
+      process.env.ORCHESTRATION_TYPECHECK = 'false';
+      try {
+        const state = domainState(['Invoice tracking']);
+        const errors = service.validateBatch([
+          createOutputStructureContractArtifact(state),
+          {
+            agentType: 'frontend',
+            filePath: 'src/app/invoice-tracking/page.tsx',
+            content: "export default function Page() { return <main><h1>Invoices</h1><button>Create invoice</button></main>; }\n",
+            language: 'typescript',
+          },
+        ], 'proj-1');
+
+        expect(errors.some(e => e.agentType === 'frontend' && e.message.includes('thin route'))).toBe(true);
+      } finally {
+        delete process.env.ORCHESTRATION_TYPECHECK;
+      }
+    });
+
+    it('rejects backend files outside module folders when output structure is active', () => {
+      process.env.ORCHESTRATION_TYPECHECK = 'false';
+      try {
+        const state = domainState(['Invoice tracking']);
+        const errors = service.validateBatch([
+          createOutputStructureContractArtifact(state),
+          {
+            agentType: 'backend',
+            filePath: 'src/orders.service.ts',
+            content: 'import { Injectable } from "@nestjs/common"; @Injectable() export class OrdersService { findAll(): string[] { return ["one"]; } }\n',
+            language: 'typescript',
+          },
+        ], 'proj-1');
+
+        expect(errors.some(e => e.agentType === 'backend' && e.message.includes('OUTPUT_STRUCTURE.json'))).toBe(true);
+        expect(errors.some(e => e.agentType === 'backend' && e.message.includes('src/modules/<resource>'))).toBe(true);
+      } finally {
+        delete process.env.ORCHESTRATION_TYPECHECK;
+      }
+    });
+
+    it('reports API and data model contract drift to the owning agents', () => {
+      process.env.ORCHESTRATION_TYPECHECK = 'false';
+      try {
+        const state = domainState(['Invoice tracking']);
+        const apiContractArtifact = createBackendApiContractArtifact(state);
+        const dataModelArtifact = createDatabaseModelContractArtifact({
+          ...state,
+          artifacts: [apiContractArtifact],
+        } as DevFlowStateType);
+        const artifacts: GeneratedArtifact[] = [
+          apiContractArtifact,
+          {
+            agentType: 'backend',
+            filePath: 'src/orders.controller.ts',
+            content: 'import { Controller, Get } from "@nestjs/common"; @Controller("orders") export class OrdersController { @Get() list(): string { return "orders"; } }',
+            language: 'typescript',
+          },
+          dataModelArtifact,
+          {
+            agentType: 'database',
+            filePath: 'prisma/schema.prisma',
+            content: 'model Order {\n  id String @id @default(cuid())\n}',
+            language: 'prisma',
+          },
+        ];
+
+        const errors = service.validateBatch(artifacts, 'proj-1');
+        expect(errors.some(e => e.agentType === 'backend' && e.message.includes('invoice-tracking'))).toBe(true);
+        expect(errors.some(e => e.agentType === 'database' && e.message.includes('InvoiceTracking'))).toBe(true);
+      } finally {
+        delete process.env.ORCHESTRATION_TYPECHECK;
+      }
+    });
+
+    it('reports missing ADR coverage to the architecture owner', () => {
+      const state = domainState(['Invoice tracking']);
+      const errors = service.validateBatch([
+        createArchitectureReviewContractArtifact(state),
+        {
+          agentType: 'architecture',
+          filePath: 'ARCHITECTURE.md',
+          content: '# Architecture\n\nSystem overview for the operations hub with components and data flow.',
+          language: 'markdown',
+        },
+        {
+          agentType: 'architecture',
+          filePath: 'ADRS.md',
+          content: '# ADRS\n\n## ADR: Stack\n\nWe use the selected stack for implementation consistency.',
+          language: 'markdown',
+        },
+      ], 'proj-1');
+
+      expect(errors.some(e => e.agentType === 'architecture' && e.message.includes('must cover api decisions'))).toBe(true);
     });
   });
 });

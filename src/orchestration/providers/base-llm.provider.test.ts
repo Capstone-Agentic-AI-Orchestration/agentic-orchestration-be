@@ -42,6 +42,30 @@ function streamOf(chunks: string[]): ReadableStream<Uint8Array> {
   });
 }
 
+function controlledTextStream(): {
+  stream: ReadableStream<Uint8Array>;
+  enqueue: (chunk: string) => void;
+  close: () => void;
+} {
+  const encoder = new TextEncoder();
+  let controllerRef: ReadableStreamDefaultController<Uint8Array> | null = null;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controllerRef = controller;
+    },
+  });
+
+  return {
+    stream,
+    enqueue: (chunk) => controllerRef?.enqueue(encoder.encode(chunk)),
+    close: () => controllerRef?.close(),
+  };
+}
+
+function flushMicrotasks(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function parseJson<T>(content: string): T {
   return JSON.parse(content) as T;
 }
@@ -136,6 +160,35 @@ describe('BaseLlmProvider streaming', () => {
     expect(result.usage).toEqual({ inputTokens: 5, outputTokens: 3 });
   });
 
+  it('emits OpenAI-style token deltas before the response stream closes', async () => {
+    const controlled = controlledTextStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: controlled.stream,
+    }));
+
+    const tokens: string[] = [];
+    const resultPromise = new TestProvider('openrouter').generate<{ live: boolean }>(
+      { ...baseOptions, onToken: (d) => tokens.push(d) },
+      parseJson,
+    );
+
+    await flushMicrotasks();
+    controlled.enqueue('data: {"choices":[{"delta":{"content":"{\\"live\\""');
+    controlled.enqueue('}}]}\n');
+    await flushMicrotasks();
+
+    expect(tokens).toEqual(['{"live"']);
+
+    controlled.enqueue('data: {"choices":[{"delta":{"content":":true}"}}]}\n');
+    controlled.enqueue('data: [DONE]\n');
+    controlled.close();
+
+    await expect(resultPromise).resolves.toMatchObject({
+      value: { live: true },
+    });
+  });
+
   it('streams Anthropic text_delta events and splits usage across events', async () => {
     process.env.LLM_PROVIDER = 'anthropic';
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
@@ -195,6 +248,38 @@ describe('BaseLlmProvider streaming', () => {
     const requestInit = fetchMock.mock.calls[0][1] as { body: string };
     const body = parseJson<{ stream?: unknown }>(requestInit.body);
     expect(body.stream).toBeUndefined();
+  });
+
+  it('repairs malformed JSON before returning a generated value', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          choices: [{ message: { content: 'Here is the object: {"needsRepair": true' } }],
+          usage: { prompt_tokens: 3, completion_tokens: 2 },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          choices: [{ message: { content: '{"needsRepair":true}' } }],
+          usage: { prompt_tokens: 2, completion_tokens: 1 },
+        }),
+      });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await new TestProvider('openrouter').generate<{ needsRepair: boolean }>(
+      baseOptions,
+      parseJson,
+    );
+
+    expect(result.value).toEqual({ needsRepair: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const repairBody = parseJson<{ messages: Array<{ content: string }> }>(
+      (fetchMock.mock.calls[1][1] as { body: string }).body,
+    );
+    expect(repairBody.messages[0].content).toContain('Repair this test output');
+    expect(repairBody.messages[1].content).toContain('invalidOutput');
   });
 
   it('honors LLM_STREAMING=false by falling back to the blocking path', async () => {

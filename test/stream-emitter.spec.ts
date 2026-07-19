@@ -1,11 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { StreamEmitter } from '../src/orchestration/streaming/stream-emitter.service';
 import type { DevFlowGateway } from '../src/gateway/devflow.gateway';
+import type { OrchestrationEmitter } from '../src/orchestration/streaming/orchestration-emitter.service';
+import { ORCHESTRATION_PROTOCOL_VERSION } from '../src/orchestration/streaming/protocol';
 
 describe('StreamEmitter', () => {
   const mockGateway = {
     emitAgentStream: vi.fn(),
   } as unknown as DevFlowGateway;
+  const mockTypedEmitter = {
+    emit: vi.fn(),
+    nodeProgress: vi.fn(),
+  };
 
   let emitter: StreamEmitter;
 
@@ -68,6 +74,29 @@ describe('StreamEmitter', () => {
       expect(chunks[0].type).toBe('tool-call');
       expect(chunks[0].metadata).toEqual({ filename: 'test.ts' });
       expect(chunks[1].type).toBe('decision');
+    });
+
+    it('emits typed agent.stream events for the canonical frontend channel', () => {
+      const typedEmitter = new StreamEmitter(null, mockTypedEmitter as unknown as OrchestrationEmitter);
+
+      typedEmitter.emit('proj-1', 'frontend_agent', 'run-1', 'token', 'Hello');
+      typedEmitter.emit('proj-1', 'frontend_agent', 'run-1', 'token', ' world');
+
+      vi.advanceTimersByTime(50);
+
+      expect(mockTypedEmitter.emit).toHaveBeenCalledTimes(1);
+      expect(mockTypedEmitter.emit).toHaveBeenCalledWith('proj-1', {
+        v: ORCHESTRATION_PROTOCOL_VERSION,
+        type: 'agent.stream',
+        projectId: 'proj-1',
+        runId: 'run-1',
+        nodeId: 'frontend_agent',
+        chunks: [
+          { nodeId: 'frontend_agent', runId: 'run-1', type: 'token', chunk: 'Hello' },
+          { nodeId: 'frontend_agent', runId: 'run-1', type: 'token', chunk: ' world' },
+        ],
+        ts: expect.any(Number),
+      });
     });
 
     it('does not reset timer when new chunks arrive', () => {

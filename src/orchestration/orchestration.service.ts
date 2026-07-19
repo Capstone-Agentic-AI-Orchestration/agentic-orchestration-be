@@ -12,6 +12,8 @@ import { buildSimulationNodeImpls } from './graph/simulation-nodes';
 import {
   applyDevFlowPartial,
   createInitialDevFlowState,
+  normalizeDesignGuidance,
+  type DesignGuidanceInput,
   type DevFlowStateType,
 } from './graph/devflow.state';
 import {
@@ -28,6 +30,7 @@ import { BackendAgentNode } from './nodes/backend-agent.node';
 import { DatabaseAgentNode } from './nodes/database-agent.node';
 import { ArchitectureAgentNode } from './nodes/architecture-agent.node';
 import { ValidatorNode } from './nodes/validator.node';
+import { ExecutionValidationNode } from './nodes/execution-validation.node';
 import { GithubCommitNode } from './nodes/github-commit.node';
 import { SelfCritiqueNode } from './nodes/self-critique.node';
 import { MemoryService } from '../memory/memory.service';
@@ -42,19 +45,28 @@ import { AgentProviderRegistry } from './providers/agent-provider.registry';
 import { ArtifactContractValidator } from './providers/artifact-contract.validator';
 import { OutputValidationService } from './output-validation/output-validation.service';
 import {
-  GraphLlmProvider,
-  GraphLlmProviderVerification,
-} from './providers/graph-llm.provider';
+  DirectLlmProvider,
+  DirectLlmProviderVerification,
+} from './providers/direct-llm.provider';
+import { AgentLlmRouter } from './providers/agent-llm.router';
 import { OrchestrationEmitter } from './streaming/orchestration-emitter.service';
+import { StreamEmitter } from './streaming/stream-emitter.service';
 import { OrchestrationRunDispatcher } from './run-dispatcher.service';
 import type { IntakeContextPackage } from '../intake/intake.types';
-import { AgentProviderMode, AgentProviderStatus } from './providers/agent-provider.types';
+import {
+  AgentLlmEngineStatus,
+  AgentProviderMode,
+  AgentProviderStatus,
+} from './providers/agent-provider.types';
 import {
   agentArtifactContractFor,
   ORCHESTRATION_CONTRACT_VERSION,
 } from './providers/agent-contracts';
 import {
   ArtifactValidationStatus,
+  OrchestrationJob,
+  OrchestrationJobKind,
+  OrchestrationJobStatus,
   NotificationType,
   OrchestrationRunStatus,
   OrchestrationRunTrigger,
@@ -128,8 +140,25 @@ export interface SupervisorRecoveryResult {
   error: string | null;
 }
 
+export interface EveLlmProviderVerification {
+  ok: boolean;
+  provider: 'eve';
+  model: string;
+  fallbackModel: null;
+  baseUrl: string;
+  reason: string | null;
+  usage: null;
+  engineStatus: AgentLlmEngineStatus;
+}
+
 export type OrchestrationProviderStatus = AgentProviderStatus & {
   githubDelivery: GithubDeliveryStatus;
+  llmEngine: AgentLlmEngineStatus;
+  requestedEngine: AgentLlmEngineStatus['requestedEngine'];
+  activeEngine: AgentLlmEngineStatus['activeEngine'];
+  fallbackReason: string | null;
+  eveServiceConfigured: boolean;
+  engineModel: string;
 };
 
 const MOCK_NODE = {
@@ -154,15 +183,41 @@ interface MockWorkOrderState {
   error: string | null;
 }
 
+export type AutoAnalyzeMode = 'fast' | 'thorough';
+
+export interface AutoAnalyzeBriefInput {
+  companyName: string;
+  brief: string;
+  stackKey: string;
+  designGuidance?: DesignGuidanceInput;
+  mode?: AutoAnalyzeMode;
+}
+
+export interface AutoAnalyzeBriefResult {
+  enhancedBrief: string;
+  suggestedFeatures: string[];
+  suggestedTechStack: { frontend: string; backend: string; database: string; styling: string };
+  complexity: 'simple' | 'medium' | 'complex';
+  estimatedFiles: number;
+}
+
+type AutoAnalyzeCacheEntry =
+  | { expiresAt: number; result: AutoAnalyzeBriefResult }
+  | { expiresAt: number; pending: Promise<AutoAnalyzeBriefResult> };
+
+const AUTO_ANALYZE_CACHE_TTL_MS = 5 * 60 * 1000;
+const AUTO_ANALYZE_PENDING_TTL_MS = 30 * 1000;
+const DEFAULT_AUTO_ANALYZE_MAX_TOKENS = 1200;
+
 // ─── Service ──────────────────────────────────────────────────────────────────
 
 @Injectable()
 export class OrchestrationService implements OnModuleInit {
   private readonly logger = new Logger(OrchestrationService.name);
 
-  // Eve migration: the LangGraph compiled graphs + Postgres checkpointer are replaced by the
-  // OrchestrationSequencer driving swappable node-implementation maps. The live and simulation
-  // runs share one sequencer + one topology and differ only by their impl map.
+  // Eve migration: the former LangGraph runtime is now a plain deterministic sequencer driving
+  // swappable node-implementation maps. The live and simulation runs share one sequencer + one
+  // topology and differ only by their impl map.
   private liveImpls!: DevFlowNodeImpls;
   private simulationImpls!: DevFlowNodeImpls;
 
@@ -179,6 +234,8 @@ export class OrchestrationService implements OnModuleInit {
    * auto-recovery for the project (manual intervention takes precedence).
    */
   private readonly pausedRuns = new Set<string>();
+
+  private readonly autoAnalyzeCache = new Map<string, AutoAnalyzeCacheEntry>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -200,18 +257,34 @@ export class OrchestrationService implements OnModuleInit {
     private readonly notifications: NotificationsService,
     private readonly github: GithubService,
     private readonly sequencer: OrchestrationSequencer,
-    @Optional() @Inject(GraphLlmProvider)
-    private readonly graphLlmProvider: GraphLlmProvider | null,
+    @Optional() private readonly agentLlmRouter: AgentLlmRouter | null,
+    @Optional() @Inject(DirectLlmProvider)
+    private readonly directLlmProvider: DirectLlmProvider | null,
     // Optional: WebSocket gateway may not be present in all environments
     @Optional() private readonly gateway: DevFlowGateway | null,
     @Optional() private readonly emitter: OrchestrationEmitter | null,
-    @Optional()
-    private readonly runDispatcher: OrchestrationRunDispatcher = new OrchestrationRunDispatcher(),
+    @Optional() private readonly streamEmitter: StreamEmitter | null,
+    private readonly runDispatcher: OrchestrationRunDispatcher,
+    @Optional() private readonly executionValidation?: ExecutionValidationNode,
   ) {}
 
   getProviderStatus(): OrchestrationProviderStatus {
+    const llmEngine = this.agentLlmRouter?.getStatus() ?? {
+      requestedEngine: process.env.ORCHESTRATION_LLM_ENGINE === 'eve' ? 'eve' : 'direct',
+      activeEngine: 'direct',
+      fallbackReason: 'Agent LLM router is not available; using direct-provider status only.',
+      eveServiceConfigured: false,
+      model: this.directLlmProvider?.model() ?? 'unknown',
+    } satisfies AgentLlmEngineStatus;
+
     return {
       ...this.agentProviderRegistry.getStatus(),
+      llmEngine,
+      requestedEngine: llmEngine.requestedEngine,
+      activeEngine: llmEngine.activeEngine,
+      fallbackReason: llmEngine.fallbackReason,
+      eveServiceConfigured: llmEngine.eveServiceConfigured,
+      engineModel: llmEngine.model,
       githubDelivery: this.github.getDeliveryStatus(),
     };
   }
@@ -220,57 +293,99 @@ export class OrchestrationService implements OnModuleInit {
     return this.github.verifyDeliveryAccess();
   }
 
-  verifyLlmProviderAccess(): Promise<GraphLlmProviderVerification> {
-    if (!this.graphLlmProvider) {
-      throw new Error('Graph LLM provider is not available in this runtime.');
+  async verifyLlmProviderAccess(): Promise<DirectLlmProviderVerification | EveLlmProviderVerification> {
+    const engineStatus = this.agentLlmRouter?.getStatus();
+    if (engineStatus?.activeEngine === 'eve') {
+      return {
+        ok: true,
+        provider: 'eve',
+        model: engineStatus.model,
+        fallbackModel: null,
+        baseUrl: process.env.EVE_SERVICE_URL ?? '',
+        reason: null,
+        usage: null,
+        engineStatus,
+      };
     }
 
-    return this.graphLlmProvider.verifyConnection();
+    if (!this.directLlmProvider) {
+      throw new Error('Direct LLM provider is not available in this runtime.');
+    }
+
+    return this.directLlmProvider.verifyConnection();
   }
 
-  async autoAnalyzeBrief(input: {
-    companyName: string;
-    brief: string;
-    stackKey: string;
-  }): Promise<{
-    enhancedBrief: string;
-    suggestedFeatures: string[];
-    suggestedTechStack: { frontend: string; backend: string; database: string; styling: string };
-    complexity: 'simple' | 'medium' | 'complex';
-    estimatedFiles: number;
-  }> {
-    if (!this.graphLlmProvider) {
+  async autoAnalyzeBrief(input: AutoAnalyzeBriefInput): Promise<AutoAnalyzeBriefResult> {
+    const mode = input.mode === 'thorough' ? 'thorough' : 'fast';
+    const cacheKey = this.autoAnalyzeCacheKey(input, mode);
+    const now = Date.now();
+    const cached = this.autoAnalyzeCache.get(cacheKey);
+
+    if (cached && cached.expiresAt > now) {
+      return 'result' in cached ? cached.result : cached.pending;
+    }
+
+    if (cached) {
+      this.autoAnalyzeCache.delete(cacheKey);
+    }
+
+    const pending = this.generateAutoAnalyzeBrief({ ...input, mode })
+      .then((result) => {
+        this.autoAnalyzeCache.set(cacheKey, {
+          expiresAt: Date.now() + AUTO_ANALYZE_CACHE_TTL_MS,
+          result,
+        });
+        return result;
+      })
+      .catch((error: unknown) => {
+        this.autoAnalyzeCache.delete(cacheKey);
+        throw error;
+      });
+
+    this.autoAnalyzeCache.set(cacheKey, {
+      expiresAt: now + AUTO_ANALYZE_PENDING_TTL_MS,
+      pending,
+    });
+
+    return pending;
+  }
+
+  private async generateAutoAnalyzeBrief(input: AutoAnalyzeBriefInput & { mode: AutoAnalyzeMode }): Promise<AutoAnalyzeBriefResult> {
+    if (!this.directLlmProvider) {
       throw new BadRequestException(
-        'Auto-analyze requires an LLM provider, but the Graph LLM provider is not available in this runtime. Ensure the OrchestrationModule is properly configured.',
+        'Auto-analyze requires an LLM provider, but the direct LLM provider is not available in this runtime. Ensure the OrchestrationModule is properly configured.',
       );
     }
 
-    if (!this.graphLlmProvider.isAvailable()) {
+    if (!this.directLlmProvider.isAvailable()) {
       const keyName =
-        this.graphLlmProvider.providerName() === 'anthropic' ? 'ANTHROPIC_API_KEY' :
-        this.graphLlmProvider.providerName() === 'opencode' ? 'OPENCODE_API_KEY' :
-        this.graphLlmProvider.providerName() === 'gemini' ? 'GEMINI_API_KEY' :
-        this.graphLlmProvider.providerName() === 'openai' ? 'OPENAI_API_KEY' :
+        this.directLlmProvider.providerName() === 'anthropic' ? 'ANTHROPIC_API_KEY' :
+        this.directLlmProvider.providerName() === 'opencode' ? 'OPENCODE_API_KEY' :
+        this.directLlmProvider.providerName() === 'gemini' ? 'GEMINI_API_KEY' :
+        this.directLlmProvider.providerName() === 'openai' ? 'OPENAI_API_KEY' :
         'OPENROUTER_API_KEY';
       throw new BadRequestException(
         `Auto-analyze requires an LLM API key. Set the ${keyName} environment variable, or configure the provider in Admin > Providers.`,
       );
     }
 
-    // Fetch global memory context so the analyzer can learn from past brief
-    // analyses — successful project patterns, common feature groupings, and
-    // past mistakes to avoid — even before a project is created.
-    const memoryQuery = [
-      input.stackKey,
-      input.brief.slice(0, 200),
-      'brief analysis requirements',
-    ].filter(Boolean).join(' ');
-
-    const memoryContext = await this.memory.readRelevant('requirements', memoryQuery, 3).catch(() => []);
+    const memoryContext = input.mode === 'thorough'
+      ? await this.memory.readRelevant(
+          'requirements',
+          [
+            input.stackKey,
+            input.brief.slice(0, 200),
+            'brief analysis requirements',
+          ].filter(Boolean).join(' '),
+          3,
+        ).catch(() => [])
+      : [];
 
     const contextBlock = memoryContext.length > 0
       ? `\n\nContext from similar past analyses:\n${this.memory.formatAsContext(memoryContext)}`
       : '';
+
+    const designGuidance = normalizeDesignGuidance(input.designGuidance);
 
     const systemPrompt = `You are a product analyst helping a PM turn a rough idea into a structured project brief.
 Return a valid JSON object with this exact shape:
@@ -293,6 +408,8 @@ Rules:
 - suggestedTechStack: Infer from the stack key hint; use sensible defaults if not clear.
 - complexity: "simple" for <4 features, "medium" for 4-7, "complex" for 8+.
 - estimatedFiles: Rough file count based on features and complexity.
+- Account for this UI design direction when clarifying the brief, especially frontend-facing features:
+  theme=${designGuidance.theme}, productFeel=${designGuidance.productFeel}, layoutDensity=${designGuidance.layoutDensity}, accessibilityLevel=${designGuidance.accessibilityLevel}, designPreset=${designGuidance.designSystem?.presetId ?? 'devflow-black-ops'}, forbiddenPatterns=${designGuidance.forbiddenPatterns.join(', ') || 'none'}, antiPatterns=${designGuidance.designSystem?.antiPatterns.join(', ') || 'none'}, notes=${designGuidance.notes ?? 'none'}
 Respond ONLY with the JSON object — no markdown fences, no prose.${contextBlock}`;
 
     const userPrompt = `Analyze this project idea and produce a structured brief.
@@ -301,11 +418,12 @@ Company name: ${input.companyName}
 Stack key: ${input.stackKey}
 Rough idea: ${input.brief}`;
 
-    const result = await this.graphLlmProvider.generateJson<Record<string, unknown>>({
+    const result = await this.directLlmProvider.generateJson<Record<string, unknown>>({
       agentName: 'auto_analyze',
       systemPrompt,
       userPrompt,
       expectedShape: 'object',
+      maxTokens: this.autoAnalyzeMaxTokens(),
     });
 
     const value = result.value;
@@ -349,8 +467,40 @@ Rough idea: ${input.brief}`;
     };
   }
 
+  private autoAnalyzeMaxTokens(): number {
+    const parsed = Number.parseInt(process.env.AUTO_ANALYZE_MAX_OUTPUT_TOKENS ?? '', 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_AUTO_ANALYZE_MAX_TOKENS;
+  }
+
+  private autoAnalyzeCacheKey(input: AutoAnalyzeBriefInput, mode: AutoAnalyzeMode): string {
+    const designGuidance = normalizeDesignGuidance(input.designGuidance);
+    return JSON.stringify({
+      mode,
+      companyName: this.normalizeAutoAnalyzeKeyPart(input.companyName || 'Unknown company'),
+      brief: this.normalizeAutoAnalyzeKeyPart(input.brief),
+      stackKey: this.normalizeAutoAnalyzeKeyPart(input.stackKey || 'nextjs-nestjs-supabase'),
+      designGuidance: {
+        theme: designGuidance.theme,
+        productFeel: designGuidance.productFeel,
+        layoutDensity: designGuidance.layoutDensity,
+        accessibilityLevel: designGuidance.accessibilityLevel,
+        presetId: designGuidance.designSystem?.presetId ?? 'devflow-black-ops',
+        forbiddenPatterns: [...designGuidance.forbiddenPatterns].sort(),
+        antiPatterns: [...(designGuidance.designSystem?.antiPatterns ?? [])].sort(),
+        notes: this.normalizeAutoAnalyzeKeyPart(designGuidance.notes ?? ''),
+      },
+    });
+  }
+
+  private normalizeAutoAnalyzeKeyPart(value: string): string {
+    return value.trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+
   onModuleInit(): void {
     this.logger.log('Initializing orchestration pipeline...');
+    if (!this.executionValidation) {
+      throw new Error('ExecutionValidationNode is not registered in OrchestrationModule.');
+    }
     this.liveImpls = buildDevFlowNodeImpls(
       this.requirementsParser,
       this.contractNegotiator,
@@ -361,10 +511,50 @@ Rough idea: ${input.brief}`;
       this.architectureAgent,
       this.selfCritique,
       this.validator,
+      this.executionValidation,
       this.githubCommit,
     );
     this.simulationImpls = buildSimulationNodeImpls(this.emitter);
+    this.runDispatcher.registerExecutor((job) => this.executeOrchestrationJob(job));
+    this.runDispatcher.drainDueJobs();
     this.logger.log('Orchestration pipeline initialized');
+  }
+
+  private async executeOrchestrationJob(job: OrchestrationJob): Promise<void> {
+    const payload = this.jobPayload(job);
+    if (job.kind === OrchestrationJobKind.MOCK_WORK_ORDERS) {
+      await this.runMockWorkOrders(payload.state as MockWorkOrderState);
+      return;
+    }
+
+    if (
+      job.kind === OrchestrationJobKind.START_RUN ||
+      job.kind === OrchestrationJobKind.RESUME_GATE_1 ||
+      job.kind === OrchestrationJobKind.RESUME_GATE_2 ||
+      job.kind === OrchestrationJobKind.CONTROL ||
+      job.kind === OrchestrationJobKind.SUPERVISOR_RECOVERY
+    ) {
+      const state = payload.state as DevFlowStateType | undefined;
+      if (!state) {
+        throw new Error(`Orchestration job ${job.id} has no rehydratable state payload.`);
+      }
+      const fromPhase = this.safeRunPhase(payload.fromPhase);
+      const impls = payload.impls === 'simulation' ? this.simulationImpls : this.liveImpls;
+      await this.driveRun(job.projectId, job.runId, state, fromPhase, impls);
+      return;
+    }
+
+    throw new Error(`Unsupported orchestration job kind: ${job.kind}`);
+  }
+
+  private jobPayload(job: OrchestrationJob): Record<string, unknown> {
+    return job.payload && typeof job.payload === 'object' && !Array.isArray(job.payload)
+      ? job.payload as Record<string, unknown>
+      : {};
+  }
+
+  private safeRunPhase(value: unknown): RunPhase {
+    return value === 'B' || value === 'C' ? value : 'A';
   }
 
   /**
@@ -387,6 +577,10 @@ Rough idea: ${input.brief}`;
     this.activeRuns.set(runId, controller);
 
     try {
+      await this.prisma.orchestrationRun.updateMany({
+        where: { runId, status: { in: [OrchestrationRunStatus.RUNNING, OrchestrationRunStatus.PAUSED] } },
+        data: { status: OrchestrationRunStatus.RUNNING, lastHeartbeatAt: new Date() },
+      });
       const outcome = await this.sequencer.run({
         impls,
         projectId,
@@ -400,7 +594,7 @@ Rough idea: ${input.brief}`;
         await this.prisma.orchestrationRun
           .updateMany({
             where: { runId, status: OrchestrationRunStatus.RUNNING },
-            data: { status: OrchestrationRunStatus.SUCCEEDED, completedAt: new Date() },
+            data: { status: OrchestrationRunStatus.SUCCEEDED, completedAt: new Date(), lastHeartbeatAt: new Date() },
           })
           .catch(() => undefined);
       }
@@ -447,8 +641,10 @@ Rough idea: ${input.brief}`;
     actorId?: string,
     trigger: OrchestrationRunTrigger = OrchestrationRunTrigger.START,
     intakeContext?: IntakeContextPackage,
+    designGuidance?: DesignGuidanceInput,
   ): Promise<string> {
     const runId = createId();
+    const normalizedDesignGuidance = normalizeDesignGuidance(designGuidance);
     this.agentProviderRegistry.getActiveProviderOrThrow();
 
     this.logger.log(
@@ -499,6 +695,19 @@ Rough idea: ${input.brief}`;
         label: 'mock_work_orders',
         projectId,
         runId,
+        kind: OrchestrationJobKind.MOCK_WORK_ORDERS,
+        payload: {
+          state: {
+            projectId,
+            runId,
+            trigger,
+            actorId: actorId ?? null,
+            readyWorkOrderIds: [],
+            completedArtifactIds: [],
+            failedWorkOrderIds: [],
+            error: null,
+          },
+        } as unknown as Prisma.InputJsonValue,
         task: () => this.runMockWorkOrders({
           projectId,
           runId,
@@ -538,10 +747,11 @@ Rough idea: ${input.brief}`;
         stackKey,
         companyName,
         intakeContext,
+        designGuidance: normalizedDesignGuidance,
         gate1Approved: true,
         gate2Approved: true,
       });
-      this.dispatchDriveRun(projectId, runId, simulationState, 'A', this.simulationImpls, 'simulation_run');
+      this.dispatchDriveRun(projectId, runId, simulationState, 'A', 'simulation', OrchestrationJobKind.START_RUN, 'simulation_run');
       this.gateway?.emitStatusUpdate(projectId, 'PARSING_REQUIREMENTS', 'parse_requirements');
       this.emitter?.runStatus(
         projectId,
@@ -591,11 +801,12 @@ Rough idea: ${input.brief}`;
       hasMobileRepo,
       repoToken,
       repoBranch,
+      designGuidance: normalizedDesignGuidance,
     });
 
     // Drive the pipeline via the dispatcher. Errors are handled inside driveRun
     // (run.error + markRunFailed); the dispatcher is a final safety net.
-    this.dispatchDriveRun(projectId, runId, initialState, 'A', this.liveImpls, 'live_run');
+    this.dispatchDriveRun(projectId, runId, initialState, 'A', 'live', OrchestrationJobKind.START_RUN, 'live_run');
 
     // Notify subscribers that the graph has started and is parsing requirements.
     // Legacy event kept for back-compat; runGraph also emits typed run.status.
@@ -721,7 +932,7 @@ Rough idea: ${input.brief}`;
     this.emitter?.runStatus(projectId, runId, ProjectStatus.GENERATING_CODE, 'gate_1_check');
 
     // Resume at phase B (code generation) with gate 1 now approved.
-    this.dispatchDriveRun(projectId, runId, resumedState, 'B', this.liveImpls, 'resume_gate_1');
+    this.dispatchDriveRun(projectId, runId, resumedState, 'B', 'live', OrchestrationJobKind.RESUME_GATE_1, 'resume_gate_1');
   }
 
   /**
@@ -873,7 +1084,7 @@ Rough idea: ${input.brief}`;
     this.emitter?.runStatus(projectId, runId, ProjectStatus.COMMITTING, 'gate_2_check');
 
     // Resume at phase C (commit → delivered) with gate 2 now approved.
-    this.dispatchDriveRun(projectId, runId, resumedState, 'C', this.liveImpls, 'resume_gate_2');
+    this.dispatchDriveRun(projectId, runId, resumedState, 'C', 'live', OrchestrationJobKind.RESUME_GATE_2, 'resume_gate_2');
   }
 
   private dispatchDriveRun(
@@ -881,14 +1092,23 @@ Rough idea: ${input.brief}`;
     runId: string,
     state: DevFlowStateType,
     fromPhase: RunPhase,
-    impls: DevFlowNodeImpls,
+    impls: 'live' | 'simulation',
+    kind: OrchestrationJobKind,
     label: string,
   ): void {
     this.runDispatcher.dispatch({
       label,
       projectId,
       runId,
-      task: () => this.driveRun(projectId, runId, state, fromPhase, impls),
+      kind,
+      payload: { state, fromPhase, impls } as unknown as Prisma.InputJsonValue,
+      task: () => this.driveRun(
+        projectId,
+        runId,
+        state,
+        fromPhase,
+        impls === 'simulation' ? this.simulationImpls : this.liveImpls,
+      ),
       onError: (error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         return this.markRunFailed(runId, label, message);
@@ -1001,8 +1221,16 @@ Rough idea: ${input.brief}`;
       currentNode: nodeName,
     });
 
-    await this.prisma.workOrder.update({
-      where: { id: workOrderId },
+    const executionClaim = await this.prisma.workOrder.updateMany({
+      where: {
+        id: workOrderId,
+        projectId,
+        OR: [
+          { status: WorkOrderStatus.READY },
+          { status: WorkOrderStatus.DISPATCHED, executionRunId: null, executionStartedAt: null },
+          ...(options.allowFailedRetry ? [{ status: WorkOrderStatus.FAILED }] : []),
+        ],
+      },
       data: {
         status: WorkOrderStatus.DISPATCHED,
         dispatchedAt: workOrder.dispatchedAt ?? startedAt,
@@ -1014,6 +1242,10 @@ Rough idea: ${input.brief}`;
         lastEventAt: startedAt,
       },
     });
+
+    if (executionClaim.count !== 1) {
+      throw new Error(`Work order ${workOrderId} was already claimed for execution`);
+    }
 
     await this.prisma.workOrderExecution.create({
       data: {
@@ -1084,9 +1316,35 @@ Rough idea: ${input.brief}`;
     });
 
     this.gateway?.emitStatusUpdate(projectId, 'GENERATING_CODE', nodeName);
+    this.streamEmitter?.progress(projectId, nodeName, executionRunId, 12, 'Preparing work-order prompt');
+    this.streamEmitter?.emit(
+      projectId,
+      nodeName,
+      executionRunId,
+      'decision',
+      `Dispatching ${workOrder.agentType.toLowerCase()} agent for ${workOrder.title}.`,
+      { workOrderId, attempt, agentType: workOrder.agentType },
+    );
 
     try {
       const completedAt = new Date();
+      let streamedTokens = 0;
+      const onToken = this.streamEmitter
+        ? (delta: string) => {
+            streamedTokens += 1;
+            if (streamedTokens === 1) {
+              this.streamEmitter?.progress(projectId, nodeName, executionRunId, 35, 'Streaming model output');
+            }
+            this.streamEmitter?.emit(
+              projectId,
+              nodeName,
+              executionRunId,
+              'token',
+              delta,
+              { workOrderId, agentType: workOrder.agentType },
+            );
+          }
+        : undefined;
       const agentContext = {
         project: workOrder.project,
         workOrder: {
@@ -1099,8 +1357,19 @@ Rough idea: ${input.brief}`;
         task: workOrder.task,
         sourceArtifact: workOrder.artifact,
         executionRunId,
+        ...(onToken ? { onToken } : {}),
       };
       const output = await provider.generateWorkOrderOutput(agentContext);
+      this.streamEmitter?.flushAll(projectId);
+      this.streamEmitter?.progress(projectId, nodeName, executionRunId, 76, 'Validating generated artifact');
+      this.streamEmitter?.emit(
+        projectId,
+        nodeName,
+        executionRunId,
+        'decision',
+        `Generated ${output.displayName}; validating contract and required signals.`,
+        { workOrderId, filePath: output.filePath, language: output.language },
+      );
       const validation = this.outputValidation.validate(output, agentContext);
 
       if (!validation.valid) {
@@ -1121,8 +1390,8 @@ Rough idea: ${input.brief}`;
         },
       });
 
-      await this.prisma.workOrder.update({
-        where: { id: workOrderId },
+      const completionClaim = await this.prisma.workOrder.updateMany({
+        where: { id: workOrderId, projectId, status: WorkOrderStatus.DISPATCHED, executionRunId },
         data: {
           status: WorkOrderStatus.COMPLETED,
           artifactId: artifact.id,
@@ -1133,6 +1402,10 @@ Rough idea: ${input.brief}`;
           lastEventAt: completedAt,
         },
       });
+
+      if (completionClaim.count !== 1) {
+        throw new Error(`Work order ${workOrderId} is no longer owned by execution ${executionRunId}`);
+      }
 
       if (workOrder.taskId) {
         await this.prisma.projectTask.update({
@@ -1243,13 +1516,32 @@ Rough idea: ${input.brief}`;
         ]);
       }
 
+      this.streamEmitter?.progress(projectId, nodeName, executionRunId, 100, 'Artifact ready for review');
+      this.streamEmitter?.emit(
+        projectId,
+        nodeName,
+        executionRunId,
+        'decision',
+        `Artifact saved: ${artifact.filePath}.`,
+        { workOrderId, artifactId: artifact.id },
+      );
+      this.streamEmitter?.flushAll(projectId);
       this.gateway?.emitStatusUpdate(projectId, 'AWAITING_GATE_2', nodeName);
       return { executionRunId, artifactId: artifact.id };
     } catch (error) {
       const failedAt = new Date();
       const message = error instanceof Error ? error.message : String(error);
-      await this.prisma.workOrder.update({
-        where: { id: workOrderId },
+      this.streamEmitter?.emit(
+        projectId,
+        nodeName,
+        executionRunId,
+        'error',
+        message,
+        { workOrderId, attempt, agentType: workOrder.agentType },
+      );
+      this.streamEmitter?.flushAll(projectId);
+      await this.prisma.workOrder.updateMany({
+        where: { id: workOrderId, projectId, status: WorkOrderStatus.DISPATCHED, executionRunId },
         data: {
           status: WorkOrderStatus.FAILED,
           failedAt,
@@ -1814,6 +2106,10 @@ Rough idea: ${input.brief}`;
         where: { projectId, status: WorkOrderStatus.DISPATCHED },
         data: { status: WorkOrderStatus.CANCELLED, executionCompletedAt: now, lastEventAt: now },
       }),
+      this.prisma.orchestrationJob.updateMany({
+        where: { runId, status: { in: [OrchestrationJobStatus.PENDING, OrchestrationJobStatus.RUNNING] } },
+        data: { status: OrchestrationJobStatus.CANCELLED, completedAt: now, lockedBy: null, lockedUntil: null },
+      }),
     ]);
 
     this.emitter?.runStatus(projectId, runId, 'CANCELLED', 'cancelled');
@@ -1836,6 +2132,17 @@ Rough idea: ${input.brief}`;
     // re-enters from the persisted checkpoint. driveRun treats the abort as non-fatal.
     this.activeRuns.get(runId)?.abort();
     this.activeRuns.delete(runId);
+
+    await Promise.allSettled([
+      this.prisma.orchestrationRun.updateMany({
+        where: { runId, status: OrchestrationRunStatus.RUNNING },
+        data: { status: OrchestrationRunStatus.PAUSED, currentNode: 'paused', lastHeartbeatAt: new Date() },
+      }),
+      this.prisma.orchestrationJob.updateMany({
+        where: { runId, status: OrchestrationJobStatus.PENDING },
+        data: { availableAt: new Date(Date.now() + 60_000), lastError: 'Paused by operator' },
+      }),
+    ]);
 
     this.emitter?.runStatus(projectId, runId, 'PAUSED', 'paused');
     return { accepted: true, action: 'pause', status: 'PAUSED' };
@@ -1860,7 +2167,19 @@ Rough idea: ${input.brief}`;
 
     this.pausedRuns.delete(projectId);
     this.emitter?.runStatus(projectId, runId, ProjectStatus.GENERATING_CODE, 'resumed');
-    void this.driveRun(projectId, runId, state, OrchestrationSequencer.phaseFromState(state), this.liveImpls);
+    await this.prisma.orchestrationRun.updateMany({
+      where: { runId, status: OrchestrationRunStatus.PAUSED },
+      data: { status: OrchestrationRunStatus.RUNNING, error: null, completedAt: null },
+    });
+    this.dispatchDriveRun(
+      projectId,
+      runId,
+      state,
+      OrchestrationSequencer.phaseFromState(state),
+      'live',
+      OrchestrationJobKind.CONTROL,
+      'control_resume',
+    );
     return { accepted: true, action: 'resume', status: 'RUNNING' };
   }
 
@@ -1889,7 +2208,15 @@ Rough idea: ${input.brief}`;
       ProjectStatus.GENERATING_CODE,
       nodeId ?? 'retry',
     );
-    void this.driveRun(projectId, runId, resumed, OrchestrationSequencer.phaseFromState(resumed), this.liveImpls);
+    this.dispatchDriveRun(
+      projectId,
+      runId,
+      resumed,
+      OrchestrationSequencer.phaseFromState(resumed),
+      'live',
+      OrchestrationJobKind.CONTROL,
+      'control_retry_node',
+    );
     return { accepted: true, action: 'retry_node', status: 'RUNNING' };
   }
 
@@ -1912,7 +2239,15 @@ Rough idea: ${input.brief}`;
     this.pausedRuns.delete(projectId);
     this.emitter?.nodeLifecycle(projectId, runId, nodeId, 'skipped');
     this.emitter?.runStatus(projectId, runId, ProjectStatus.GENERATING_CODE, nodeId);
-    void this.driveRun(projectId, runId, resumed, OrchestrationSequencer.phaseFromState(resumed), this.liveImpls);
+    this.dispatchDriveRun(
+      projectId,
+      runId,
+      resumed,
+      OrchestrationSequencer.phaseFromState(resumed),
+      'live',
+      OrchestrationJobKind.CONTROL,
+      'control_skip_node',
+    );
     return { accepted: true, action: 'skip_node', status: 'RUNNING' };
   }
 
