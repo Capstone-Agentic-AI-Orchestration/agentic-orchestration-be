@@ -387,6 +387,7 @@ export const allowedCrossBoundaryPrismaModels: Partial<Record<ServiceBoundary, C
   ],
   identity: [
     crossBoundaryPrismaException('clientInvite', 'Auth bootstrap links pending invites during sign-in.', 'Intake invite lookup API.'),
+    crossBoundaryPrismaException('clientInquiry', 'Client approval gate checks for an approved inquiry before activating a new client at sign-in.', 'Intake approval lookup API.'),
   ],
   intake: [
     crossBoundaryPrismaException('collaborationDocument', 'Inquiry approval seeds the initial collaboration document.', 'Collaboration kickoff API.'),

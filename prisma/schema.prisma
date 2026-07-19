@@ -369,6 +369,9 @@ enum UserRole {
 }
 
 enum ProfileStatus {
+  /// Signed in, but not yet approved by a project manager. The auth guard refuses
+  /// these accounts: they exist so the person can see their request status, nothing more.
+  PENDING
   ACTIVE
   SUSPENDED
 

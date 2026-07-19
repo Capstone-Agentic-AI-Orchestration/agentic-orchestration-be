@@ -563,7 +563,13 @@ Rough idea: ${input.brief}`;
     // Failing to mint is non-fatal — agents fall back to generating from the contract alone.
     const repoBranch = `run/${runId}`;
     let repoToken: string | null = null;
-    if (this.agentRepo.isEnabled()) {
+    // Repository tools live in the external Eve agent service. The in-process graph provider has
+    // no tool-calling, so minting a token there would put "call read_repo_file" in a prompt for a
+    // tool the model cannot invoke — it would hallucinate reads instead of failing loudly.
+    // Both conditions must hold: the engine must be Eve AND the callback must be configured.
+    const repoToolsAvailable =
+      process.env.ORCHESTRATION_LLM_ENGINE === 'eve' && this.agentRepo.isEnabled();
+    if (repoToolsAvailable) {
       repoToken = await this.agentRepo
         .mintSession({ runId, projectId, agentType: 'run', branch: repoBranch })
         .then((session) => session.token)
