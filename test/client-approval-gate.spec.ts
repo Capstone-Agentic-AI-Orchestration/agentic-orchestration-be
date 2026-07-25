@@ -17,6 +17,9 @@ function makeService(opts: {
   approvedInquiry?: boolean;
   invite?: boolean;
   teamRole?: UserRole | null;
+  /** Whether GitHub team mapping is live. Promotion of an *existing* profile is
+   *  skipped unless this is true, so it must be on to exercise that path. */
+  teamMappingEnabled?: boolean;
 }) {
   // No supabase.url → the service parses the token payload directly (offline path), so a test
   // can pass a JSON payload as the token without minting a real JWT.
@@ -55,7 +58,7 @@ function makeService(opts: {
 
   const githubTeams = {
     resolveRoleFromTeams: vi.fn().mockResolvedValue(opts.teamRole ?? null),
-    isEnabled: vi.fn().mockReturnValue(false),
+    isEnabled: vi.fn().mockReturnValue(opts.teamMappingEnabled ?? false),
   } as unknown as GithubTeamsService;
 
   const service = new SupabaseAuthService(config, prisma, githubTeams);
@@ -69,13 +72,24 @@ function pickSelect(data: Record<string, unknown>, select?: Record<string, boole
   return out;
 }
 
-function token(email: string, provider = 'google') {
-  return JSON.stringify({
-    sub: `user-${email}`,
-    email,
-    app_metadata: { provider, providers: [provider] },
-    user_metadata: { full_name: 'Test Client' },
-  });
+/**
+ * Builds a real 3-segment base64url JWT so the service takes its normal parse path.
+ * A bare JSON string will NOT do: the emails inside it contain dots, so `split('.')`
+ * yields 3 parts, the service tries to base64-decode the middle one, fails, and falls
+ * back to a synthesised "mock user" payload — silently discarding everything set here.
+ */
+function token(email: string, provider = 'google', githubLogin?: string) {
+  const seg = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  return [
+    seg({ alg: 'none', typ: 'JWT' }),
+    seg({
+      sub: `user-${email}`,
+      email,
+      app_metadata: { provider, providers: [provider] },
+      user_metadata: { full_name: 'Test Client', ...(githubLogin ? { user_name: githubLogin } : {}) },
+    }),
+    'signature',
+  ].join('.');
 }
 
 describe('client approval gate', () => {
@@ -132,5 +146,41 @@ describe('client approval gate', () => {
     expect(user.role).toBe(UserRole.PM);
     expect(user.status).toBe(ProfileStatus.ACTIVE);
     expect(created[0]).toMatchObject({ role: UserRole.PM, status: ProfileStatus.ACTIVE });
+  });
+
+  /**
+   * Regression: staff whose profile ALREADY exists as CLIENT/PENDING — created before team
+   * mapping was configured, or before they were added to the org team. Team promotion used to
+   * run after the pending-approval gate, so the gate threw first and the promotion was
+   * unreachable: a real PM/DEV was locked out permanently, with no inquiry anyone would ever
+   * approve. Promotion must now run before the gate.
+   */
+  it('promotes an existing PENDING client to staff instead of locking them out', async () => {
+    const { service, updated } = makeService({
+      existingProfile: { id: 'user-z', email: 'pm@company.com', status: ProfileStatus.PENDING, role: UserRole.CLIENT },
+      approvedInquiry: false,
+      invite: false,
+      teamRole: UserRole.PM,
+      teamMappingEnabled: true,
+    });
+
+    const user = await service.verifyAccessToken(token('pm@company.com', 'github', 'pm-login'));
+    expect(user.role).toBe(UserRole.PM);
+    // Promotion must clear PENDING too — team membership is the vetting step for staff.
+    expect(user.status).toBe(ProfileStatus.ACTIVE);
+    expect(updated.some((u) => u.role === UserRole.PM && u.status === ProfileStatus.ACTIVE)).toBe(true);
+  });
+
+  it('still refuses an existing PENDING client who is in no org team', async () => {
+    const { service } = makeService({
+      existingProfile: { id: 'user-w', email: 'nobody@acme.com', status: ProfileStatus.PENDING, role: UserRole.CLIENT },
+      approvedInquiry: false,
+      teamRole: null,
+      teamMappingEnabled: true,
+    });
+
+    await expect(
+      service.verifyAccessToken(token('nobody@acme.com', 'github', 'nobody-login')),
+    ).rejects.toMatchObject({ response: { code: 'ACCOUNT_PENDING_APPROVAL' } });
   });
 });

@@ -175,6 +175,21 @@ export class SupabaseAuthService implements OnModuleInit {
       throw new UnauthorizedException('This account has been suspended');
     }
 
+    // Team promotion MUST run before the PENDING gate below. A staff member whose profile
+    // was first created as CLIENT — because team mapping was unconfigured at the time, or
+    // because they were added to the org team after their first sign-in — sits at PENDING
+    // with no approved intake. Gating first would 403 them on every request and leave the
+    // promotion permanently unreachable, locking real DEV/PMs out of the console for good.
+    const throttleExpired =
+      Date.now() - (this.lastInviteCheck.get(userId) ?? 0) > INVITE_CHECK_INTERVAL_MS;
+
+    // A PENDING profile bypasses the GitHub-call throttle: it is the locked-out case, so it
+    // must resolve on the very next request rather than up to INVITE_CHECK_INTERVAL_MS later.
+    // Non-CLIENT and login-less profiles cost no API call (promoteFromTeamsIfNeeded exits early).
+    if (throttleExpired || profile.status === ProfileStatus.PENDING) {
+      profile = await this.promoteFromTeamsIfNeeded(profile, githubLogin);
+    }
+
     // A pending client may have been approved since they last signed in; re-check before
     // refusing, so approval takes effect on their next request without admin intervention.
     if (profile.status === ProfileStatus.PENDING) {
@@ -188,9 +203,7 @@ export class SupabaseAuthService implements OnModuleInit {
       });
     }
 
-    const lastCheck = this.lastInviteCheck.get(userId) ?? 0;
-    if (Date.now() - lastCheck > INVITE_CHECK_INTERVAL_MS) {
-      profile = await this.promoteFromTeamsIfNeeded(profile, githubLogin);
+    if (throttleExpired) {
       await this.acceptPendingClientInvites(profile);
       this.lastInviteCheck.set(userId, Date.now());
     }
@@ -202,6 +215,11 @@ export class SupabaseAuthService implements OnModuleInit {
    * Upgrades an existing CLIENT to DEV/PM when their GitHub login is (now) in a
    * mapped org team. Only ever promotes — never auto-demotes — so manual/admin
    * role changes are preserved. No-op unless team mapping is enabled.
+   *
+   * A promoted profile is also marked ACTIVE: org team membership is itself the
+   * vetting step for staff (mirroring how a brand-new staff profile is provisioned
+   * in syncProfile), so a promoted DEV/PM must not be left behind the CLIENT
+   * pending-approval gate — nobody would ever approve a "client inquiry" for them.
    */
   private async promoteFromTeamsIfNeeded(
     profile: {
@@ -222,11 +240,20 @@ export class SupabaseAuthService implements OnModuleInit {
     const teamRole = await this.githubTeams.resolveRoleFromTeams(githubLogin);
     if (!teamRole || teamRole === UserRole.CLIENT) return profile;
 
+    this.logger.log(
+      `Promoting ${githubLogin} to ${teamRole} from ${this.org()} team membership`,
+    );
+
     return this.prisma.profile.update({
       where: { id: profile.id },
-      data: { role: teamRole },
+      data: { role: teamRole, status: ProfileStatus.ACTIVE },
       select: { id: true, email: true, fullName: true, githubLogin: true, avatarUrl: true, role: true, status: true },
     });
+  }
+
+  /** Org name for log lines only; team mapping itself lives in GithubTeamsService. */
+  private org(): string {
+    return this.configService.get<string>('github.org') ?? 'GitHub';
   }
 
   private getEmail(payload: JWTPayload): string | null {
