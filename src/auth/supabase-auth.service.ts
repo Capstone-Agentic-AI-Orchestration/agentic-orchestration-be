@@ -12,10 +12,13 @@ const INVITE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 export class SupabaseAuthService implements OnModuleInit {
   private readonly logger = new Logger(SupabaseAuthService.name);
   private readonly issuer: string;
-  private readonly jwks: ReturnType<typeof createRemoteJWKSet>;
+  // Null when SUPABASE_URL is unset — the field was previously typed non-nullable and
+  // assigned `null as any`, which hid that state from the compiler.
+  private readonly jwks: ReturnType<typeof createRemoteJWKSet> | null;
   private jwksWarmed = false;
   private readonly lastInviteCheck = new Map<string, number>();
   private readonly allowedProviders: Set<string>;
+  private readonly isProduction: boolean;
 
   constructor(
     private readonly configService: ConfigService,
@@ -31,17 +34,39 @@ export class SupabaseAuthService implements OnModuleInit {
       );
     } else {
       this.issuer = '';
-      this.jwks = null as any;
+      this.jwks = null;
     }
     this.allowedProviders = new Set(
       (this.configService.get<string[]>('auth.allowedProviders') ?? ['github'])
         .map((provider) => provider.trim().toLowerCase())
         .filter(Boolean),
     );
+    this.isProduction = this.configService.get<string>('nodeEnv') === 'production';
   }
 
   async onModuleInit() {
+    this.assertVerificationAvailable();
     await this.warmJwks();
+  }
+
+  /**
+   * Refuses to start a production deployment that cannot verify token signatures.
+   *
+   * Without SUPABASE_URL there is no JWKS, and verifyAccessToken falls back to reading the
+   * payload UNVERIFIED — a signature-less path intended only for local offline work. Reaching
+   * that state in production would be a total auth bypass, since `sub` is caller-controlled:
+   * anyone could mint a token for any user. A single missing env var must not silently turn
+   * the whole API open, so fail loudly at boot instead.
+   */
+  private assertVerificationAvailable(): void {
+    if (this.jwks) return;
+
+    const detail =
+      'SUPABASE_URL is not configured, so access tokens cannot be signature-verified.';
+    if (this.isProduction) {
+      throw new Error(`${detail} Refusing to start in production.`);
+    }
+    this.logger.warn(`${detail} Tokens are accepted UNVERIFIED — local development only.`);
   }
 
   private async warmJwks() {
@@ -70,24 +95,14 @@ export class SupabaseAuthService implements OnModuleInit {
         });
         payload = verified;
       } else {
-        // Suppress verification - parse JWT directly for local offline execution.
-        try {
-          const parts = token.split('.');
-          if (parts.length === 3) {
-            payload = JSON.parse(
-              Buffer.from(parts[1], 'base64').toString('utf8'),
-            ) as JWTPayload;
-          } else {
-            payload = JSON.parse(token) as JWTPayload;
-          }
-        } catch {
-          payload = {
-            sub: token.replace(/[^a-zA-Z0-9-]/g, '') || 'mock-user-id',
-            email: token.includes('@') ? token.toLowerCase() : 'mock-user@devflow-eve.local',
-            user_metadata: { full_name: 'Mock User' },
-            app_metadata: { provider: 'github', providers: ['github'] },
-          };
+        // Local offline path: no JWKS, so the payload is read WITHOUT verifying the
+        // signature. Boot is already blocked in production by assertVerificationAvailable();
+        // re-checked here so a service constructed outside the Nest lifecycle (a test, a
+        // script) can never reach the unverified path in a production process.
+        if (this.isProduction) {
+          throw new UnauthorizedException('Invalid or expired access token');
         }
+        payload = this.parseUnverifiedPayload(token);
       }
 
       this.assertAllowedProvider(payload);
@@ -99,6 +114,30 @@ export class SupabaseAuthService implements OnModuleInit {
       if (error instanceof UnauthorizedException || error instanceof ForbiddenException) {
         throw error;
       }
+      throw new UnauthorizedException('Invalid or expired access token');
+    }
+  }
+
+  /**
+   * Reads a JWT payload WITHOUT verifying its signature — local offline development only.
+   *
+   * A malformed token is rejected. This used to synthesise a "mock user" instead, deriving
+   * `sub` from `token.replace(/[^a-zA-Z0-9-]/g, '')` and `email` from the raw string, so any
+   * garbage value became an authenticated identity. It also silently masked malformed tokens
+   * in tests: a bad token produced a plausible user rather than an error.
+   */
+  private parseUnverifiedPayload(token: string): JWTPayload {
+    try {
+      const parts = token.split('.');
+      // base64url (not base64) — that is what JWT uses, so '-' and '_' decode correctly.
+      const raw =
+        parts.length === 3 ? Buffer.from(parts[1], 'base64url').toString('utf8') : token;
+      const payload = JSON.parse(raw) as JWTPayload;
+      if (!payload || typeof payload !== 'object') {
+        throw new Error('token payload is not an object');
+      }
+      return payload;
+    } catch {
       throw new UnauthorizedException('Invalid or expired access token');
     }
   }
