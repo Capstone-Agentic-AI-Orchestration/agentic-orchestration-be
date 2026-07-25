@@ -353,7 +353,7 @@ describe('ProjectsService', () => {
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('startOrchestration blocks until kickoff is ready', async () => {
+  it('startOrchestration does not require a completed kickoff checklist', async () => {
     prisma.project.findFirst.mockResolvedValue({
       id: 'project-1',
       companyName: 'Acme Logistics',
@@ -364,10 +364,39 @@ describe('ProjectsService', () => {
       workOrders: [{ instructions: 'Build the first dashboard shell.' }],
     });
 
-    await expect(
-      service.startOrchestration('project-1', pmUser),
-    ).rejects.toBeInstanceOf(BadRequestException);
-    expect(orchestration.startRun).not.toHaveBeenCalled();
+    await expect(service.startOrchestration('project-1', pmUser)).resolves.toEqual({
+      accepted: true,
+      runId: 'run-1',
+    });
+    expect(orchestration.startRun).toHaveBeenCalled();
+  });
+
+  it('startOrchestration prepares agent tasks automatically when none are ready', async () => {
+    prisma.project.findFirst.mockResolvedValue({
+      id: 'project-1',
+      companyName: 'Acme Logistics',
+      brief: 'Build a delivery dashboard',
+      stackKey: 'nextjs-nestjs-supabase',
+      runId: null,
+      kickoff: { status: ProjectKickoffStatus.DRAFT },
+      workOrders: [],
+    });
+    const prepare = vi.spyOn(service, 'createKickoffWorkOrders').mockResolvedValue({
+      kickoff: { status: ProjectKickoffStatus.DRAFT } as never,
+      workOrders: [
+        {
+          status: WorkOrderStatus.READY,
+          instructions: 'Review the brief and prepare the architecture.',
+        },
+      ] as never,
+    });
+
+    await expect(service.startOrchestration('project-1', pmUser)).resolves.toEqual({
+      accepted: true,
+      runId: 'run-1',
+    });
+    expect(prepare).toHaveBeenCalledWith('project-1', pmUser);
+    expect(orchestration.startRun).toHaveBeenCalled();
   });
 
   it('verifyOrchestrationGithubDelivery checks project access before live GitHub verification', async () => {

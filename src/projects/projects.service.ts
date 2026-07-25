@@ -412,11 +412,6 @@ export class ProjectsService {
         stackKey: true,
         createdById: true,
         runId: true,
-        kickoff: {
-          select: {
-            status: true,
-          },
-        },
         workOrders: {
           where: {
             status: WorkOrderStatus.READY,
@@ -436,12 +431,20 @@ export class ProjectsService {
       return { accepted: true, runId: project.runId };
     }
 
-    if (project.kickoff?.status !== ProjectKickoffStatus.READY && project.kickoff?.status !== ProjectKickoffStatus.LOCKED) {
-      throw new BadRequestException('Project kickoff must be complete before orchestration can start');
+    let executableWorkOrders = project.workOrders;
+    if (!executableWorkOrders.some((workOrder) => workOrder.instructions?.trim())) {
+      const prepared = await this.createKickoffWorkOrders(id, user);
+      executableWorkOrders = prepared.workOrders.filter(
+        (workOrder) =>
+          workOrder.status === WorkOrderStatus.READY
+          && Boolean(workOrder.instructions?.trim()),
+      );
     }
 
-    if (!project.workOrders.some((workOrder) => workOrder.instructions?.trim())) {
-      throw new BadRequestException('At least one READY work order with instructions is required before orchestration can start');
+    if (executableWorkOrders.length === 0) {
+      throw new BadRequestException(
+        'DevFlow could not prepare agent tasks for this project. Try again or add a READY work order with instructions.',
+      );
     }
 
     const intakeContext = this.intake ? await this.intake.contextForStart(project, user.id) : undefined;
@@ -1088,8 +1091,8 @@ export class ProjectsService {
 
     const starterWorkOrders = [
       {
-        title: 'Architecture kickoff brief',
-        instructions: `Review the client brief, stack key (${project.stackKey}), and kickoff checklist before generating architecture decisions.`,
+        title: 'Architecture planning brief',
+        instructions: `Review the client brief and stack key (${project.stackKey}) before generating architecture decisions.`,
         agentType: WorkOrderAgentType.ARCHITECTURE,
         priority: WorkOrderPriority.HIGH,
       },
@@ -1134,7 +1137,7 @@ export class ProjectsService {
           workOrderId: createdWorkOrder.id,
           agentType: createdWorkOrder.agentType,
           priority: createdWorkOrder.priority,
-          source: 'kickoff',
+          source: 'automatic-launch-preparation',
         },
       });
 
