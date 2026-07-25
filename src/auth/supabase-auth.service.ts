@@ -1,12 +1,19 @@
 import { ForbiddenException, Injectable, Logger, OnModuleInit, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createRemoteJWKSet, jwtVerify, JWTPayload } from 'jose';
-import { ClientInviteStatus, InquiryStatus, ProfileStatus, UserRole } from '@prisma/client';
+import { ProfileStatus, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { GithubTeamsService } from '../github/github-teams.service';
 import { AuthUser } from './auth.types';
 
-const INVITE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+/**
+ * Refusal code for a GitHub account that is in none of the mapped org teams.
+ *
+ * This console is staff-only, so "not on a team" is the single reason a successfully
+ * authenticated GitHub user is denied. It replaces the old ACCOUNT_PENDING_APPROVAL
+ * refusal, which implied a client-approval workflow that does not exist here.
+ */
+export const NOT_A_TEAM_MEMBER = 'NOT_A_TEAM_MEMBER';
 
 @Injectable()
 export class SupabaseAuthService implements OnModuleInit {
@@ -16,7 +23,6 @@ export class SupabaseAuthService implements OnModuleInit {
   // assigned `null as any`, which hid that state from the compiler.
   private readonly jwks: ReturnType<typeof createRemoteJWKSet> | null;
   private jwksWarmed = false;
-  private readonly lastInviteCheck = new Map<string, number>();
   private readonly allowedProviders: Set<string>;
   private readonly isProduction: boolean;
 
@@ -108,9 +114,9 @@ export class SupabaseAuthService implements OnModuleInit {
       this.assertAllowedProvider(payload);
       return this.syncProfile(payload);
     } catch (error) {
-      // Deliberate auth decisions pass through unchanged. A pending-approval refusal in
-      // particular must keep its 403 + ACCOUNT_PENDING_APPROVAL code, or the frontend cannot
-      // tell "awaiting approval" apart from "your token is broken" and shows the wrong screen.
+      // Deliberate auth decisions pass through unchanged. The not-a-team-member refusal in
+      // particular must keep its 403 + NOT_A_TEAM_MEMBER code, or the frontend cannot tell
+      // "you are not on a team" apart from "your token is broken" and shows the wrong screen.
       if (error instanceof UnauthorizedException || error instanceof ForbiddenException) {
         throw error;
       }
@@ -182,20 +188,10 @@ export class SupabaseAuthService implements OnModuleInit {
         profile = existing;
       }
     } else {
-      // New sign-in: derive the role from GitHub org team membership when
-      // configured (github-teams.service.ts); fall back to CLIENT otherwise.
-      const provisionedRole =
-        (await this.githubTeams.resolveRoleFromTeams(githubLogin)) ?? UserRole.CLIENT;
-
-      // Clients must be vetted before they get in. Staff (DEV/PM/ADMIN resolved from an org
-      // team) are already trusted by virtue of that membership, so only CLIENT is gated:
-      // a client is ACTIVE only when a PM has already approved an inquiry for this email,
-      // otherwise the account is created PENDING so the person can see their request status.
-      const provisionedStatus =
-        provisionedRole === UserRole.CLIENT && !(await this.hasApprovedIntake(email))
-          ? ProfileStatus.PENDING
-          : ProfileStatus.ACTIVE;
-
+      // Staff-only console: a profile is created ONLY for a GitHub login that resolves to a
+      // mapped org team. There is deliberately no CLIENT provisioning here — the client
+      // product is a separate app (alphaexplora-client-be/-fe) over the same Supabase
+      // project, and it owns client sign-up, intake approval, and invites.
       profile = await this.prisma.profile.create({
         data: {
           id: userId,
@@ -203,8 +199,9 @@ export class SupabaseAuthService implements OnModuleInit {
           fullName,
           githubLogin,
           avatarUrl,
-          role: provisionedRole,
-          status: provisionedStatus,
+          role: await this.resolveStaffRole(githubLogin),
+          // Org team membership IS the vetting step for staff, so there is no approval gate.
+          status: ProfileStatus.ACTIVE,
         },
         select: { id: true, email: true, fullName: true, githubLogin: true, avatarUrl: true, role: true, status: true },
       });
@@ -214,51 +211,36 @@ export class SupabaseAuthService implements OnModuleInit {
       throw new UnauthorizedException('This account has been suspended');
     }
 
-    // Team promotion MUST run before the PENDING gate below. A staff member whose profile
-    // was first created as CLIENT — because team mapping was unconfigured at the time, or
-    // because they were added to the org team after their first sign-in — sits at PENDING
-    // with no approved intake. Gating first would 403 them on every request and leave the
-    // promotion permanently unreachable, locking real DEV/PMs out of the console for good.
-    const throttleExpired =
-      Date.now() - (this.lastInviteCheck.get(userId) ?? 0) > INVITE_CHECK_INTERVAL_MS;
-
-    // A PENDING profile bypasses the GitHub-call throttle: it is the locked-out case, so it
-    // must resolve on the very next request rather than up to INVITE_CHECK_INTERVAL_MS later.
-    // Non-CLIENT and login-less profiles cost no API call (promoteFromTeamsIfNeeded exits early).
-    if (throttleExpired || profile.status === ProfileStatus.PENDING) {
+    // An existing CLIENT profile can reach this point two ways: it was created by the client
+    // app (same shared Supabase project), or by this console before it became staff-only.
+    // Give team membership the final say — someone added to a team since their last sign-in
+    // is upgraded here rather than being turned away.
+    if (profile.role === UserRole.CLIENT) {
       profile = await this.promoteFromTeamsIfNeeded(profile, githubLogin);
     }
 
-    // A pending client may have been approved since they last signed in; re-check before
-    // refusing, so approval takes effect on their next request without admin intervention.
-    if (profile.status === ProfileStatus.PENDING) {
-      profile = await this.activateIfApproved(profile);
-    }
-
-    if (profile.status === ProfileStatus.PENDING) {
+    // Still a client: no workspace exists for them in this console. Refuse with a code the
+    // frontend can act on, rather than the old pending-approval gate — nobody is going to
+    // "approve" a client into an internal staff console.
+    if (profile.role === UserRole.CLIENT) {
       throw new ForbiddenException({
-        code: 'ACCOUNT_PENDING_APPROVAL',
-        message: 'Your account is awaiting project manager approval.',
+        code: NOT_A_TEAM_MEMBER,
+        message: this.notATeamMemberMessage(githubLogin),
       });
-    }
-
-    if (throttleExpired) {
-      await this.acceptPendingClientInvites(profile);
-      this.lastInviteCheck.set(userId, Date.now());
     }
 
     return { ...profile, authProvider };
   }
 
   /**
-   * Upgrades an existing CLIENT to DEV/PM when their GitHub login is (now) in a
-   * mapped org team. Only ever promotes — never auto-demotes — so manual/admin
-   * role changes are preserved. No-op unless team mapping is enabled.
+   * Upgrades an existing CLIENT to DEV/PM when their GitHub login is (now) in a mapped org
+   * team, so someone added to a team after their first sign-in gets in without an admin
+   * touching the database. Only ever promotes — never auto-demotes — so a manually granted
+   * ADMIN, and a DEV/PM whose team lookup fails transiently (GithubTeamsService treats
+   * GitHub errors as "not a member"), keep their access instead of being locked out.
    *
-   * A promoted profile is also marked ACTIVE: org team membership is itself the
-   * vetting step for staff (mirroring how a brand-new staff profile is provisioned
-   * in syncProfile), so a promoted DEV/PM must not be left behind the CLIENT
-   * pending-approval gate — nobody would ever approve a "client inquiry" for them.
+   * A promoted profile is also marked ACTIVE: org team membership is itself the vetting step
+   * for staff, mirroring how a brand-new staff profile is provisioned in syncProfile.
    */
   private async promoteFromTeamsIfNeeded(
     profile: {
@@ -373,83 +355,45 @@ export class SupabaseAuthService implements OnModuleInit {
   }
 
   /**
-   * True when a project manager has already approved this email's way in — either an approved
-   * inquiry or a client invite addressed to them. Email is the only link between the anonymous
-   * intake form and the account created later at sign-in, so it is matched case-insensitively.
+   * The role a NEW sign-in is provisioned with, from GitHub org team membership.
+   *
+   * Team membership is the only way into this console, so anything that prevents resolving
+   * it is a refusal — never a fallback to CLIENT. Client accounts belong to the separate
+   * Alphaexplora client app, which shares this Supabase project but has its own sign-up.
    */
-  private async hasApprovedIntake(email: string | null): Promise<boolean> {
-    const value = email?.trim().toLowerCase();
-    if (!value) return false;
+  private async resolveStaffRole(githubLogin: string | null): Promise<UserRole> {
+    if (!this.githubTeams.isEnabled()) {
+      // Misconfiguration, not a user error: with team mapping off nobody can be granted a
+      // role at all, so make it loud in the logs instead of silently refusing every sign-in.
+      this.logger.error(
+        'GitHub team mapping is not configured (GITHUB_ORG + GITHUB_DEV_TEAM/GITHUB_PM_TEAM ' +
+          'and valid GitHub App credentials); no new user can sign in to the console.',
+      );
+      throw new ForbiddenException({
+        code: NOT_A_TEAM_MEMBER,
+        message: 'Console sign-in is unavailable: GitHub team mapping is not configured.',
+      });
+    }
 
-    const [approvedInquiry, invite] = await Promise.all([
-      this.prisma.clientInquiry.findFirst({
-        where: { email: { equals: value, mode: 'insensitive' }, status: InquiryStatus.APPROVED },
-        select: { id: true },
-      }),
-      this.prisma.clientInvite.findFirst({
-        where: {
-          email: { equals: value, mode: 'insensitive' },
-          status: { in: [ClientInviteStatus.PENDING, ClientInviteStatus.ACCEPTED] },
-        },
-        select: { id: true },
-      }),
-    ]);
+    const role = githubLogin
+      ? await this.githubTeams.resolveRoleFromTeams(githubLogin)
+      : null;
 
-    return Boolean(approvedInquiry || invite);
+    if (!role || role === UserRole.CLIENT) {
+      throw new ForbiddenException({
+        code: NOT_A_TEAM_MEMBER,
+        message: this.notATeamMemberMessage(githubLogin),
+      });
+    }
+
+    return role;
   }
 
-  /** Promotes a PENDING profile to ACTIVE once their intake has been approved. */
-  private async activateIfApproved<T extends { id: string; status: ProfileStatus; email: string | null }>(
-    profile: T,
-  ): Promise<T> {
-    if (!(await this.hasApprovedIntake(profile.email))) return profile;
-
-    this.logger.log(`Activating approved client profile ${profile.id}`);
-    await this.prisma.profile
-      .update({ where: { id: profile.id }, data: { status: ProfileStatus.ACTIVE } })
-      .catch(() => undefined);
-
-    return { ...profile, status: ProfileStatus.ACTIVE };
-  }
-
-  private async acceptPendingClientInvites(profile: AuthUser): Promise<void> {
-    if (profile.role !== UserRole.CLIENT || !profile.email) return;
-
-    const pendingInvites = await this.prisma.clientInvite.findMany({
-      where: {
-        email: profile.email,
-        status: ClientInviteStatus.PENDING,
-      },
-      select: { id: true, projectId: true },
-    });
-
-    if (pendingInvites.length === 0) return;
-
-    await this.prisma.$transaction(
-      pendingInvites.flatMap((invite) => [
-        this.prisma.projectMember.upsert({
-          where: {
-            projectId_userId: {
-              projectId: invite.projectId,
-              userId: profile.id,
-            },
-          },
-          update: { role: UserRole.CLIENT },
-          create: {
-            projectId: invite.projectId,
-            userId: profile.id,
-            role: UserRole.CLIENT,
-          },
-        }),
-        this.prisma.clientInvite.update({
-          where: { id: invite.id },
-          data: {
-            status: ClientInviteStatus.ACCEPTED,
-            acceptedById: profile.id,
-            acceptedAt: new Date(),
-          },
-        }),
-      ]),
+  private notATeamMemberMessage(githubLogin: string | null): string {
+    const who = githubLogin ? `GitHub account @${githubLogin} is` : 'GitHub account is';
+    return (
+      `Your ${who} not a member of a DevFlow team in the ${this.org()} organisation. ` +
+      'Ask a project manager to add you to the developer or project-manager team, then sign in again.'
     );
   }
 }
