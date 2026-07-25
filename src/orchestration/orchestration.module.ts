@@ -35,6 +35,7 @@ import { OrchestrationRunDispatcher } from './run-dispatcher.service';
 import { ProjectScaffolderService } from './scaffolding/project-scaffolder.service';
 import { OutputValidationService } from './output-validation/output-validation.service';
 import { ExecutionValidationService } from './execution-validation/execution-validation.service';
+import { ModelCatalogService } from './models/model-catalog.service';
 
 @Module({
   imports: [
@@ -78,7 +79,8 @@ import { ExecutionValidationService } from './execution-validation/execution-val
     ProjectScaffolderService,
     OutputValidationService,
     ExecutionValidationService,
+    ModelCatalogService,
   ],
-  exports: [OrchestrationService, OrchestrationEmitter],
+  exports: [OrchestrationService, OrchestrationEmitter, ModelCatalogService],
 })
 export class OrchestrationModule {}

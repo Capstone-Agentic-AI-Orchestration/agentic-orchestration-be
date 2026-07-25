@@ -1168,6 +1168,9 @@ model OrchestrationRun {
   // Serialized DevFlowState snapshot for the OrchestrationSequencer to persist run state and
   // resume after a gate pause. Null until a run has produced a checkpointed state.
   checkpointState Json?
+  // Immutable user-selected AI Gateway model snapshot for this run.
+  // One default applies to all agents unless a specialist override is present.
+  modelSelection Json?
   error           String?                 @db.Text
   actorId         String?                 @db.Uuid
   intakeSnapshotId String?

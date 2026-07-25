@@ -81,6 +81,11 @@ import {
   WorkOrderExecutionStatus,
   WorkOrderStatus,
 } from '@prisma/client';
+import {
+  ModelCatalogService,
+  type GatewayModelCatalog,
+  type OrchestrationModelSelectionInput,
+} from './models/model-catalog.service';
 
 // ─── Status Shape ─────────────────────────────────────────────────────────────
 
@@ -265,8 +270,13 @@ export class OrchestrationService implements OnModuleInit {
     @Optional() private readonly emitter: OrchestrationEmitter | null,
     @Optional() private readonly streamEmitter: StreamEmitter | null,
     private readonly runDispatcher: OrchestrationRunDispatcher,
+    private readonly modelCatalog: ModelCatalogService,
     @Optional() private readonly executionValidation?: ExecutionValidationNode,
   ) {}
+
+  getModelCatalog(): Promise<GatewayModelCatalog> {
+    return this.modelCatalog.getCatalog();
+  }
 
   getProviderStatus(): OrchestrationProviderStatus {
     const llmEngine = this.agentLlmRouter?.getStatus() ?? {
@@ -642,9 +652,15 @@ Rough idea: ${input.brief}`;
     trigger: OrchestrationRunTrigger = OrchestrationRunTrigger.START,
     intakeContext?: IntakeContextPackage,
     designGuidance?: DesignGuidanceInput,
+    modelSelection?: OrchestrationModelSelectionInput,
   ): Promise<string> {
     const runId = createId();
     const normalizedDesignGuidance = normalizeDesignGuidance(designGuidance);
+    const normalizedModelSelection = await this.modelCatalog.validateSelection(modelSelection);
+    const modelSelectionSnapshot = {
+      defaultModel: normalizedModelSelection.defaultModel,
+      overrides: { ...normalizedModelSelection.overrides },
+    } satisfies Prisma.InputJsonObject;
     this.agentProviderRegistry.getActiveProviderOrThrow();
 
     this.logger.log(
@@ -677,6 +693,7 @@ Rough idea: ${input.brief}`;
         actorId: actorId ?? null,
         intakeSnapshotId: intakeContext?.intakeSnapshotId ?? null,
         readyWorkOrders,
+        modelSelection: modelSelectionSnapshot,
       },
     });
 

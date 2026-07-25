@@ -3,6 +3,22 @@ import { withLlmRequest } from './llm-runtime';
 import type { JsonShape, LlmUsage } from './base-llm.provider';
 import type { DirectLlmJsonOptions, DirectLlmJsonResult } from './direct-llm.provider';
 import type { DirectLlmCorrelation } from './direct-llm.provider';
+import { PrismaService } from '../../prisma/prisma.service';
+import type {
+  OrchestrationModelSelection,
+  OrchestrationModelTarget,
+} from '../models/model-catalog.service';
+
+const SUBAGENT_MODEL_TARGET: Record<string, OrchestrationModelTarget> = {
+  architecture: 'architecture',
+  backend: 'backend',
+  'contract-negotiator': 'contract',
+  database: 'database',
+  frontend: 'frontend',
+  mobile: 'mobile',
+  'requirements-parser': 'requirements',
+  'self-critique': 'critique',
+};
 
 /**
  * Eve delegation provider (Hybrid migration — see docs/architecture/EVE_MIGRATION.md §6.2).
@@ -22,6 +38,9 @@ import type { DirectLlmCorrelation } from './direct-llm.provider';
 @Injectable()
 export class EveLlmProvider {
   private readonly logger = new Logger(EveLlmProvider.name);
+  private readonly runModelSelections = new Map<string, Promise<OrchestrationModelSelection | null>>();
+
+  constructor(private readonly prisma: PrismaService) {}
 
   isConfigured(): boolean {
     return Boolean(process.env.EVE_SERVICE_URL?.trim());
@@ -31,7 +50,10 @@ export class EveLlmProvider {
     return (process.env.EVE_SERVICE_URL ?? '').replace(/\/$/, '');
   }
 
-  private headers(correlation?: DirectLlmCorrelation): Record<string, string> {
+  private headers(
+    correlation?: DirectLlmCorrelation,
+    selectedModel?: string | null,
+  ): Record<string, string> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     const token = process.env.EVE_SERVICE_TOKEN?.trim();
     if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -42,6 +64,7 @@ export class EveLlmProvider {
     if (metadata.workOrderId) headers['X-DevFlow-Work-Order-Id'] = String(metadata.workOrderId);
     if (metadata.agent) headers['X-DevFlow-Agent'] = String(metadata.agent);
     if (typeof metadata.attempt === 'number') headers['X-DevFlow-Attempt'] = String(metadata.attempt);
+    if (selectedModel) headers['X-DevFlow-Model'] = selectedModel;
     return headers;
   }
 
@@ -72,7 +95,7 @@ export class EveLlmProvider {
     const value = this.parseJson<T>(content, options.expectedShape);
     return {
       value,
-      model: `eve:${subagent}`,
+      model: session.selectedModel ?? `eve:${subagent}`,
       // Eve reports usage via its Agent Runs dashboard; per-turn token usage is not exposed on
       // the session stream, so we report zeros here. Telemetry lives in the Vercel dashboard.
       usage: { inputTokens: 0, outputTokens: 0 } satisfies LlmUsage,
@@ -93,10 +116,22 @@ export class EveLlmProvider {
     message: string,
     options: DirectLlmJsonOptions,
     signal: AbortSignal,
-  ): Promise<{ content: string; sessionId: string; continuationToken?: string }> {
-    const session = await this.createSession(subagent, message, options, signal);
-    const content = await this.readSessionStream(subagent, session.sessionId, options, signal);
-    return { content, sessionId: session.sessionId, continuationToken: session.continuationToken };
+  ): Promise<{ content: string; sessionId: string; continuationToken?: string; selectedModel: string | null }> {
+    const selectedModel = await this.selectedModelForRun(subagent, options.correlation?.runId);
+    const session = await this.createSession(subagent, message, options, signal, selectedModel);
+    const content = await this.readSessionStream(
+      subagent,
+      session.sessionId,
+      options,
+      signal,
+      selectedModel,
+    );
+    return {
+      content,
+      sessionId: session.sessionId,
+      continuationToken: session.continuationToken,
+      selectedModel,
+    };
   }
 
   private async createSession(
@@ -104,15 +139,22 @@ export class EveLlmProvider {
     message: string,
     options: DirectLlmJsonOptions,
     signal: AbortSignal,
+    selectedModel: string | null,
   ): Promise<{ sessionId: string; continuationToken?: string }> {
     const response = await fetch(`${this.baseUrl()}/eve/v1/session`, {
       method: 'POST',
-      headers: this.headers(options.correlation),
+      headers: this.headers(options.correlation, selectedModel),
       signal,
       body: JSON.stringify({
         agent: subagent,
         message,
-        metadata: this.correlationMetadata({ ...options.correlation, agent: options.correlation?.agent ?? subagent }),
+        metadata: {
+          ...this.correlationMetadata({
+            ...options.correlation,
+            agent: options.correlation?.agent ?? subagent,
+          }),
+          ...(selectedModel ? { model: selectedModel } : {}),
+        },
       }),
     });
 
@@ -139,10 +181,11 @@ export class EveLlmProvider {
     sessionId: string,
     options: DirectLlmJsonOptions,
     signal: AbortSignal,
+    selectedModel: string | null,
   ): Promise<string> {
     const response = await fetch(`${this.baseUrl()}/eve/v1/session/${encodeURIComponent(sessionId)}/stream`, {
       method: 'GET',
-      headers: this.headers(options.correlation),
+      headers: this.headers(options.correlation, selectedModel),
       signal,
     });
 
@@ -290,6 +333,62 @@ export class EveLlmProvider {
     const trimmed = value.trim();
     if (!trimmed) return null;
     return trimmed.replace(/[^\w:./@-]/g, '_').slice(0, 128);
+  }
+
+  private async selectedModelForRun(
+    subagent: string,
+    runId?: string,
+  ): Promise<string | null> {
+    const normalizedRunId = runId?.trim();
+    if (!normalizedRunId) return null;
+
+    let selectionPromise = this.runModelSelections.get(normalizedRunId);
+    if (!selectionPromise) {
+      selectionPromise = this.prisma.orchestrationRun
+        .findUnique({
+          where: { runId: normalizedRunId },
+          select: { modelSelection: true },
+        })
+        .then((run) => this.parseModelSelection(run?.modelSelection))
+        .catch((error: unknown) => {
+          this.logger.warn(
+            `Could not resolve model selection for run ${normalizedRunId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          return null;
+        });
+      this.runModelSelections.set(normalizedRunId, selectionPromise);
+      if (this.runModelSelections.size > 200) {
+        const oldestRunId = this.runModelSelections.keys().next().value as string | undefined;
+        if (oldestRunId) this.runModelSelections.delete(oldestRunId);
+      }
+    }
+
+    const selection = await selectionPromise;
+    if (!selection) return null;
+    const target = SUBAGENT_MODEL_TARGET[subagent];
+    return (target && selection.overrides[target]) || selection.defaultModel;
+  }
+
+  private parseModelSelection(value: unknown): OrchestrationModelSelection | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const candidate = value as Record<string, unknown>;
+    if (typeof candidate.defaultModel !== 'string' || !candidate.defaultModel.trim()) return null;
+    const rawOverrides = candidate.overrides;
+    const overrides: Partial<Record<OrchestrationModelTarget, string>> = {};
+    if (rawOverrides && typeof rawOverrides === 'object' && !Array.isArray(rawOverrides)) {
+      for (const [target, model] of Object.entries(rawOverrides)) {
+        if (
+          Object.values(SUBAGENT_MODEL_TARGET).includes(target as OrchestrationModelTarget)
+          && typeof model === 'string'
+          && model.trim()
+        ) {
+          overrides[target as OrchestrationModelTarget] = model.trim();
+        }
+      }
+    }
+    return { defaultModel: candidate.defaultModel.trim(), overrides };
   }
 
   private parseJson<T>(content: string, expectedShape: JsonShape): T {

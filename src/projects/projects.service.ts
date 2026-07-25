@@ -28,6 +28,7 @@ import { CreateWorkOrderDto, UpdateWorkOrderDto } from './dto/work-order.dto';
 import { UpdateProjectKickoffDto } from './dto/project-kickoff.dto';
 import { ControlOrchestrationDto } from './dto/control-orchestration.dto';
 import { StartOrchestrationDto } from './dto/start-orchestration.dto';
+import type { OrchestrationModelSelectionDto } from './dto/orchestration-model-selection.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { IntakeService } from '../intake/intake.service';
 import { GroupsService } from '../groups/groups.service';
@@ -343,6 +344,10 @@ export class ProjectsService {
     private readonly repositories?: RepositoriesService,
   ) {}
 
+  findOrchestrationModels() {
+    return this.orchestration.getModelCatalog();
+  }
+
   async create(dto: CreateProjectDto, user: AuthUser): Promise<Project> {
     if (dto.groupId) {
       if (!this.groups) throw new BadRequestException('Group management is unavailable');
@@ -457,6 +462,7 @@ export class ProjectsService {
       OrchestrationRunTrigger.START,
       intakeContext,
       options.designGuidance,
+      options.modelSelection,
     );
 
     return { accepted: true, runId };
@@ -472,6 +478,7 @@ export class ProjectsService {
     id: string,
     prompt: string,
     user: AuthUser,
+    modelSelection?: OrchestrationModelSelectionDto,
   ): Promise<{ accepted: boolean; runId: string }> {
     const project = await this.prisma.project.findFirst({
       where: this.projectAccessWhere(user, id),
@@ -514,6 +521,9 @@ export class ProjectsService {
       project.companyName,
       user.id,
       OrchestrationRunTrigger.START,
+      undefined,
+      undefined,
+      modelSelection,
     );
 
     return { accepted: true, runId };

@@ -245,6 +245,7 @@ describe('ProjectsService', () => {
       OrchestrationRunTrigger.START,
       undefined,
       undefined,
+      undefined,
     );
   });
 
@@ -281,6 +282,41 @@ describe('ProjectsService', () => {
         theme: 'black',
         forbiddenPatterns: ['gradient orb'],
       }),
+      undefined,
+    );
+  });
+
+  it('startOrchestration forwards the user-selected model snapshot', async () => {
+    prisma.project.findFirst.mockResolvedValue({
+      id: 'project-1',
+      companyName: 'Acme Logistics',
+      brief: 'Build a delivery dashboard',
+      stackKey: 'nextjs-nestjs-supabase',
+      runId: null,
+      kickoff: { status: ProjectKickoffStatus.READY },
+      workOrders: [{ instructions: 'Build the first dashboard shell.' }],
+    });
+
+    await service.startOrchestration('project-1', pmUser, {
+      modelSelection: {
+        defaultModel: 'free/fast-model',
+        overrides: { backend: 'paid/strong-model' },
+      },
+    });
+
+    expect(orchestration.startRun).toHaveBeenCalledWith(
+      'project-1',
+      'Build a delivery dashboard',
+      'nextjs-nestjs-supabase',
+      'Acme Logistics',
+      pmUser.id,
+      OrchestrationRunTrigger.START,
+      undefined,
+      undefined,
+      {
+        defaultModel: 'free/fast-model',
+        overrides: { backend: 'paid/strong-model' },
+      },
     );
   });
 
@@ -323,6 +359,7 @@ describe('ProjectsService', () => {
       pmUser.id,
       OrchestrationRunTrigger.START,
       intakeContext,
+      undefined,
       undefined,
     );
   });

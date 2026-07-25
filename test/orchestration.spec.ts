@@ -25,6 +25,7 @@ import { LlmAgentProvider } from '../src/orchestration/providers/llm-agent.provi
 import { MockAgentProvider } from '../src/orchestration/providers/mock-agent.provider';
 import { NotificationsService } from '../src/notifications/notifications.service';
 import { GithubService } from '../src/github/github.service';
+import type { ModelCatalogService } from '../src/orchestration/models/model-catalog.service';
 import type { RequirementsDocument, ProjectContract, GeneratedArtifact } from '../src/orchestration/graph/devflow.state';
 import { ArtifactValidationStatus, ArtifactReviewStatus, OrchestrationRunStatus, OrchestrationRunTrigger, ProjectStatus, ProjectTaskStatus, WorkOrderAgentType, WorkOrderExecutionStatus, WorkOrderPriority, WorkOrderStatus } from '@prisma/client';
 
@@ -312,6 +313,12 @@ describe('OrchestrationService', () => {
       null, // emitter
       null, // streamEmitter
       runDispatcher as unknown as OrchestrationRunDispatcher,
+      {
+        validateSelection: vi.fn().mockResolvedValue({
+          defaultModel: 'free/fast-model',
+          overrides: {},
+        }),
+      } as unknown as ModelCatalogService,
     );
 
     // Mock checkpointer so onModuleInit doesn't need a real DB

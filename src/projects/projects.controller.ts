@@ -93,6 +93,12 @@ export class ProjectsController {
     return this.projectsService.findAll(user, page);
   }
 
+  @Get('orchestration/models')
+  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
+  findOrchestrationModels() {
+    return this.projectsService.findOrchestrationModels();
+  }
+
   @Post('auto-analyze')
   @Roles(UserRole.PM, UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
@@ -634,7 +640,12 @@ export class ProjectsController {
     @Body() dto: StartFromPromptDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.projectsService.startOrchestrationFromPrompt(id, dto.prompt, user);
+    return this.projectsService.startOrchestrationFromPrompt(
+      id,
+      dto.prompt,
+      user,
+      dto.modelSelection,
+    );
   }
 
   @Get(':id/orchestration/status')
