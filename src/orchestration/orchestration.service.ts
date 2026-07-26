@@ -97,6 +97,11 @@ export interface OrchestrationStatus {
   error: string | null;
 }
 
+export interface OrchestrationRunControlsInput {
+  tokenBudget?: number;
+  maxRetries?: number;
+}
+
 // ─── Mid-run control (Phase 2) ──────────────────────────────────────────────
 
 export type OrchestrationControlAction =
@@ -660,6 +665,7 @@ Rough idea: ${input.brief}`;
     intakeContext?: IntakeContextPackage,
     designGuidance?: DesignGuidanceInput,
     modelSelection?: OrchestrationModelSelectionInput,
+    runControls?: OrchestrationRunControlsInput,
   ): Promise<string> {
     const runId = createId();
     const normalizedDesignGuidance = normalizeDesignGuidance(designGuidance);
@@ -705,13 +711,22 @@ Rough idea: ${input.brief}`;
     });
 
     // Project-scoped budget counters are reset at run start until budgets become run-scoped.
+    const budgetControls = {
+      ...(typeof runControls?.tokenBudget === 'number'
+        ? { tokenBudget: runControls.tokenBudget }
+        : {}),
+      ...(typeof runControls?.maxRetries === 'number'
+        ? { maxRetries: runControls.maxRetries }
+        : {}),
+    };
     await this.prisma.runBudget.upsert({
       where: { projectId },
       update: {
         tokensConsumed: 0,
         retryCount: 0,
+        ...budgetControls,
       },
-      create: { projectId },
+      create: { projectId, ...budgetControls },
     }).catch(() => undefined);
 
     if (this.agentProviderMode() === 'mock') {

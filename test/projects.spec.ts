@@ -260,6 +260,7 @@ describe('ProjectsService', () => {
       undefined,
       undefined,
       { defaultModel: 'gateway/default', overrides: {} },
+      undefined,
     );
   });
 
@@ -297,6 +298,7 @@ describe('ProjectsService', () => {
         forbiddenPatterns: ['gradient orb'],
       }),
       { defaultModel: 'gateway/default', overrides: {} },
+      undefined,
     );
   });
 
@@ -395,6 +397,42 @@ describe('ProjectsService', () => {
         defaultModel: 'free/fast-model',
         overrides: { backend: 'paid/strong-model' },
       },
+      undefined,
+    );
+  });
+
+  it('forwards the preflight token ceiling and recovery policy', async () => {
+    prisma.project.findFirst.mockResolvedValue({
+      id: 'project-1',
+      companyName: 'Acme Logistics',
+      brief: 'Build a delivery dashboard',
+      stackKey: 'nextjs-nestjs-supabase',
+      runId: null,
+      kickoff: { status: ProjectKickoffStatus.READY },
+      workOrders: [{ instructions: 'Build the first dashboard shell.' }],
+    });
+
+    await service.startOrchestration('project-1', pmUser, {
+      runControls: {
+        tokenBudget: 350_000,
+        maxRetries: 2,
+      },
+    });
+
+    expect(orchestration.startRun).toHaveBeenCalledWith(
+      'project-1',
+      'Build a delivery dashboard',
+      'nextjs-nestjs-supabase',
+      'Acme Logistics',
+      pmUser.id,
+      OrchestrationRunTrigger.START,
+      undefined,
+      undefined,
+      { defaultModel: 'gateway/default', overrides: {} },
+      {
+        tokenBudget: 350_000,
+        maxRetries: 2,
+      },
     );
   });
 
@@ -439,6 +477,7 @@ describe('ProjectsService', () => {
       intakeContext,
       undefined,
       { defaultModel: 'gateway/default', overrides: {} },
+      undefined,
     );
   });
 

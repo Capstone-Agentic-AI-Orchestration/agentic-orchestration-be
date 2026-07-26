@@ -605,6 +605,7 @@ export class ProjectsService {
       intakeContext,
       options.designGuidance,
       modelSelection,
+      options.runControls,
     );
 
     return { accepted: true, runId };
@@ -621,6 +622,7 @@ export class ProjectsService {
     prompt: string,
     user: AuthUser,
     modelSelection?: OrchestrationModelSelectionDto,
+    runControls?: StartOrchestrationDto['runControls'],
   ): Promise<{ accepted: boolean; runId: string }> {
     const project = await this.prisma.project.findFirst({
       where: this.projectAccessWhere(user, id),
@@ -668,6 +670,7 @@ export class ProjectsService {
       undefined,
       undefined,
       resolvedModelSelection,
+      runControls,
     );
 
     return { accepted: true, runId };

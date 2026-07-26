@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import { IsOptional, IsString, MinLength, ValidateNested } from 'class-validator';
 import { OrchestrationModelSelectionDto } from './orchestration-model-selection.dto';
+import { OrchestrationRunControlsDto } from './orchestration-run-controls.dto';
 
 /**
  * Developer-initiated orchestration start. The prompt is the build requirement
@@ -16,4 +17,9 @@ export class StartFromPromptDto {
   @ValidateNested()
   @Type(() => OrchestrationModelSelectionDto)
   modelSelection?: OrchestrationModelSelectionDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => OrchestrationRunControlsDto)
+  runControls?: OrchestrationRunControlsDto;
 }

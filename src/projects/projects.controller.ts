@@ -669,6 +669,7 @@ export class ProjectsController {
       dto.prompt,
       user,
       dto.modelSelection,
+      dto.runControls,
     );
   }
 

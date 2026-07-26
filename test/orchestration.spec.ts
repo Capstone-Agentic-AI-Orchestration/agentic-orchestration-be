@@ -542,6 +542,40 @@ describe('OrchestrationService', () => {
     });
   });
 
+  it('startRun applies preflight budget controls while resetting counters', async () => {
+    (service as unknown as { mockWorkOrderGraph: { invoke: ReturnType<typeof vi.fn> } }).mockWorkOrderGraph = {
+      invoke: vi.fn().mockResolvedValue({}),
+    };
+
+    await service.startRun(
+      'test-project-id',
+      'Build a shop',
+      'nextjs-nestjs',
+      'TestCo',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { tokenBudget: 350_000, maxRetries: 3 },
+    );
+
+    expect(prisma.runBudget.upsert).toHaveBeenLastCalledWith({
+      where: { projectId: 'test-project-id' },
+      update: {
+        tokensConsumed: 0,
+        retryCount: 0,
+        tokenBudget: 350_000,
+        maxRetries: 3,
+      },
+      create: {
+        projectId: 'test-project-id',
+        tokenBudget: 350_000,
+        maxRetries: 3,
+      },
+    });
+  });
+
   it('resumeGate1 with approved=false records REJECTED and does not resume the pipeline', async () => {
     prisma.project.findUnique.mockResolvedValue({ runId: 'run-001' });
     prisma.orchestrationRun.findUnique.mockResolvedValue({ checkpointState: null });
