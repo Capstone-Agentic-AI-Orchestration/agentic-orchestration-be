@@ -49,6 +49,8 @@ describe('ProjectsController idempotency', () => {
     updateWorkOrder: ReturnType<typeof vi.fn>;
     approveGate1: ReturnType<typeof vi.fn>;
     approveGate2: ReturnType<typeof vi.fn>;
+    findOrchestrationModelDefaults: ReturnType<typeof vi.fn>;
+    updateOrchestrationModelDefaults: ReturnType<typeof vi.fn>;
   };
   let idempotency: {
     requestHash: ReturnType<typeof vi.fn>;
@@ -85,6 +87,18 @@ describe('ProjectsController idempotency', () => {
       updateWorkOrder: vi.fn().mockResolvedValue({ id: 'work-order-1', status: 'READY' }),
       approveGate1: vi.fn().mockResolvedValue({ id: 'project-1', architectureApproved: true }),
       approveGate2: vi.fn().mockResolvedValue({ id: 'project-1', codeApproved: true }),
+      findOrchestrationModelDefaults: vi.fn().mockResolvedValue({
+        selection: { defaultModel: 'openai/fast', overrides: {} },
+        source: 'saved',
+        warning: null,
+        updatedAt: '2026-07-27T09:00:00.000Z',
+      }),
+      updateOrchestrationModelDefaults: vi.fn().mockResolvedValue({
+        selection: { defaultModel: 'openai/fast', overrides: {} },
+        source: 'saved',
+        warning: null,
+        updatedAt: '2026-07-27T09:00:00.000Z',
+      }),
     };
     idempotency = {
       requestHash: vi.fn().mockReturnValue('hash-1'),
@@ -139,6 +153,26 @@ describe('ProjectsController idempotency', () => {
       handler: expect.any(Function),
     }));
     expect(projects.create).toHaveBeenCalledWith(dto, pmUser);
+  });
+
+  it('saves orchestration model defaults through actor-scoped idempotency', async () => {
+    const dto = { defaultModel: 'openai/fast' };
+
+    await expect(
+      controller.updateOrchestrationModelDefaults(dto, pmUser, 'request-key-model-defaults'),
+    ).resolves.toEqual(expect.objectContaining({
+      selection: { defaultModel: 'openai/fast', overrides: {} },
+      source: 'saved',
+    }));
+
+    expect(idempotency.run).toHaveBeenCalledWith(expect.objectContaining({
+      key: 'request-key-model-defaults',
+      scope: `user:${pmUser.id}:PATCH:/projects/orchestration/model-defaults`,
+      requestHash: 'hash-1',
+      responseStatus: HttpStatus.OK,
+      handler: expect.any(Function),
+    }));
+    expect(projects.updateOrchestrationModelDefaults).toHaveBeenCalledWith(pmUser, dto);
   });
 
   it('runs task creation through project-scoped idempotency when a key is provided', async () => {

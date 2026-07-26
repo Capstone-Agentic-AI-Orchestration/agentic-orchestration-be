@@ -78,6 +78,77 @@ type ProjectWithRelations = Project & {
   _count: { artifacts: number; eventLogs: number };
 };
 
+const ORCHESTRATION_MODEL_DEFAULTS_PREFERENCE = 'orchestrationModelDefaults';
+const ORCHESTRATION_MODEL_DEFAULT_TARGETS = [
+  'requirements',
+  'contract',
+  'frontend',
+  'backend',
+  'database',
+  'architecture',
+  'mobile',
+  'critique',
+] as const;
+type OrchestrationModelDefaultTarget = (typeof ORCHESTRATION_MODEL_DEFAULT_TARGETS)[number];
+
+export interface OrchestrationModelDefaultsResult {
+  selection: {
+    defaultModel: string;
+    overrides: Partial<Record<OrchestrationModelDefaultTarget, string>>;
+  };
+  source: 'saved' | 'catalog';
+  warning: string | null;
+  updatedAt: string | null;
+}
+
+function orchestrationModelSelectionFromPreferences(
+  value: Prisma.JsonValue | null,
+): OrchestrationModelSelectionDto | undefined {
+  if (!isRecord(value)) return undefined;
+  const candidate = value[ORCHESTRATION_MODEL_DEFAULTS_PREFERENCE];
+  if (!isRecord(candidate) || typeof candidate.defaultModel !== 'string') return undefined;
+
+  const overrides: Partial<Record<OrchestrationModelDefaultTarget, string>> = {};
+  if (isRecord(candidate.overrides)) {
+    for (const target of ORCHESTRATION_MODEL_DEFAULT_TARGETS) {
+      const model = candidate.overrides[target];
+      if (typeof model === 'string') overrides[target] = model;
+    }
+  }
+
+  return {
+    defaultModel: candidate.defaultModel,
+    ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
+  };
+}
+
+function jsonObject(value: Prisma.JsonValue | null): Prisma.InputJsonObject {
+  if (!isRecord(value)) return {};
+  const entries: Array<[string, Prisma.InputJsonValue | null]> = [];
+  for (const [key, entry] of Object.entries(value)) {
+    const normalized = inputJsonValue(entry);
+    if (normalized !== undefined) entries.push([key, normalized]);
+  }
+  return Object.fromEntries(entries);
+}
+
+function inputJsonValue(value: unknown): Prisma.InputJsonValue | null | undefined {
+  if (value === null) return null;
+  if (typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) {
+    return value
+      .map(inputJsonValue)
+      .filter((entry): entry is Prisma.InputJsonValue | null => entry !== undefined);
+  }
+  if (isRecord(value)) return jsonObject(value as Prisma.JsonObject);
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 type ProjectLifecycleStage =
   | 'APPROVED'
   | 'CLIENT_ONBOARDING'
@@ -348,6 +419,75 @@ export class ProjectsService {
     return this.orchestration.getModelCatalog();
   }
 
+  async findOrchestrationModelDefaults(
+    user: AuthUser,
+  ): Promise<OrchestrationModelDefaultsResult> {
+    const profile = await this.prisma.profile.findUniqueOrThrow({
+      where: { id: user.id },
+      select: { preferences: true, updatedAt: true },
+    });
+    const stored = orchestrationModelSelectionFromPreferences(profile.preferences);
+
+    if (stored) {
+      try {
+        const selection = await this.orchestration.validateModelSelection(stored);
+        return {
+          selection,
+          source: 'saved',
+          warning: null,
+          updatedAt: profile.updatedAt.toISOString(),
+        };
+      } catch {
+        const selection = await this.orchestration.validateModelSelection();
+        return {
+          selection,
+          source: 'catalog',
+          warning: 'One or more saved models are no longer available. Review and save the replacement defaults.',
+          updatedAt: profile.updatedAt.toISOString(),
+        };
+      }
+    }
+
+    return {
+      selection: await this.orchestration.validateModelSelection(),
+      source: 'catalog',
+      warning: null,
+      updatedAt: null,
+    };
+  }
+
+  async updateOrchestrationModelDefaults(
+    user: AuthUser,
+    input: OrchestrationModelSelectionDto,
+  ): Promise<OrchestrationModelDefaultsResult> {
+    const selection = await this.orchestration.validateModelSelection(input);
+    const profile = await this.prisma.profile.findUniqueOrThrow({
+      where: { id: user.id },
+      select: { preferences: true },
+    });
+    const preferences = jsonObject(profile.preferences);
+    const selectionJson: Prisma.InputJsonObject = {
+      defaultModel: selection.defaultModel,
+      overrides: { ...selection.overrides },
+    };
+    const nextPreferences: Prisma.InputJsonObject = {
+      ...preferences,
+      [ORCHESTRATION_MODEL_DEFAULTS_PREFERENCE]: selectionJson,
+    };
+    const updated = await this.prisma.profile.update({
+      where: { id: user.id },
+      data: { preferences: nextPreferences },
+      select: { updatedAt: true },
+    });
+
+    return {
+      selection,
+      source: 'saved',
+      warning: null,
+      updatedAt: updated.updatedAt.toISOString(),
+    };
+  }
+
   async create(dto: CreateProjectDto, user: AuthUser): Promise<Project> {
     if (dto.groupId) {
       if (!this.groups) throw new BadRequestException('Group management is unavailable');
@@ -453,6 +593,8 @@ export class ProjectsService {
     }
 
     const intakeContext = this.intake ? await this.intake.contextForStart(project, user.id) : undefined;
+    const modelSelection = options.modelSelection
+      ?? (await this.findOrchestrationModelDefaults(user)).selection;
     const runId = await this.orchestration.startRun(
       project.id,
       project.brief,
@@ -462,7 +604,7 @@ export class ProjectsService {
       OrchestrationRunTrigger.START,
       intakeContext,
       options.designGuidance,
-      options.modelSelection,
+      modelSelection,
     );
 
     return { accepted: true, runId };
@@ -514,6 +656,8 @@ export class ProjectsService {
     // Persist the prompt as the project brief so the run and its agents build from it.
     await this.prisma.project.update({ where: { id: project.id }, data: { brief } });
 
+    const resolvedModelSelection = modelSelection
+      ?? (await this.findOrchestrationModelDefaults(user)).selection;
     const runId = await this.orchestration.startRun(
       project.id,
       brief,
@@ -523,7 +667,7 @@ export class ProjectsService {
       OrchestrationRunTrigger.START,
       undefined,
       undefined,
-      modelSelection,
+      resolvedModelSelection,
     );
 
     return { accepted: true, runId };

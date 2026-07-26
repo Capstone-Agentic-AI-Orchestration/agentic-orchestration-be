@@ -84,6 +84,7 @@ import {
 import {
   ModelCatalogService,
   type GatewayModelCatalog,
+  type OrchestrationModelSelection,
   type OrchestrationModelSelectionInput,
 } from './models/model-catalog.service';
 
@@ -276,6 +277,12 @@ export class OrchestrationService implements OnModuleInit {
 
   getModelCatalog(): Promise<GatewayModelCatalog> {
     return this.modelCatalog.getCatalog();
+  }
+
+  validateModelSelection(
+    input?: OrchestrationModelSelectionInput,
+  ): Promise<OrchestrationModelSelection> {
+    return this.modelCatalog.validateSelection(input);
   }
 
   getProviderStatus(): OrchestrationProviderStatus {

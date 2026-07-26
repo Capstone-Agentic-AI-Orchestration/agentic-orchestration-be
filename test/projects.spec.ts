@@ -51,6 +51,13 @@ function makePrismaMock() {
     },
     profile: {
       findFirst: vi.fn(),
+      findUniqueOrThrow: vi.fn().mockResolvedValue({
+        preferences: {},
+        updatedAt: new Date('2026-07-27T00:00:00.000Z'),
+      }),
+      update: vi.fn().mockResolvedValue({
+        updatedAt: new Date('2026-07-27T00:00:00.000Z'),
+      }),
     },
     projectMember: {
       findFirst: vi.fn(),
@@ -171,6 +178,13 @@ function makeOrchestrationMock() {
       executionRunId: 'work-order-run-1',
       artifactId: 'artifact-generated-1',
     }),
+    validateModelSelection: vi.fn(async (selection?: {
+      defaultModel: string;
+      overrides?: Record<string, string>;
+    }) => ({
+      defaultModel: selection?.defaultModel ?? 'gateway/default',
+      overrides: selection?.overrides ?? {},
+    })),
   };
 }
 
@@ -245,7 +259,7 @@ describe('ProjectsService', () => {
       OrchestrationRunTrigger.START,
       undefined,
       undefined,
-      undefined,
+      { defaultModel: 'gateway/default', overrides: {} },
     );
   });
 
@@ -282,8 +296,72 @@ describe('ProjectsService', () => {
         theme: 'black',
         forbiddenPatterns: ['gradient orb'],
       }),
-      undefined,
+      { defaultModel: 'gateway/default', overrides: {} },
     );
+  });
+
+  it('loads and validates personal orchestration model defaults', async () => {
+    prisma.profile.findUniqueOrThrow.mockResolvedValue({
+      preferences: {
+        emailNotifications: true,
+        orchestrationModelDefaults: {
+          defaultModel: 'openai/fast',
+          overrides: { architecture: 'anthropic/strong' },
+        },
+      },
+      updatedAt: new Date('2026-07-27T08:00:00.000Z'),
+    });
+
+    await expect(service.findOrchestrationModelDefaults(pmUser)).resolves.toEqual({
+      selection: {
+        defaultModel: 'openai/fast',
+        overrides: { architecture: 'anthropic/strong' },
+      },
+      source: 'saved',
+      warning: null,
+      updatedAt: '2026-07-27T08:00:00.000Z',
+    });
+    expect(orchestration.validateModelSelection).toHaveBeenCalledWith({
+      defaultModel: 'openai/fast',
+      overrides: { architecture: 'anthropic/strong' },
+    });
+  });
+
+  it('saves validated orchestration defaults without removing other profile preferences', async () => {
+    prisma.profile.findUniqueOrThrow.mockResolvedValue({
+      preferences: { emailNotifications: true, uiDensity: 'compact' },
+    });
+    prisma.profile.update.mockResolvedValue({
+      updatedAt: new Date('2026-07-27T09:00:00.000Z'),
+    });
+
+    const input = {
+      defaultModel: 'openai/fast',
+      overrides: { critique: 'anthropic/strong' },
+    };
+    await expect(service.updateOrchestrationModelDefaults(pmUser, input)).resolves.toEqual({
+      selection: {
+        defaultModel: 'openai/fast',
+        overrides: { critique: 'anthropic/strong' },
+      },
+      source: 'saved',
+      warning: null,
+      updatedAt: '2026-07-27T09:00:00.000Z',
+    });
+    expect(prisma.profile.update).toHaveBeenCalledWith({
+      where: { id: pmUser.id },
+      data: {
+        preferences: {
+          emailNotifications: true,
+          uiDensity: 'compact',
+          orchestrationModelDefaults: {
+            defaultModel: 'openai/fast',
+            overrides: { critique: 'anthropic/strong' },
+          },
+        },
+      },
+      select: { updatedAt: true },
+    });
   });
 
   it('startOrchestration forwards the user-selected model snapshot', async () => {
@@ -360,7 +438,7 @@ describe('ProjectsService', () => {
       OrchestrationRunTrigger.START,
       intakeContext,
       undefined,
-      undefined,
+      { defaultModel: 'gateway/default', overrides: {} },
     );
   });
 

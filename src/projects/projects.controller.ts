@@ -35,6 +35,7 @@ import { CreateWorkOrderDto, UpdateWorkOrderDto } from './dto/work-order.dto';
 import { UpdateProjectKickoffDto } from './dto/project-kickoff.dto';
 import { AutoAnalyzeBriefDto } from './dto/auto-analyze-brief.dto';
 import { StartOrchestrationDto } from './dto/start-orchestration.dto';
+import { OrchestrationModelSelectionDto } from './dto/orchestration-model-selection.dto';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { AuthUser } from '../auth/auth.types';
 import { Roles } from '../auth/roles.decorator';
@@ -97,6 +98,29 @@ export class ProjectsController {
   @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
   findOrchestrationModels() {
     return this.projectsService.findOrchestrationModels();
+  }
+
+  @Get('orchestration/model-defaults')
+  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
+  findOrchestrationModelDefaults(@CurrentUser() user: AuthUser) {
+    return this.projectsService.findOrchestrationModelDefaults(user);
+  }
+
+  @Patch('orchestration/model-defaults')
+  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
+  @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
+  updateOrchestrationModelDefaults(
+    @Body() dto: OrchestrationModelSelectionDto,
+    @CurrentUser() user: AuthUser,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.runIdempotent(
+      idempotencyKey,
+      `user:${user.id}:PATCH:/projects/orchestration/model-defaults`,
+      dto,
+      HttpStatus.OK,
+      () => this.projectsService.updateOrchestrationModelDefaults(user, dto),
+    );
   }
 
   @Post('auto-analyze')

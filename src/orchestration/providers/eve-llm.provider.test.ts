@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { PrismaService } from '../../prisma/prisma.service';
 import { EveLlmProvider } from './eve-llm.provider';
 
 function streamResponse(lines: string[]): Response {
@@ -16,6 +17,14 @@ function streamResponse(lines: string[]): Response {
 
 function ndjson(event: unknown): string {
   return `${JSON.stringify(event)}\n`;
+}
+
+function makeProvider(modelSelection: unknown = null): EveLlmProvider {
+  return new EveLlmProvider({
+    orchestrationRun: {
+      findUnique: vi.fn().mockResolvedValue({ modelSelection }),
+    },
+  } as unknown as PrismaService);
 }
 
 describe('EveLlmProvider', () => {
@@ -52,7 +61,7 @@ describe('EveLlmProvider', () => {
     vi.stubGlobal('fetch', fetchMock);
     const onToken = vi.fn();
 
-    const result = await new EveLlmProvider().generateJson<{ ok: boolean }>({
+    const result = await makeProvider().generateJson<{ ok: boolean }>({
       agentName: 'backend_agent',
       subagent: 'backend',
       expectedShape: 'object',
@@ -138,7 +147,7 @@ describe('EveLlmProvider', () => {
         ),
     );
 
-    const result = await new EveLlmProvider().generateJson<Record<string, unknown>>({
+    const result = await makeProvider().generateJson<Record<string, unknown>>({
       agentName: 'frontend_agent',
       subagent: 'frontend',
       expectedShape: 'object',
@@ -167,7 +176,7 @@ describe('EveLlmProvider', () => {
     );
 
     await expect(
-      new EveLlmProvider().generateJson({
+      makeProvider().generateJson({
         agentName: 'database_agent',
         subagent: 'database',
         expectedShape: 'object',
