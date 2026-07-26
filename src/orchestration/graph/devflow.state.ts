@@ -37,6 +37,8 @@ export interface ProjectContract {
   requirements: RequirementsDocument;
   fileManifest: string[];
   acceptanceCriteria: string[];
+  /** Immutable, bounded team selected by the planner before Gate 1 approval. */
+  agentPlan: AgentPlan;
   lockedAt: string;
 }
 
@@ -177,6 +179,10 @@ export interface DevFlowStateType {
   contractSummary: string;
   /** Self-critique feedback from the review node, addressed before formal validation. */
   selfCritique: string;
+  /** Independent QA review produced after implementation agents join. */
+  qaReview: string;
+  /** Conditional security review for sensitive scopes. */
+  securityReview: string;
   requirementsAssumptions: string[];
   openQuestions: string[];
   requirementsEvidence: RequirementEvidence[];
@@ -261,6 +267,8 @@ export function createInitialDevFlowState(
     retryPlan: seed.retryPlan ?? [],
     contractSummary: seed.contractSummary ?? '',
     selfCritique: seed.selfCritique ?? '',
+    qaReview: seed.qaReview ?? '',
+    securityReview: seed.securityReview ?? '',
     requirementsAssumptions: seed.requirementsAssumptions ?? [],
     openQuestions: seed.openQuestions ?? [],
     requirementsEvidence: seed.requirementsEvidence ?? [],
@@ -338,3 +346,4 @@ export function applyDevFlowPartial(
   }
   return next;
 }
+import type { AgentPlan } from './agent-plan';

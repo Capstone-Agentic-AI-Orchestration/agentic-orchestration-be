@@ -15,6 +15,7 @@ import {
   createOutputStructureContractArtifact,
 } from '../domain-contracts';
 import { renderDesignMarkdown } from '../prompts/agent-prompts';
+import { buildAgentPlan } from './agent-plan';
 
 /**
  * Simulation node implementations (Phase 3c).
@@ -150,6 +151,18 @@ export function buildSimulationNodeImpls(
           'API exposes documented endpoints',
           'Schema migrates cleanly',
         ],
+        agentPlan: buildAgentPlan({
+          fileManifest: [
+            'DESIGN.md',
+            'src/app/page.tsx',
+            'src/main.ts',
+            'prisma/schema.prisma',
+            'ARCHITECTURE.md',
+          ],
+          requirements,
+          brief: state.brief,
+          hasMobileRepo: state.hasMobileRepo,
+        }),
         lockedAt: new Date().toISOString(),
       };
       return { contract };
@@ -273,6 +286,22 @@ export function buildSimulationNodeImpls(
         { type: 'decision', text: 'Self-critique passed.', pct: 100 },
       ]);
       return {};
+    },
+
+    [NODE.QA_REVIEW]: async (state) => {
+      await play(emitter, state, NODE.QA_REVIEW, [
+        { type: 'decision', text: 'Checking acceptance coverage and edge cases…', pct: 50 },
+        { type: 'decision', text: 'QA review passed.', pct: 100 },
+      ]);
+      return { qaReview: 'PASS\nSimulation QA review passed.' };
+    },
+
+    [NODE.SECURITY_REVIEW]: async (state) => {
+      await play(emitter, state, NODE.SECURITY_REVIEW, [
+        { type: 'decision', text: 'Reviewing authentication and data boundaries…', pct: 50 },
+        { type: 'decision', text: 'Security review passed.', pct: 100 },
+      ]);
+      return { securityReview: 'PASS\nSimulation security review passed.' };
     },
 
     [NODE.VALIDATE_OUTPUTS]: async (state) => {

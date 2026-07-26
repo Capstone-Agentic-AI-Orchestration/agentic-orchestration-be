@@ -60,11 +60,13 @@ export class SelfCritiqueNode {
 
     // Skip self-critique LLM call if disabled
     if (process.env.SELF_CRITIQUE === 'false') {
-      return contractSummary ? { contractSummary } : {};
+      return contractSummary
+        ? { contractSummary, selfCritique: '' }
+        : { selfCritique: '' };
     }
 
-    this.streamEmitter.emit(projectId, NODE.SELF_CRITIQUE, runId ?? '', 'decision', 'Reviewing generated artifacts against contract...');
-    this.streamEmitter.progress(projectId, NODE.SELF_CRITIQUE, runId ?? '', 50, 'Self-critique in progress');
+    this.streamEmitter.emit(projectId, NODE.SELF_CRITIQUE, runId ?? '', 'decision', 'Integration reviewer is checking cross-agent contracts...');
+    this.streamEmitter.progress(projectId, NODE.SELF_CRITIQUE, runId ?? '', 50, 'Integration review in progress');
 
     try {
       const artifactSummary = state.artifacts
@@ -102,7 +104,10 @@ ${domainContracts}
 ## Artifact Excerpts
 ${artifactExcerpts}
 
-Review these artifacts against the acceptance criteria. Return your verdict as JSON.`;
+## Independent QA Review
+${state.qaReview || 'No QA findings were reported.'}
+
+Review how these artifacts work together against the acceptance criteria and QA findings. Focus on cross-agent API, data-model, UI, and ownership mismatches. Return your verdict as JSON.`;
 
       const result = await this.llm.generateJson<{
         verdict: string;
@@ -110,12 +115,12 @@ Review these artifacts against the acceptance criteria. Return your verdict as J
         suggestions: string[];
       }>({
         agentName: resolveModelForNode('self_critique', 'self_critique'),
-        subagent: 'self-critique',
+        subagent: 'integration-reviewer',
         correlation: {
           projectId,
           runId,
           nodeId: NODE.SELF_CRITIQUE,
-          agent: 'self-critique',
+          agent: 'integration-reviewer',
         },
         systemPrompt: SELF_CRITIQUE_SYSTEM,
         userPrompt,
@@ -125,8 +130,10 @@ Review these artifacts against the acceptance criteria. Return your verdict as J
       const critique = result.value;
 
       if (critique.verdict === 'pass' && critique.issues.length === 0) {
-        this.streamEmitter.emit(projectId, NODE.SELF_CRITIQUE, runId ?? '', 'decision', 'Self-critique passed: no quality issues found');
-        return contractSummary ? { contractSummary } : {};
+        this.streamEmitter.emit(projectId, NODE.SELF_CRITIQUE, runId ?? '', 'decision', 'Integration review passed: no cross-agent issues found');
+        return contractSummary
+          ? { contractSummary, selfCritique: '' }
+          : { selfCritique: '' };
       }
 
       const issueCount = critique.issues.length;
@@ -137,7 +144,7 @@ Review these artifacts against the acceptance criteria. Return your verdict as J
         NODE.SELF_CRITIQUE,
         runId ?? '',
         'decision',
-        `Self-critique found ${issueCount} issues and ${suggestionCount} suggestions`,
+        `Integration review found ${issueCount} issues and ${suggestionCount} suggestions`,
       );
 
       const feedback = [
@@ -152,9 +159,11 @@ Review these artifacts against the acceptance criteria. Return your verdict as J
       return { selfCritique: feedback, contractSummary };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`[${projectId}] Self-critique failed (non-fatal): ${message}`);
-      this.streamEmitter.emit(projectId, NODE.SELF_CRITIQUE, runId ?? '', 'decision', `Self-critique skipped: ${humanReadableError(message)}`);
-      return contractSummary ? { contractSummary } : {};
+      this.logger.warn(`[${projectId}] Integration review failed (non-fatal): ${message}`);
+      this.streamEmitter.emit(projectId, NODE.SELF_CRITIQUE, runId ?? '', 'decision', `Integration review skipped: ${humanReadableError(message)}`);
+      return contractSummary
+        ? { contractSummary, selfCritique: '' }
+        : { selfCritique: '' };
     }
   }
 }

@@ -33,6 +33,7 @@ import { ValidatorNode } from './nodes/validator.node';
 import { ExecutionValidationNode } from './nodes/execution-validation.node';
 import { GithubCommitNode } from './nodes/github-commit.node';
 import { SelfCritiqueNode } from './nodes/self-critique.node';
+import { QualityReviewNode } from './nodes/quality-review.node';
 import { MemoryService } from '../memory/memory.service';
 import { DevFlowGateway } from '../gateway/devflow.gateway';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -95,6 +96,7 @@ export interface OrchestrationStatus {
   currentNode: string;
   retryCount: number;
   error: string | null;
+  contract?: DevFlowStateType['contract'];
 }
 
 export interface OrchestrationRunControlsInput {
@@ -278,6 +280,7 @@ export class OrchestrationService implements OnModuleInit {
     private readonly runDispatcher: OrchestrationRunDispatcher,
     private readonly modelCatalog: ModelCatalogService,
     @Optional() private readonly executionValidation?: ExecutionValidationNode,
+    @Optional() private readonly qualityReview?: QualityReviewNode,
   ) {}
 
   getModelCatalog(): Promise<GatewayModelCatalog> {
@@ -531,6 +534,10 @@ Rough idea: ${input.brief}`;
       this.backendAgent,
       this.databaseAgent,
       this.architectureAgent,
+      this.qualityReview ?? {
+        executeQa: async () => ({}),
+        executeSecurity: async () => ({}),
+      },
       this.selfCritique,
       this.validator,
       this.executionValidation,
@@ -1192,6 +1199,7 @@ Rough idea: ${input.brief}`;
         currentNode: run?.currentNode ?? 'none',
         retryCount: channelValues?.retryCount ?? 0,
         error: publicError,
+        ...(channelValues?.contract ? { contract: channelValues.contract } : {}),
       };
     } catch {
       return {

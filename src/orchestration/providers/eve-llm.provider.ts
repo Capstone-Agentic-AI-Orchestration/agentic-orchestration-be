@@ -13,10 +13,14 @@ const SUBAGENT_MODEL_TARGET: Record<string, OrchestrationModelTarget> = {
   architecture: 'architecture',
   backend: 'backend',
   'contract-negotiator': 'contract',
+  'planner-orchestrator': 'contract',
   database: 'database',
   frontend: 'frontend',
   mobile: 'mobile',
+  qa: 'qa',
   'requirements-parser': 'requirements',
+  'security-review': 'security',
+  'integration-reviewer': 'critique',
   'self-critique': 'critique',
 };
 

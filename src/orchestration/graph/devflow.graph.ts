@@ -11,6 +11,7 @@ import { ValidatorNode } from '../nodes/validator.node';
 import { ExecutionValidationNode } from '../nodes/execution-validation.node';
 import { GithubCommitNode } from '../nodes/github-commit.node';
 import { SelfCritiqueNode } from '../nodes/self-critique.node';
+import { QualityReviewNode } from '../nodes/quality-review.node';
 import { OrchestrationEmitter } from '../streaming/orchestration-emitter.service';
 import { NODE } from './topology';
 
@@ -44,7 +45,9 @@ export interface DevFlowNodeImpls {
   [NODE.BACKEND_AGENT]: NodeImpl;
   [NODE.DATABASE_AGENT]: NodeImpl;
   [NODE.ARCHITECTURE_AGENT]: NodeImpl;
+  [NODE.QA_REVIEW]: NodeImpl;
   [NODE.SELF_CRITIQUE]: NodeImpl;
+  [NODE.SECURITY_REVIEW]: NodeImpl;
   [NODE.VALIDATE_OUTPUTS]: NodeImpl;
   [NODE.EXECUTION_VALIDATE_OUTPUTS]: NodeImpl;
   [NODE.COMMIT_TO_GITHUB]: NodeImpl;
@@ -96,6 +99,7 @@ export function buildDevFlowNodeImpls(
   backendAgent: BackendAgentNode,
   databaseAgent: DatabaseAgentNode,
   architectureAgent: ArchitectureAgentNode,
+  qualityReview: Pick<QualityReviewNode, 'executeQa' | 'executeSecurity'>,
   selfCritique: SelfCritiqueNode,
   validator: ValidatorNode,
   executionValidation: ExecutionValidationNode,
@@ -109,7 +113,9 @@ export function buildDevFlowNodeImpls(
     [NODE.BACKEND_AGENT]: (state) => backendAgent.execute(state),
     [NODE.DATABASE_AGENT]: (state) => databaseAgent.execute(state),
     [NODE.ARCHITECTURE_AGENT]: (state) => architectureAgent.execute(state),
+    [NODE.QA_REVIEW]: (state) => qualityReview.executeQa(state),
     [NODE.SELF_CRITIQUE]: (state) => selfCritique.execute(state),
+    [NODE.SECURITY_REVIEW]: (state) => qualityReview.executeSecurity(state),
     [NODE.VALIDATE_OUTPUTS]: (state) => validator.execute(state),
     [NODE.EXECUTION_VALIDATE_OUTPUTS]: (state) => executionValidation.execute(state),
     [NODE.COMMIT_TO_GITHUB]: (state) => githubCommit.execute(state),

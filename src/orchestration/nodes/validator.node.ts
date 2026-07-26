@@ -188,6 +188,8 @@ export class ValidatorNode {
     const integrationIssues = validationErrors
       .filter((e) => e.code === 'CONTRACT')
       .map((e) => `${e.path ? `${e.path}: ` : ''}${e.message}`);
+    const reviewerIssues = this.reviewerIssues(state);
+    integrationIssues.push(...reviewerIssues);
 
     const contractIssues: string[] = [];
     if (contract.acceptanceCriteria.length > 0) {
@@ -205,8 +207,31 @@ export class ValidatorNode {
     const agentIssues = valid
       ? new Map<AgentType, string[]>()
       : this.groupIssuesByAgent(validationErrors, missingFiles, contractIssues);
+    if (reviewerIssues.length > 0) {
+      const responsibleAgents = new Set(state.artifacts.map((artifact) => artifact.agentType));
+      for (const agent of responsibleAgents) {
+        agentIssues.set(agent, [
+          ...(agentIssues.get(agent) ?? []),
+          ...reviewerIssues,
+        ]);
+      }
+    }
 
     return { valid, missingFiles, syntaxIssues, typeIssues, schemaIssues, contractIssues, integrationIssues, agentIssues };
+  }
+
+  private reviewerIssues(state: DevFlowStateType): string[] {
+    const issues: string[] = [];
+    if ((state.qaReview ?? '').startsWith('NEEDS CHANGES')) {
+      issues.push(`QA REVIEW:\n${state.qaReview}`);
+    }
+    if ((state.selfCritique ?? '').trim()) {
+      issues.push(`INTEGRATION REVIEW:\n${state.selfCritique}`);
+    }
+    if ((state.securityReview ?? '').startsWith('NEEDS CHANGES')) {
+      issues.push(`SECURITY REVIEW:\n${state.securityReview}`);
+    }
+    return issues;
   }
 
   /**

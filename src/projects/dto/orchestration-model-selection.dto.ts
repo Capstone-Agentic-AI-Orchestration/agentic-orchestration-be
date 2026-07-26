@@ -57,6 +57,18 @@ export class OrchestrationModelOverridesDto {
   @IsString()
   @MaxLength(160)
   @Matches(MODEL_ID_PATTERN, { message: MODEL_ID_MESSAGE })
+  qa?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  @Matches(MODEL_ID_PATTERN, { message: MODEL_ID_MESSAGE })
+  security?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  @Matches(MODEL_ID_PATTERN, { message: MODEL_ID_MESSAGE })
   critique?: string;
 }
 

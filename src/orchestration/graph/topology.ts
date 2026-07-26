@@ -18,7 +18,9 @@ export const NODE = {
   BACKEND_AGENT: 'backend_agent',
   DATABASE_AGENT: 'database_agent',
   ARCHITECTURE_AGENT: 'architecture_agent',
+  QA_REVIEW: 'qa_review',
   SELF_CRITIQUE: 'self_critique',
+  SECURITY_REVIEW: 'security_review',
   VALIDATE_OUTPUTS: 'validate_outputs',
   EXECUTION_VALIDATE_OUTPUTS: 'execution_validate_outputs',
   GATE_2_CHECK: 'gate_2_check',
@@ -38,7 +40,6 @@ export const CODE_AGENTS = [
   NODE.FRONTEND_AGENT,
   NODE.BACKEND_AGENT,
   NODE.DATABASE_AGENT,
-  NODE.ARCHITECTURE_AGENT,
 ] as const;
 
 /** Every code agent that can exist in a run, including the opt-in mobile agent. */
@@ -52,7 +53,15 @@ export type CodeAgentNode = (typeof ALL_CODE_AGENTS)[number];
  * generating React Native code that would have nowhere to be committed.
  */
 export function codeAgentsFor(state: DevFlowStateType): readonly CodeAgentNode[] {
-  return state.hasMobileRepo ? ALL_CODE_AGENTS : CODE_AGENTS;
+  const planned = state.contract?.agentPlan?.activeAgents;
+  if (!planned?.length) return state.hasMobileRepo ? ALL_CODE_AGENTS : CODE_AGENTS;
+  const nodes = [
+    ...(planned.includes('frontend') ? [NODE.FRONTEND_AGENT] : []),
+    ...(planned.includes('backend') ? [NODE.BACKEND_AGENT] : []),
+    ...(planned.includes('database') ? [NODE.DATABASE_AGENT] : []),
+    ...(planned.includes('mobile') && state.hasMobileRepo ? [NODE.MOBILE_AGENT] : []),
+  ];
+  return nodes.length ? nodes : CODE_AGENTS;
 }
 
 /** Maps a retry directive's agent type to the agent node to re-run. */

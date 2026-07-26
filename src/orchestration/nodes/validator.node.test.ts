@@ -108,6 +108,26 @@ describe('ValidatorNode multi-agent retry', () => {
     expect(result.error).toBeUndefined();
   });
 
+  it('turns independent QA findings into deterministic specialist retries', async () => {
+    const { node } = makeNode();
+    const reviewState = state([
+      {
+        agentType: 'backend',
+        filePath: 'src/a.service.ts',
+        content: `export class AService { run(): number { return 42; } }`,
+        language: 'typescript',
+      },
+    ]);
+    reviewState.qaReview = 'NEEDS CHANGES\nISSUES\n- Missing authorization edge-case coverage.';
+
+    const result = await node.execute(reviewState);
+
+    expect(result.retryPlan).toHaveLength(1);
+    expect(result.retryPlan?.[0].agentType).toBe('backend');
+    expect(result.retryPlan?.[0].feedback).toContain('QA REVIEW');
+    expect(result.retryPlan?.[0].feedback).toContain('authorization edge-case');
+  });
+
   it('routes a cross-artifact integration violation to the calling agent', async () => {
     // Isolate the integration check from the type-checker (the snippets omit
     // imports for brevity, which would otherwise raise TS2304s).

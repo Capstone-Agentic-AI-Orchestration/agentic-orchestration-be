@@ -9,6 +9,7 @@ import { StreamEmitter } from '../streaming/stream-emitter.service';
 import { humanReadableError } from './human-readable-error';
 import { CONTRACT_NEGOTIATOR_SYSTEM, buildAgentSystemPrompt } from '../prompts/agent-prompts';
 import { resolveModelForNode } from '../providers/base-llm.provider';
+import { buildAgentPlan } from '../graph/agent-plan';
 
 // ─── Node ─────────────────────────────────────────────────────────────────────
 
@@ -106,13 +107,24 @@ export class ContractNegotiatorNode {
       const requirementsSummary = JSON.stringify(state.requirements, null, 2);
 
       if (process.env.MOCK_MODE === 'true') {
+        const fileManifest = this.normalizeFileManifest(
+          ['src/app/page.tsx', 'src/main.ts', 'schema.prisma'],
+          state.requirements,
+          state.hasMobileRepo,
+        );
         const contract: ProjectContract = {
           projectId,
           projectName: state.companyName.replace(/[^a-zA-Z]/g, '') + 'App',
           description: 'Mocked contract for basic fullstack application',
           requirements: state.requirements,
-          fileManifest: ['src/app/page.tsx', 'src/main.ts', 'schema.prisma'],
+          fileManifest,
           acceptanceCriteria: ['Must compile', 'Must pass mock tests'],
+          agentPlan: buildAgentPlan({
+            fileManifest,
+            requirements: state.requirements,
+            brief: state.brief,
+            hasMobileRepo: state.hasMobileRepo,
+          }),
           lockedAt: new Date().toISOString()
         };
         this.streamEmitter.emit(projectId, NODE.NEGOTIATE_CONTRACT, runId ?? '', 'decision', 'Mock mode: returning predefined contract');
@@ -136,12 +148,12 @@ export class ContractNegotiatorNode {
 
       const result = await this.llm.generateJson<Record<string, unknown>>({
         agentName: resolveModelForNode('negotiate_contract', 'contract_negotiator'),
-        subagent: 'contract-negotiator',
+        subagent: 'planner-orchestrator',
         correlation: {
           projectId,
           runId,
           nodeId: NODE.NEGOTIATE_CONTRACT,
-          agent: 'contract-negotiator',
+          agent: 'planner-orchestrator',
         },
         onToken: (delta) => this.streamEmitter.emit(projectId, NODE.NEGOTIATE_CONTRACT, runId ?? '', 'token', delta),
         systemPrompt,
@@ -164,7 +176,8 @@ ${state.openQuestions.length ? state.openQuestions.map((question) => `- ${questi
 
 Treat the locked intake and its explicit exclusions as authoritative. Do not add features that are only future-phase or out-of-scope.
 
-Produce a fileManifest that lists every file that will be generated (frontend, backend, database files, and architecture docs).
+You are also the bounded Planner/Orchestrator. Select only the implementation domains required by the locked scope.
+Produce a fileManifest that lists every file that will be generated. Do not invent frontend, backend, database, mobile, or architecture work when the scope does not require it.
 Include 8–20 files depending on complexity. Use realistic relative paths (e.g. "src/app/page.tsx", "src/modules/users/users.service.ts").
 Produce 5–10 acceptance criteria as clear, testable statements.`,
         expectedShape: 'object',
@@ -176,15 +189,26 @@ Produce 5–10 acceptance criteria as clear, testable statements.`,
         ? (parsed['fileManifest'] as unknown[]).filter((filePath): filePath is string => typeof filePath === 'string')
         : [];
 
+      const fileManifest = this.normalizeFileManifest(
+        rawFileManifest,
+        state.requirements,
+        state.hasMobileRepo,
+      );
       const contract: ProjectContract = {
         projectId: state.projectId,
         projectName: typeof parsed['projectName'] === 'string' ? parsed['projectName'] : `${state.companyName} Project`,
         description: typeof parsed['description'] === 'string' ? parsed['description'] : state.brief,
         requirements: state.requirements,
-        fileManifest: this.normalizeFileManifest(rawFileManifest, state.requirements),
+        fileManifest,
         acceptanceCriteria: Array.isArray(parsed['acceptanceCriteria'])
           ? (parsed['acceptanceCriteria'] as string[])
           : [],
+        agentPlan: buildAgentPlan({
+          fileManifest,
+          requirements: state.requirements,
+          brief: state.brief,
+          hasMobileRepo: state.hasMobileRepo,
+        }),
         lockedAt: new Date().toISOString(),
       };
 
@@ -255,20 +279,28 @@ Produce 5–10 acceptance criteria as clear, testable statements.`,
       // Try direct JSON parse first (clean contract storage).
       const parsed = JSON.parse(content);
       if (parsed.projectId && parsed.fileManifest) {
+        const fileManifest = this.normalizeFileManifest(
+          Array.isArray(parsed.fileManifest)
+            ? parsed.fileManifest.filter((f: unknown): f is string => typeof f === 'string')
+            : [],
+          requirements,
+          state.hasMobileRepo,
+        );
         return {
           projectId,
           projectName: parsed.projectName ?? `${state.companyName} Project`,
           description: parsed.description ?? state.brief,
           requirements,
-          fileManifest: this.normalizeFileManifest(
-            Array.isArray(parsed.fileManifest)
-              ? parsed.fileManifest.filter((f: unknown): f is string => typeof f === 'string')
-              : [],
-            requirements,
-          ),
+          fileManifest,
           acceptanceCriteria: Array.isArray(parsed.acceptanceCriteria)
             ? parsed.acceptanceCriteria
             : [],
+          agentPlan: buildAgentPlan({
+            fileManifest,
+            requirements,
+            brief: state.brief,
+            hasMobileRepo: state.hasMobileRepo,
+          }),
           lockedAt: new Date().toISOString(),
         };
       }
@@ -282,20 +314,28 @@ Produce 5–10 acceptance criteria as clear, testable statements.`,
     try {
       const parsed = JSON.parse(bodyMatch[1]);
       if (parsed.fileManifest) {
+        const fileManifest = this.normalizeFileManifest(
+          Array.isArray(parsed.fileManifest)
+            ? parsed.fileManifest.filter((f: unknown): f is string => typeof f === 'string')
+            : [],
+          requirements,
+          state.hasMobileRepo,
+        );
         return {
           projectId,
           projectName: parsed.projectName ?? `${state.companyName} Project`,
           description: parsed.description ?? state.brief,
           requirements,
-          fileManifest: this.normalizeFileManifest(
-            Array.isArray(parsed.fileManifest)
-              ? parsed.fileManifest.filter((f: unknown): f is string => typeof f === 'string')
-              : [],
-            requirements,
-          ),
+          fileManifest,
           acceptanceCriteria: Array.isArray(parsed.acceptanceCriteria)
             ? parsed.acceptanceCriteria
             : [],
+          agentPlan: buildAgentPlan({
+            fileManifest,
+            requirements,
+            brief: state.brief,
+            hasMobileRepo: state.hasMobileRepo,
+          }),
           lockedAt: new Date().toISOString(),
         };
       }
@@ -305,42 +345,64 @@ Produce 5–10 acceptance criteria as clear, testable statements.`,
     return null;
   }
 
-  private normalizeFileManifest(fileManifest: string[], requirements: ProjectContract['requirements']): string[] {
+  private normalizeFileManifest(
+    fileManifest: string[],
+    requirements: ProjectContract['requirements'],
+    hasMobileRepo: boolean,
+  ): string[] {
     const featureFiles = this.mvvmFeatureFiles(requirements.features);
-    const coreFiles = [
-      'DESIGN.md',
-      'OUTPUT_STRUCTURE.json',
-      'src/app/page.tsx',
-      'src/app/layout.tsx',
-      'src/shared/ui/Button.tsx',
-      'src/shared/ui/Card.tsx',
-      'src/styles/globals.css',
-      'README-frontend.md',
-      ...featureFiles,
-      'API_CONTRACT.json',
-      'src/app.module.ts',
-      'src/main.ts',
-      'src/modules/core/core.module.ts',
-      'src/modules/core/core.controller.ts',
-      'src/modules/core/core.service.ts',
-      'src/modules/core/dto/create-item.dto.ts',
-      'README-backend.md',
-      'DATA_MODEL.json',
-      'prisma/schema.prisma',
-      'prisma/migrations/0001_initial.sql',
-      'prisma/seed.ts',
-      'README-database.md',
-      'ARCHITECTURE_REVIEW.md',
-      'ARCHITECTURE.md',
-      'API.md',
-      'DEPLOYMENT.md',
-      'ADRS.md',
-    ];
     const supportedFile = (filePath: string) =>
       /\.(ts|tsx|jsx|css|scss|module\.css|module\.ts|controller\.ts|service\.ts|dto\.ts|guard\.ts|pipe\.ts|interceptor\.ts|prisma|sql|md)$/i.test(filePath) ||
       /seed\.(ts|js)$/i.test(filePath);
+    const requestedFiles = fileManifest.filter(supportedFile);
+    const joined = requestedFiles.join('\n');
+    const frontend = /(?:\.tsx$|\.jsx$|\.css$|design\.md|src\/features\/|src\/app\/.*(?:page|layout))/im.test(joined);
+    const backend = /(?:src\/main\.ts|app\.module\.ts|src\/modules\/|(?:controller|service|dto|guard)\.ts|api_contract)/i.test(joined);
+    const database = /(?:prisma\/|\.prisma$|\.sql$|data_model)/im.test(joined);
+    const architecture = /(?:architecture|deployment\.md|adrs\.md|api\.md)/i.test(joined);
+    const mobile = hasMobileRepo && /(?:mobile\/|app\/\(tabs\)|app\/_layout|expo|react-native)/i.test(joined);
+    const noDomainSelected = !frontend && !backend && !database && !mobile;
+    const coreFiles = [
+      ...(frontend || noDomainSelected
+        ? [
+            'DESIGN.md',
+            'OUTPUT_STRUCTURE.json',
+            'src/app/page.tsx',
+            'src/app/layout.tsx',
+            'src/shared/ui/Button.tsx',
+            'src/shared/ui/Card.tsx',
+            'src/styles/globals.css',
+            'README-frontend.md',
+            ...featureFiles,
+          ]
+        : []),
+      ...(backend || noDomainSelected
+        ? [
+            'API_CONTRACT.json',
+            'src/app.module.ts',
+            'src/main.ts',
+            'src/modules/core/core.module.ts',
+            'src/modules/core/core.controller.ts',
+            'src/modules/core/core.service.ts',
+            'src/modules/core/dto/create-item.dto.ts',
+            'README-backend.md',
+          ]
+        : []),
+      ...(database || noDomainSelected
+        ? [
+            'DATA_MODEL.json',
+            'prisma/schema.prisma',
+            'prisma/migrations/0001_initial.sql',
+            'prisma/seed.ts',
+            'README-database.md',
+          ]
+        : []),
+      ...(architecture
+        ? ['ARCHITECTURE_REVIEW.md', 'ARCHITECTURE.md', 'API.md', 'DEPLOYMENT.md', 'ADRS.md']
+        : []),
+    ];
 
-    return [...new Set([...coreFiles, ...fileManifest.filter(supportedFile)])].slice(0, 32);
+    return [...new Set([...coreFiles, ...requestedFiles])].slice(0, 64);
   }
 
   private mvvmFeatureFiles(features: string[]): string[] {

@@ -15,6 +15,7 @@ import { BackendAgentNode } from './nodes/backend-agent.node';
 import { DatabaseAgentNode } from './nodes/database-agent.node';
 import { ArchitectureAgentNode } from './nodes/architecture-agent.node';
 import { SelfCritiqueNode } from './nodes/self-critique.node';
+import { QualityReviewNode } from './nodes/quality-review.node';
 import { ValidatorNode } from './nodes/validator.node';
 import { ExecutionValidationNode } from './nodes/execution-validation.node';
 import { GithubCommitNode } from './nodes/github-commit.node';
@@ -61,6 +62,7 @@ import { ModelCatalogService } from './models/model-catalog.service';
     DatabaseAgentNode,
     ArchitectureAgentNode,
     SelfCritiqueNode,
+    QualityReviewNode,
     ValidatorNode,
     ExecutionValidationNode,
     GithubCommitNode,

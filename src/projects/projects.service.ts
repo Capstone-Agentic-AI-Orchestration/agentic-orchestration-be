@@ -87,6 +87,8 @@ const ORCHESTRATION_MODEL_DEFAULT_TARGETS = [
   'database',
   'architecture',
   'mobile',
+  'qa',
+  'security',
   'critique',
 ] as const;
 type OrchestrationModelDefaultTarget = (typeof ORCHESTRATION_MODEL_DEFAULT_TARGETS)[number];

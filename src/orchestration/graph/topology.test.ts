@@ -41,6 +41,19 @@ describe('topology routers', () => {
       expect(targets.map((t) => t.node)).toContain(NODE.MOBILE_AGENT);
       expect(targets).toHaveLength(ALL_CODE_AGENTS.length);
     });
+
+    it('uses the locked agent plan instead of dispatching a fixed full-stack team', () => {
+      const targets = gate1Router(state({
+        hasMobileRepo: false,
+        contract: {
+          agentPlan: {
+            activeAgents: ['backend', 'qa'],
+          },
+        } as never,
+      })) as FanoutTarget[];
+
+      expect(targets.map((target) => target.node)).toEqual([NODE.BACKEND_AGENT]);
+    });
   });
 
   describe('validatorRouter', () => {

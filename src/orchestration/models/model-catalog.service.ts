@@ -13,6 +13,8 @@ export const ORCHESTRATION_MODEL_TARGETS = [
   'database',
   'architecture',
   'mobile',
+  'qa',
+  'security',
   'critique',
 ] as const;
 

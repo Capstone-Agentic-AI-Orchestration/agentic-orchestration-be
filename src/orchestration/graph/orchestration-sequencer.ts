@@ -12,7 +12,7 @@ import {
   type NodeImpl,
 } from './devflow.graph';
 import {
-  CODE_AGENTS,
+  codeAgentsFor,
   gate2Router,
   NODE,
   validatorRouter,
@@ -62,7 +62,9 @@ export const NODE_PROJECT_STATUS: Record<string, ProjectStatus> = {
   [NODE.BACKEND_AGENT]: ProjectStatus.GENERATING_CODE,
   [NODE.DATABASE_AGENT]: ProjectStatus.GENERATING_CODE,
   [NODE.ARCHITECTURE_AGENT]: ProjectStatus.GENERATING_CODE,
+  [NODE.QA_REVIEW]: ProjectStatus.GENERATING_CODE,
   [NODE.SELF_CRITIQUE]: ProjectStatus.GENERATING_CODE,
+  [NODE.SECURITY_REVIEW]: ProjectStatus.GENERATING_CODE,
   [NODE.VALIDATE_OUTPUTS]: ProjectStatus.GENERATING_CODE,
   [NODE.EXECUTION_VALIDATE_OUTPUTS]: ProjectStatus.GENERATING_CODE,
   [NODE.GATE_2_CHECK]: ProjectStatus.COMMITTING,
@@ -131,12 +133,12 @@ export class OrchestrationSequencer {
     return { kind: 'continue', state };
   }
 
-  // ── Phase B: code agents → self-critique → validate/build → retry → gate 2 ─
+  // ── Phase B: planned agents → reviews → validate/build → retry → gate 2 ────
   private async runPhaseB(
     ctx: SequencerContext,
   ): Promise<{ kind: 'continue'; state: DevFlowStateType } | { kind: 'stop'; outcome: SequencerOutcome }> {
     let state = ctx.state;
-    let targets: FanoutTarget[] = CODE_AGENTS.map((node) => ({ node }));
+    let targets: FanoutTarget[] = codeAgentsFor(state).map((node) => ({ node }));
 
     for (;;) {
       // Parallel code-agent fan-out (or scoped retry fan-out).
@@ -144,9 +146,41 @@ export class OrchestrationSequencer {
       if (this.aborted(ctx)) return { kind: 'stop', outcome: { kind: 'aborted', state } };
       if (state.error) return { kind: 'stop', outcome: await this.markFailed({ ...ctx, state }, state.error) };
 
-      state = await this.runNode(ctx, NODE.SELF_CRITIQUE, ctx.impls[NODE.SELF_CRITIQUE], state);
-      if (this.aborted(ctx)) return { kind: 'stop', outcome: { kind: 'aborted', state } };
-      if (state.error) return { kind: 'stop', outcome: await this.markFailed({ ...ctx, state }, state.error) };
+      const plannedAgents = state.contract?.agentPlan?.activeAgents;
+      if (
+        (!plannedAgents || plannedAgents.includes('architecture')) &&
+        !targets.some((target) => target.node === NODE.ARCHITECTURE_AGENT)
+      ) {
+        state = await this.runNode(
+          ctx,
+          NODE.ARCHITECTURE_AGENT,
+          ctx.impls[NODE.ARCHITECTURE_AGENT],
+          state,
+        );
+        if (this.aborted(ctx)) return { kind: 'stop', outcome: { kind: 'aborted', state } };
+        if (state.error) return { kind: 'stop', outcome: await this.markFailed({ ...ctx, state }, state.error) };
+      }
+
+      if (state.contract?.agentPlan?.activeAgents.includes('qa')) {
+        state = await this.runNode(ctx, NODE.QA_REVIEW, ctx.impls[NODE.QA_REVIEW], state);
+        if (this.aborted(ctx)) return { kind: 'stop', outcome: { kind: 'aborted', state } };
+      }
+
+      if (state.contract?.agentPlan?.activeAgents.includes('integration')) {
+        state = await this.runNode(ctx, NODE.SELF_CRITIQUE, ctx.impls[NODE.SELF_CRITIQUE], state);
+        if (this.aborted(ctx)) return { kind: 'stop', outcome: { kind: 'aborted', state } };
+        if (state.error) return { kind: 'stop', outcome: await this.markFailed({ ...ctx, state }, state.error) };
+      }
+
+      if (state.contract?.agentPlan?.activeAgents.includes('security')) {
+        state = await this.runNode(
+          ctx,
+          NODE.SECURITY_REVIEW,
+          ctx.impls[NODE.SECURITY_REVIEW],
+          state,
+        );
+        if (this.aborted(ctx)) return { kind: 'stop', outcome: { kind: 'aborted', state } };
+      }
 
       state = await this.runNode(ctx, NODE.VALIDATE_OUTPUTS, ctx.impls[NODE.VALIDATE_OUTPUTS], state);
       if (this.aborted(ctx)) return { kind: 'stop', outcome: { kind: 'aborted', state } };
