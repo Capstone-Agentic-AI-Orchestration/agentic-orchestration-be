@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Param,
   Post,
+  Query,
   Res,
   UploadedFile,
   UseGuards,
@@ -66,11 +67,26 @@ export class IntakeController {
     return this.intake.getIntake(projectId, user);
   }
 
+  /**
+   * The requirements worksheet, in whichever format suits the client.
+   *
+   * Both formats render from one definition, so neither can drift from the intake form the way
+   * the previously checked-in static template did. HTML is offered instead of DOCX because Word
+   * and Google Docs open it directly and any browser prints it to PDF, with no document
+   * generation dependency to keep in step.
+   */
   @Get('intake/template')
   @Roles(UserRole.CLIENT, UserRole.PM, UserRole.ADMIN)
-  async downloadTemplate(@Res() response: Response) {
+  downloadTemplate(@Res() response: Response, @Query('format') format?: string) {
+    if (format === 'html') {
+      response.setHeader('Content-Type', 'text/html; charset=utf-8');
+      response.setHeader('Content-Disposition', 'attachment; filename="project-requirements-worksheet.html"');
+      response.send(this.intake.templateHtml());
+      return;
+    }
+
     response.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-    response.setHeader('Content-Disposition', 'attachment; filename="client-project-intake-template.md"');
+    response.setHeader('Content-Disposition', 'attachment; filename="project-requirements-worksheet.md"');
     response.send(this.intake.templateMarkdown());
   }
 

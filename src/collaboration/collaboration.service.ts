@@ -75,6 +75,13 @@ const messageInclude = {
 const documentInclude = {
   uploadedBy: { select: profileSelect },
   reviewedBy: { select: profileSelect },
+  // Extraction state decides whether a document's text can reach the agents at all. Without it
+  // every consumer has to guess, and the UI ends up presenting an unreadable file as usable
+  // evidence. Exposed here (rather than only on the PM-and-client intake route) so developers,
+  // who are deliberately excluded from intake, can still see what the agents will actually read.
+  extraction: {
+    select: { status: true, error: true, attempts: true, updatedAt: true },
+  },
 } satisfies Prisma.CollaborationDocumentInclude;
 
 @Injectable()

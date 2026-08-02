@@ -53,7 +53,7 @@ import { AgentLlmRouter } from './providers/agent-llm.router';
 import { OrchestrationEmitter } from './streaming/orchestration-emitter.service';
 import { StreamEmitter } from './streaming/stream-emitter.service';
 import { OrchestrationRunDispatcher } from './run-dispatcher.service';
-import type { IntakeContextPackage } from '../intake/intake.types';
+import type { IntakeContextPackage, RequirementEvidence } from '../intake/intake.types';
 import {
   AgentLlmEngineStatus,
   AgentProviderMode,
@@ -221,6 +221,48 @@ type AutoAnalyzeCacheEntry =
 const AUTO_ANALYZE_CACHE_TTL_MS = 5 * 60 * 1000;
 const AUTO_ANALYZE_PENDING_TTL_MS = 30 * 1000;
 const DEFAULT_AUTO_ANALYZE_MAX_TOKENS = 1200;
+
+/**
+ * Gate 1 evidence rule.
+ *
+ * Client documents were already being injected into the requirements prompt, and the parser was
+ * already asked to cite them — but nothing ever read those citations back, so a run could be
+ * approved having quietly ignored every document the client supplied. This closes that loop:
+ * when the locked intake package carries readable source documents, the requirements must cite
+ * at least one of them before a PM can approve the gate.
+ *
+ * Citations are validated against the supplied sources in the requirements parser, so anything
+ * still present here is known to resolve to real text an agent received.
+ *
+ * Returns a human-readable reason to refuse, or null when the gate may proceed. A project with
+ * no source documents is never blocked — there is nothing to cite, and the intake has an
+ * explicit "no supporting documents apply" path for exactly that case.
+ */
+export function describeEvidenceGap(
+  state: { intakeContext?: IntakeContextPackage | null; requirementsEvidence?: RequirementEvidence[] | null } | null,
+): string | null {
+  const sources = state?.intakeContext?.sources ?? [];
+  if (sources.length === 0) return null;
+
+  const evidence = state?.requirementsEvidence ?? [];
+  if (evidence.length === 0) {
+    return (
+      `This project supplied ${sources.length} source document${sources.length === 1 ? '' : 's'}, but the parsed ` +
+      'requirements cite none of them. Re-run requirements parsing, or lock a new intake version, ' +
+      'so the build is grounded in the documents the client provided.'
+    );
+  }
+
+  const citedIds = new Set(evidence.map((item) => item.documentId));
+  const uncited = sources.filter((source) => !citedIds.has(source.documentId));
+  if (uncited.length === sources.length) {
+    // Defensive: unresolved citations are already dropped upstream, so reaching here would mean
+    // every citation pointed somewhere unexpected.
+    return 'The parsed requirements cite no supplied document. Re-run requirements parsing before approving.';
+  }
+
+  return null;
+}
 
 // ─── Service ──────────────────────────────────────────────────────────────────
 
@@ -895,6 +937,11 @@ Rough idea: ${input.brief}`;
       throw new BadRequestException(
         'This intake has unresolved requirement questions. Resolve them or set acceptOpenQuestions to true with an approval note.',
       );
+    }
+
+    if (approved) {
+      const evidenceGap = describeEvidenceGap(state);
+      if (evidenceGap) throw new BadRequestException(evidenceGap);
     }
 
     if (!approved) {

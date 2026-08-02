@@ -93,6 +93,7 @@ NODE_ENV="development"
 CORS_ORIGIN="http://localhost:3001"
 SUPABASE_SERVICE_ROLE_KEY=""
 SUPABASE_ANON_KEY=""
+CLIENT_APP_URL="http://localhost:3000"
 AUTH_ALLOWED_PROVIDERS="github"
 # Alternate provider keys. The direct provider and work-order agents use OpenRouter by default.
 GITHUB_APP_ID=""
@@ -110,6 +111,13 @@ OUTBOX_RELAY_MAX_ATTEMPTS=5
 ```
 
 `SUPABASE_SERVICE_ROLE_KEY` is server-side only. Never expose it to `agentic-orchestration-fe`.
+It is also used to send a Supabase account invitation when a PM approves a new client inquiry.
+Set `CLIENT_APP_URL` to the deployed `alphaexplora-client-fe` origin and allow that origin under
+Supabase Authentication URL Configuration. If delivery fails, the approval remains committed and
+the PM can resend the account email from the Approved inquiries list.
+
+For production recipients, configure custom SMTP under Supabase Authentication. Supabase's default
+SMTP service is intended only for testing and may reject addresses outside the project team.
 
 DevFlow login uses Supabase Auth. For the current GitHub OAuth-only rollout, configure GitHub as a Supabase Auth provider and keep `AUTH_ALLOWED_PROVIDERS="github"` on Render. When Google is enabled later, set `AUTH_ALLOWED_PROVIDERS="github,google"`. See `docs/setup/github-oauth-render-vercel.md` for the full Supabase, Render, and Vercel setup.
 

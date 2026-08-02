@@ -20,6 +20,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DocumentExtractionService } from './document-extraction.service';
 import { DocumentStorageService } from './document-storage.service';
+import { renderIntakeTemplateHtml, renderIntakeTemplateMarkdown } from './intake-template';
 import {
   ClientIntakePayload,
   emptyClientIntakePayload,
@@ -432,8 +433,24 @@ export class IntakeService {
     return { fileName: document.fileName, contentType: document.mimeType, content: await this.storage.download(document.storageKey) };
   }
 
+  /** Rendered from the shared worksheet definition so it cannot drift from the intake form. */
   templateMarkdown(): string {
-    return `# Client Project Intake Guide\n\n## Before you begin\nPlease describe what your team needs to achieve. Do not include passwords, API keys, production credentials, or unnecessary personal data.\n\n## 1. Project overview\n- Business goal:\n- Success measures:\n- Primary contact:\n- Final approver:\n- Target launch period:\n\n## 2. Users and roles\nFor each role, list responsibilities and permissions.\n\n## 3. Must-have features\nFor each feature: purpose, user, trigger, workflow, business rules, and testable acceptance criteria.\n\n## 4. Workflows\nFor each workflow: start condition, actor, steps, decisions, error cases, and outcome.\n\n## 5. Data and integrations\nList data entities, important fields, access rules, integrations, and owners. Write “none” where not applicable.\n\n## 6. Design, security, and delivery\nProvide brand assets, device needs, accessibility, security/compliance needs, constraints, and milestones.\n\n## 7. Final review\nConfirm your answers are specific, testable, and within the proposed scope before submitting to the PM.\n`;
+    return renderIntakeTemplateMarkdown();
+  }
+
+  /** Printable worksheet: opens in Word or Google Docs, and prints to PDF from any browser. */
+  templateHtml(): string {
+    return renderIntakeTemplateHtml();
+  }
+
+  /**
+   * Awaited re-run of extraction for a single document, used by the recovery sweep.
+   *
+   * The upload path deliberately fires extraction without awaiting it so the request returns
+   * promptly; recovery is the opposite case and must know when the work finished.
+   */
+  reprocessDocument(documentId: string): Promise<void> {
+    return this.processDocument(documentId);
   }
 
   private async processDocument(documentId: string): Promise<void> {

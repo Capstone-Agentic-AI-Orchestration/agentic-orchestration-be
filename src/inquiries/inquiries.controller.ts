@@ -21,6 +21,7 @@ import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
 import { CreateInquiryDto } from './dto/create-inquiry.dto';
 import { ReviewInquiryDto } from './dto/review-inquiry.dto';
 import { InquiriesService } from './inquiries.service';
+import { ClientsService } from '../clients/clients.service';
 import { executeIdempotentCommand } from '../shared/idempotency/idempotent-command';
 import { IdempotencyService } from '../shared/idempotency/idempotency.service';
 import { CursorPageInput } from '../shared/pagination/cursor-pagination';
@@ -30,6 +31,7 @@ export class InquiriesController {
   constructor(
     private readonly inquiriesService: InquiriesService,
     private readonly idempotency: IdempotencyService,
+    private readonly clients: ClientsService,
   ) {}
 
   @Post()
@@ -64,6 +66,21 @@ export class InquiriesController {
   @UseGuards(SupabaseAuthGuard, RolesGuard)
   findOne(@Param('id') id: string) {
     return this.inquiriesService.findOne(id);
+  }
+
+  /**
+   * Existing clients this lead might already belong to, so approving a repeat customer files
+   * their new project under the client they already have rather than creating a duplicate.
+   */
+  @Get(':id/client-suggestions')
+  @Roles(UserRole.PM, UserRole.ADMIN)
+  @UseGuards(SupabaseAuthGuard, RolesGuard)
+  async findClientSuggestions(@Param('id') id: string) {
+    const inquiry = await this.inquiriesService.findOne(id);
+    return this.clients.suggestForInquiry({
+      companyName: inquiry.companyName,
+      email: inquiry.email,
+    });
   }
 
   @Post(':id/approve')
@@ -105,6 +122,25 @@ export class InquiriesController {
       requestPayload: dto,
       responseStatus: HttpStatus.OK,
       handler: () => this.inquiriesService.reject(id, user, dto),
+    });
+  }
+
+  @Post(':id/send-account-invite')
+  @Roles(UserRole.PM, UserRole.ADMIN)
+  @UseGuards(SupabaseAuthGuard, RolesGuard)
+  @HttpCode(HttpStatus.OK)
+  sendAccountInvitation(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return executeIdempotentCommand({
+      idempotency: this.idempotency,
+      idempotencyKey,
+      scope: `user:${user.id}:POST:/inquiries/${id}/send-account-invite`,
+      requestPayload: { id },
+      responseStatus: HttpStatus.OK,
+      handler: () => this.inquiriesService.sendAccountInvitation(id),
     });
   }
 }

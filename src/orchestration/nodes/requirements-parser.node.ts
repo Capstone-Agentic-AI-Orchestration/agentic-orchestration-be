@@ -136,13 +136,34 @@ ${memoryBundle.context ? `Context from similar past requirements:\n${memoryBundl
       const openQuestions = Array.isArray(parsed.openQuestions)
         ? parsed.openQuestions.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
         : [];
-      const evidence = Array.isArray(parsed.evidence)
+      // Shape-checking evidence is not enough: a model can emit a well-formed citation for a
+      // document that was never supplied. Anything that does not resolve to a real source in the
+      // locked intake package is dropped here, so downstream gates only ever see citations that
+      // point at text an agent actually received.
+      const suppliedDocumentIds = new Set(
+        (state.intakeContext?.sources ?? []).map((source) => source.documentId),
+      );
+      const citedEvidence = Array.isArray(parsed.evidence)
         ? parsed.evidence
           .filter((item): item is { documentId: string; locator?: string; supports: string } => Boolean(
             item && typeof item === 'object' && typeof (item as { documentId?: unknown }).documentId === 'string' && typeof (item as { supports?: unknown }).supports === 'string',
           ))
           .map((item) => ({ documentId: item.documentId, locator: typeof item.locator === 'string' ? item.locator : undefined, supports: item.supports }))
         : [];
+      const evidence = citedEvidence.filter((item) => suppliedDocumentIds.has(item.documentId));
+      const unresolvedCitations = citedEvidence.length - evidence.length;
+      if (unresolvedCitations > 0) {
+        this.logger.warn(
+          `[${state.projectId}] Dropped ${unresolvedCitations} requirement citation(s) referencing documents that were not supplied`,
+        );
+        this.streamEmitter.emit(
+          projectId,
+          NODE.PARSE_REQUIREMENTS,
+          runId ?? '',
+          'decision',
+          `Discarded ${unresolvedCitations} citation(s) that did not match a supplied document`,
+        );
+      }
       const requirements: RequirementsDocument = {
         projectType: typeof parsed.projectType === 'string' ? parsed.projectType : 'Custom web application',
         features,

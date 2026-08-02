@@ -7,6 +7,7 @@ import {
   ConversationCategory,
   InquiryStatus,
   NotificationType,
+  ProjectStatus,
   ProjectTimelineEventType,
   ProjectTimelineVisibility,
   UserRole,
@@ -18,6 +19,7 @@ import { NotificationsService } from '../src/notifications/notifications.service
 import { PrismaService } from '../src/prisma/prisma.service';
 import { IntegrationEvents } from '../src/shared/events/integration-event';
 import { OutboxService } from '../src/shared/events/outbox.service';
+import { ClientAccountInvitationService } from '../src/inquiries/client-account-invitation.service';
 
 const pmUser: AuthUser = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -55,6 +57,16 @@ function makePrismaMock() {
   const tx = {
     project: {
       create: vi.fn().mockResolvedValue({ id: 'project-1' }),
+    },
+    // Approval resolves the client company the lead belongs to. Defaults to "no existing match"
+    // so the handoff exercises the create path; tests that need a match override findFirst.
+    client: {
+      findUnique: vi.fn().mockResolvedValue({ id: 'client-1' }),
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({ id: 'client-1' }),
+    },
+    clientContact: {
+      upsert: vi.fn().mockResolvedValue({ id: 'contact-1' }),
     },
     profile: {
       findFirst: vi.fn().mockResolvedValue({ id: '22222222-2222-4222-8222-222222222222' }),
@@ -112,19 +124,32 @@ function makeNotificationsMock() {
   };
 }
 
+function makeAccountInvitationsMock() {
+  return {
+    send: vi.fn().mockResolvedValue({
+      status: 'SENT',
+      email: 'casey@example.com',
+      message: 'The client account invitation email was sent.',
+    }),
+  };
+}
+
 describe('InquiriesService', () => {
   let prisma: ReturnType<typeof makePrismaMock>;
   let notifications: ReturnType<typeof makeNotificationsMock>;
+  let accountInvitations: ReturnType<typeof makeAccountInvitationsMock>;
   let service: InquiriesService;
 
   beforeEach(() => {
     prisma = makePrismaMock();
     notifications = makeNotificationsMock();
+    accountInvitations = makeAccountInvitationsMock();
     const intakeRepository = new IntakeRepository(prisma as unknown as PrismaService);
     service = new InquiriesService(
       intakeRepository,
       notifications as unknown as NotificationsService,
       new OutboxService(prisma as unknown as PrismaService),
+      accountInvitations as unknown as ClientAccountInvitationService,
     );
   });
 
@@ -194,19 +219,25 @@ describe('InquiriesService', () => {
     });
   });
 
-  it('approves an inquiry into a project with collaboration handoff records', async () => {
+  it('accepts an inquiry into discovery rather than starting delivery', async () => {
     await service.approve('inquiry-1', pmUser, { reviewNote: 'Approved for discovery.' });
 
     expect(prisma.$transaction).toHaveBeenCalled();
+    // The workspace opens in DISCOVERY: the PM talks to the client and gathers documents before
+    // committing to build, and orchestration is refused until delivery is started explicitly.
     expect(prisma.tx.project.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         companyName: 'Acme Co',
         createdById: pmUser.id,
+        status: ProjectStatus.DISCOVERY,
       }),
+    }));
+    expect(prisma.tx.clientInquiry.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: InquiryStatus.IN_DISCOVERY }),
     }));
     expect(prisma.tx.projectConversation.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
-        title: 'Client onboarding',
+        title: 'Discovery',
         category: ConversationCategory.SUPPORT,
         visibility: CollaborationVisibility.CLIENT,
       }),
@@ -244,6 +275,22 @@ describe('InquiriesService', () => {
       type: NotificationType.INQUIRY_APPROVED,
       projectId: 'project-1',
     }));
+    expect(accountInvitations.send).not.toHaveBeenCalled();
+  });
+
+  it('emails a new client account invitation after approval commits', async () => {
+    prisma.tx.profile.findFirst.mockResolvedValue(null);
+
+    const result = await service.approve('inquiry-1', pmUser, {});
+
+    expect(accountInvitations.send).toHaveBeenCalledWith({
+      email: 'casey@example.com',
+      contactName: 'Casey Client',
+      companyName: 'Acme Co',
+      inquiryId: 'inquiry-1',
+      projectId: 'project-1',
+    });
+    expect(result.accountInvitation.status).toBe('SENT');
   });
 
   it('rejects an inquiry with reviewer metadata', async () => {

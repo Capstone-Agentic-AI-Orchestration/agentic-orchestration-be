@@ -642,6 +642,29 @@ export class ProjectsController {
     return this.projectsService.findTimeline(id, user, page);
   }
 
+  /**
+   * Promotes a discovery workspace into a delivery project.
+   *
+   * Accepting an inquiry opens discovery so the PM can talk to the client and gather documents;
+   * this is the separate, deliberate act of committing to build.
+   */
+  @Post(':id/start-delivery')
+  @Roles(UserRole.PM, UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  startDelivery(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.runIdempotent(
+      idempotencyKey,
+      `user:${user.id}:POST:/projects/${id}/start-delivery`,
+      { id },
+      HttpStatus.OK,
+      () => this.projectsService.startDelivery(id, user),
+    );
+  }
+
   @Post(':id/orchestration/start')
   @Roles(UserRole.PM, UserRole.ADMIN)
   @HttpCode(HttpStatus.ACCEPTED)

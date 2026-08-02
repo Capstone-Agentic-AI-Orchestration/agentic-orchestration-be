@@ -28,6 +28,17 @@ export class CreateProjectDto {
   @MinLength(1)
   groupId?: string;
 
+  /**
+   * The client company this project is for.
+   *
+   * Optional so a project is never blocked at creation, but a project without one is flagged as
+   * unassigned in the console until it is linked.
+   */
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  clientId?: string;
+
   @ValidateIf((input: CreateProjectDto) => Boolean(input.groupId) || Boolean(input.repositoryName))
   @IsString()
   @MinLength(1)
