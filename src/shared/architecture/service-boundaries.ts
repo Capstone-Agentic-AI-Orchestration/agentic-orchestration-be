@@ -169,7 +169,7 @@ export interface IntegrationEventRegistryViolation {
 export const serviceBoundarySourceDirectories: Record<ServiceBoundary, string[]> = {
   identity: ['auth', 'profiles', 'developers'],
   intake: ['inquiries', 'client-invites', 'intake'],
-  'project-delivery': ['projects', 'reports', 'schedule', 'groups', 'repositories'],
+  'project-delivery': ['projects', 'reports', 'schedule', 'groups', 'clients', 'repositories'],
   collaboration: ['collaboration'],
   notifications: ['notifications'],
   orchestration: ['orchestration', 'supervisor', 'memory', 'context-memory', 'gateway', 'agent-repo'],
@@ -283,6 +283,8 @@ const allowedRawOffsetPaginationFiles = new Set([
 ]);
 export const prismaModelOwners: Record<string, PrismaModelOwner> = {
   project: 'project-delivery',
+  client: 'project-delivery',
+  clientContact: 'project-delivery',
   clientInquiry: 'intake',
   clientInvite: 'intake',
   projectIntake: 'intake',
@@ -330,6 +332,8 @@ export const prismaModelOwners: Record<string, PrismaModelOwner> = {
 
 export const prismaModelSchemas: Record<string, string> = {
   project: 'projects',
+  client: 'projects',
+  clientContact: 'projects',
   clientInquiry: 'intake',
   clientInvite: 'intake',
   projectIntake: 'intake',
@@ -395,6 +399,8 @@ export const allowedCrossBoundaryPrismaModels: Partial<Record<ServiceBoundary, C
     crossBoundaryPrismaException('clientInquiry', 'Client approval gate checks for an approved inquiry before activating a new client at sign-in.', 'Intake approval lookup API.'),
   ],
   intake: [
+    crossBoundaryPrismaException('client', 'Inquiry approval resolves or creates the client company the lead belongs to.', 'Project delivery client directory API.'),
+    crossBoundaryPrismaException('clientContact', 'Inquiry approval records the signed-up client as a contact of that company.', 'Project delivery client directory API.'),
     crossBoundaryPrismaException('collaborationDocument', 'Inquiry approval seeds the initial collaboration document.', 'Collaboration kickoff API.'),
     crossBoundaryPrismaException('profile', 'Inquiry approval links an existing client profile when available.', 'Identity profile lookup API.'),
     crossBoundaryPrismaException('project', 'Inquiry approval creates the project handoff aggregate.', 'Project delivery project creation API.'),

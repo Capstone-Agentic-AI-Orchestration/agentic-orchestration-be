@@ -498,6 +498,14 @@ export class ProjectsService {
     if (dto.repositoryName && !dto.groupId) {
       throw new BadRequestException('groupId is required when creating a repository');
     }
+    if (dto.clientId) {
+      const client = await this.prisma.client.findUnique({
+        where: { id: dto.clientId },
+        select: { id: true },
+      });
+      if (!client) throw new BadRequestException(`Client ${dto.clientId} not found`);
+    }
+
     const project = await this.prisma.project.create({
       data: {
         companyName: dto.companyName,
@@ -505,6 +513,8 @@ export class ProjectsService {
         stackKey: dto.stackKey,
         createdById: user.id,
         groupId: dto.groupId,
+        // Nullable by design: an unlinked project is flagged as unassigned, never rejected.
+        clientId: dto.clientId ?? null,
       },
     });
 
@@ -559,6 +569,9 @@ export class ProjectsService {
         stackKey: true,
         createdById: true,
         runId: true,
+        client: {
+          select: { id: true, name: true, status: true },
+        },
         workOrders: {
           where: {
             status: WorkOrderStatus.READY,
@@ -857,6 +870,9 @@ export class ProjectsService {
         updatedAt: true,
         groupId: true,
         runId: true,
+        client: {
+          select: { id: true, name: true, status: true },
+        },
         kickoff: {
           select: {
             status: true,

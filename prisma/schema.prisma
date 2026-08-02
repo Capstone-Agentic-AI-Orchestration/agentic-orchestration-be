@@ -12,9 +12,67 @@ datasource db {
   relationMode  = "prisma"
 }
 
+enum ClientStatus {
+  PROSPECT
+  ACTIVE
+  ARCHIVED
+
+  @@schema("projects")
+}
+
+/// An external client company. Distinct from Group, which is an internal delivery team.
+///
+/// Before this existed a client was only ever a free-text Project.companyName, so there was no
+/// stable thing to hang a client page off and no way to tell that two projects belonged to the
+/// same company. Project.clientId is intentionally nullable: an unlinked project is surfaced as
+/// "unassigned" in the console rather than blocked at creation.
+model Client {
+  id                  String          @id @default(cuid())
+  name                String
+  status              ClientStatus    @default(ACTIVE)
+  primaryContactName  String?
+  primaryContactEmail String?
+  notes               String?         @db.Text
+  createdById         String?         @db.Uuid
+  createdBy           Profile?        @relation("ClientCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  projects            Project[]
+  contacts            ClientContact[]
+  inquiries           ClientInquiry[]
+
+  @@index([status, name])
+  @@index([createdById])
+  @@map("clients")
+  @@schema("projects")
+}
+
+/// A person who belongs to a client company.
+///
+/// This is a DIRECTORY relationship, not an access grant. Project access is still decided solely
+/// by ProjectMember, so a contact can be listed here and still be unable to open any project —
+/// the console must show that plainly rather than implying access it does not confer.
+model ClientContact {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  profileId String   @db.Uuid
+  profile   Profile  @relation("ClientContactProfile", fields: [profileId], references: [id], onDelete: Cascade)
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([clientId, profileId])
+  @@index([profileId])
+  @@map("client_contacts")
+  @@schema("projects")
+}
+
 model Project {
   id          String          @id @default(cuid())
   companyName String
+  clientId    String?
+  client      Client?         @relation(fields: [clientId], references: [id], onDelete: SetNull)
   brief       String          @db.Text
   stackKey    String
   status      ProjectStatus   @default(PENDING)
@@ -52,6 +110,7 @@ model Project {
 
   @@index([createdById])
   @@index([groupId])
+  @@index([clientId])
   @@index([id, version])
   @@schema("projects")
 }
@@ -81,6 +140,10 @@ model ClientInquiry {
   reviewedBy        Profile?      @relation("InquiryReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   reviewedAt        DateTime?
   approvedProjectId String?
+  // Records which client this lead resolved to, so a second inquiry from the same company can
+  // attach to the existing client instead of silently creating a duplicate.
+  clientId          String?
+  client            Client?       @relation(fields: [clientId], references: [id], onDelete: SetNull)
   clientInvite      ClientInvite?
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
@@ -88,6 +151,7 @@ model ClientInquiry {
   @@index([status, createdAt])
   @@index([email])
   @@index([reviewedById])
+  @@index([clientId])
   @@map("client_inquiries")
   @@schema("intake")
 }
@@ -427,6 +491,8 @@ model Profile {
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
   createdProjects Project[]       @relation("ProjectCreatedBy")
+  createdClients  Client[]        @relation("ClientCreatedBy")
+  clientContacts  ClientContact[] @relation("ClientContactProfile")
   memberships     ProjectMember[]
   assignedTasks    ProjectTask[]   @relation("TaskAssignee")
   createdTasks     ProjectTask[]   @relation("TaskCreator")

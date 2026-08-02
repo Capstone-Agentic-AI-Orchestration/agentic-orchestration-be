@@ -49,6 +49,11 @@ function makePrismaMock() {
       update: vi.fn().mockResolvedValue({ id: 'project-1' }),
       updateMany: vi.fn(),
     },
+    client: {
+      // Defaults to "found" so existing tests that pass a clientId are not tripped by the
+      // existence check; tests that care set their own value.
+      findUnique: vi.fn().mockResolvedValue({ id: 'client-1' }),
+    },
     profile: {
       findFirst: vi.fn(),
       findUniqueOrThrow: vi.fn().mockResolvedValue({
@@ -230,9 +235,46 @@ describe('ProjectsService', () => {
         brief: 'Build a delivery dashboard',
         stackKey: 'nextjs-nestjs-supabase',
         createdById: pmUser.id,
+        // Written explicitly: a project with no client is a supported, flagged state rather
+        // than an omission, and the console surfaces it as unassigned.
+        clientId: null,
       },
     });
     expect(orchestration.startRun).not.toHaveBeenCalled();
+  });
+
+  it('create rejects a clientId that does not exist', async () => {
+    prisma.client.findUnique.mockResolvedValue(null);
+
+    await expect(
+      service.create(
+        {
+          companyName: 'Acme Logistics',
+          brief: 'Build a delivery dashboard',
+          stackKey: 'nextjs-nestjs-supabase',
+          clientId: 'missing-client',
+        },
+        pmUser,
+      ),
+    ).rejects.toThrow('Client missing-client not found');
+  });
+
+  it('create links the project to a client when one is supplied', async () => {
+    prisma.client.findUnique.mockResolvedValue({ id: 'client-1' });
+
+    await service.create(
+      {
+        companyName: 'Acme Logistics',
+        brief: 'Build a delivery dashboard',
+        stackKey: 'nextjs-nestjs-supabase',
+        clientId: 'client-1',
+      },
+      pmUser,
+    );
+
+    expect(prisma.project.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ clientId: 'client-1' }),
+    });
   });
 
   it('startOrchestration starts a run for an existing project without a runId', async () => {
@@ -637,6 +679,9 @@ describe('ProjectsService', () => {
         updatedAt: true,
         groupId: true,
         runId: true,
+        client: {
+          select: { id: true, name: true, status: true },
+        },
         kickoff: {
           select: {
             status: true,
@@ -693,6 +738,9 @@ describe('ProjectsService', () => {
         updatedAt: true,
         groupId: true,
         runId: true,
+        client: {
+          select: { id: true, name: true, status: true },
+        },
         kickoff: {
           select: {
             status: true,
