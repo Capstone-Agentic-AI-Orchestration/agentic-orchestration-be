@@ -54,6 +54,9 @@ function makePrismaMock() {
       // existence check; tests that care set their own value.
       findUnique: vi.fn().mockResolvedValue({ id: 'client-1' }),
     },
+    clientInquiry: {
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+    },
     profile: {
       findFirst: vi.fn(),
       findUniqueOrThrow: vi.fn().mockResolvedValue({
@@ -275,6 +278,64 @@ describe('ProjectsService', () => {
     expect(prisma.project.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ clientId: 'client-1' }),
     });
+  });
+
+  it('refuses orchestration while a project is still in discovery', async () => {
+    prisma.project.findFirst.mockResolvedValue({
+      id: 'project-1',
+      companyName: 'Acme Logistics',
+      brief: 'Build a delivery dashboard',
+      stackKey: 'nextjs-nestjs-supabase',
+      runId: null,
+      kickoff: { status: ProjectKickoffStatus.READY },
+      workOrders: [{ instructions: 'Build the first dashboard shell.' }],
+    });
+    prisma.project.findUnique.mockResolvedValue({ status: ProjectStatus.DISCOVERY });
+
+    // Discovery exists so the PM can agree scope and gather documents first; a run started from
+    // that state would spend the client's budget on a brief nobody has agreed.
+    await expect(service.startOrchestration('project-1', pmUser)).rejects.toThrow(
+      'still in discovery',
+    );
+    expect(orchestration.startRun).not.toHaveBeenCalled();
+  });
+
+  it('startDelivery promotes a discovery project and approves its inquiry', async () => {
+    prisma.project.findFirst.mockResolvedValue({ id: 'project-1' });
+    prisma.project.findUnique.mockResolvedValue({
+      id: 'project-1',
+      status: ProjectStatus.DISCOVERY,
+      companyName: 'Acme Logistics',
+    });
+    prisma.project.update.mockResolvedValue({
+      id: 'project-1',
+      status: ProjectStatus.PENDING,
+      companyName: 'Acme Logistics',
+    });
+
+    await expect(service.startDelivery('project-1', pmUser)).resolves.toMatchObject({
+      status: ProjectStatus.PENDING,
+    });
+    expect(prisma.project.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: { status: ProjectStatus.PENDING },
+    }));
+    // The inquiry this came from now genuinely counts as approved.
+    expect(prisma.clientInquiry.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: { status: 'APPROVED' },
+    }));
+  });
+
+  it('startDelivery refuses a project that already left discovery', async () => {
+    prisma.project.findFirst.mockResolvedValue({ id: 'project-1' });
+    prisma.project.findUnique.mockResolvedValue({
+      id: 'project-1',
+      status: ProjectStatus.PENDING,
+      companyName: 'Acme Logistics',
+    });
+
+    await expect(service.startDelivery('project-1', pmUser)).rejects.toThrow(
+      'Delivery has already started',
+    );
   });
 
   it('startOrchestration starts a run for an existing project without a runId', async () => {

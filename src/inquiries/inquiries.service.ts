@@ -13,6 +13,14 @@ import {
 import { CreateInquiryDto } from './dto/create-inquiry.dto';
 import { ReviewInquiryDto } from './dto/review-inquiry.dto';
 import { IntakeRepository, type InquiryWithReviewer } from './intake.repository';
+import {
+  ClientAccountInvitationService,
+  type AccountInvitationDelivery,
+} from './client-account-invitation.service';
+
+export type InquiryApprovalResult = InquiryWithReviewer & {
+  accountInvitation: AccountInvitationDelivery;
+};
 
 @Injectable()
 export class InquiriesService {
@@ -20,6 +28,7 @@ export class InquiriesService {
     private readonly intakeRepository: IntakeRepository,
     private readonly notifications: NotificationsService,
     private readonly outbox: OutboxService,
+    private readonly accountInvitations: ClientAccountInvitationService,
   ) {}
 
   async create(dto: CreateInquiryDto): Promise<InquiryWithReviewer> {
@@ -79,7 +88,7 @@ export class InquiriesService {
     id: string,
     user: AuthUser,
     dto: ReviewInquiryDto,
-  ): Promise<InquiryWithReviewer> {
+  ): Promise<InquiryApprovalResult> {
     const inquiry = await this.findOne(id);
     if (inquiry.status !== InquiryStatus.NEW) {
       throw new BadRequestException(`Inquiry ${id} has already been reviewed`);
@@ -130,7 +139,44 @@ export class InquiriesService {
       metadata: { inquiryId: result.inquiry.id, approvedProjectId: result.projectId },
     });
 
-    return result.inquiry;
+    const accountInvitation = result.clientProfileId
+      ? {
+          status: 'EXISTING_ACCOUNT' as const,
+          email: result.inquiry.email,
+          message: 'The client already has an account and can sign in directly.',
+        }
+      : await this.accountInvitations.send({
+          email: result.inquiry.email,
+          contactName: result.inquiry.contactName,
+          companyName: result.inquiry.companyName,
+          inquiryId: result.inquiry.id,
+          projectId: result.projectId,
+        });
+
+    return { ...result.inquiry, accountInvitation };
+  }
+
+  async sendAccountInvitation(id: string): Promise<AccountInvitationDelivery> {
+    const inquiry = await this.findOne(id);
+    if (inquiry.status !== InquiryStatus.APPROVED || !inquiry.clientInvite) {
+      throw new BadRequestException(`Inquiry ${id} is not an approved client invitation`);
+    }
+
+    if (inquiry.clientInvite.status === 'ACCEPTED') {
+      return {
+        status: 'EXISTING_ACCOUNT',
+        email: inquiry.email,
+        message: 'The client already accepted this account invitation.',
+      };
+    }
+
+    return this.accountInvitations.send({
+      email: inquiry.email,
+      contactName: inquiry.contactName,
+      companyName: inquiry.companyName,
+      inquiryId: inquiry.id,
+      projectId: inquiry.clientInvite.projectId,
+    });
   }
 
   async reject(

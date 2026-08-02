@@ -162,7 +162,9 @@ export class IntakeRepository {
         clientId,
         brief: inquiry.brief,
         stackKey: inquiry.stackKey,
-        status: ProjectStatus.PENDING,
+        // Accepted, but not delivery work yet. The PM talks to the client and collects
+        // documents in this workspace first; promoting to PENDING is a separate, explicit act.
+        status: ProjectStatus.DISCOVERY,
         createdById: actorId,
       },
     });
@@ -218,7 +220,7 @@ export class IntakeRepository {
         actorId,
         type: ProjectTimelineEventType.PROJECT_CREATED,
         visibility: ProjectTimelineVisibility.TEAM,
-        title: 'Project created from inquiry',
+        title: 'Discovery opened from inquiry',
         body: inquiry.companyName,
         metadata: { inquiryId: inquiry.id, stackKey: inquiry.stackKey },
       },
@@ -227,7 +229,7 @@ export class IntakeRepository {
     const conversation = await tx.projectConversation.create({
       data: {
         projectId: project.id,
-        title: 'Client onboarding',
+        title: 'Discovery',
         category: ConversationCategory.SUPPORT,
         visibility: CollaborationVisibility.CLIENT,
         createdById: actorId,
@@ -264,7 +266,8 @@ export class IntakeRepository {
     const approvedInquiry = await tx.clientInquiry.update({
       where: { id: inquiry.id },
       data: {
-        status: InquiryStatus.APPROVED,
+        // Not APPROVED: that now means delivery has started. This lead is in conversation.
+        status: InquiryStatus.IN_DISCOVERY,
         reviewNote,
         reviewedAt,
         reviewedById: actorId,

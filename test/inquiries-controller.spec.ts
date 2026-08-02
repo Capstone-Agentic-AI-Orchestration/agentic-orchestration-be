@@ -19,6 +19,7 @@ describe('InquiriesController idempotency', () => {
     findAll: ReturnType<typeof vi.fn>;
     approve: ReturnType<typeof vi.fn>;
     reject: ReturnType<typeof vi.fn>;
+    sendAccountInvitation: ReturnType<typeof vi.fn>;
   };
   let idempotency: {
     requestHash: ReturnType<typeof vi.fn>;
@@ -32,6 +33,11 @@ describe('InquiriesController idempotency', () => {
       findAll: vi.fn().mockResolvedValue([]),
       approve: vi.fn().mockResolvedValue({ id: 'inquiry-1', status: 'APPROVED' }),
       reject: vi.fn().mockResolvedValue({ id: 'inquiry-1', status: 'REJECTED' }),
+      sendAccountInvitation: vi.fn().mockResolvedValue({
+        status: 'SENT',
+        email: 'casey@example.com',
+        message: 'The client account invitation email was sent.',
+      }),
     };
     idempotency = {
       requestHash: vi.fn().mockReturnValue('hash-1'),
@@ -113,5 +119,30 @@ describe('InquiriesController idempotency', () => {
       pmUser,
       { reviewNote: 'Looks good.' },
     );
+  });
+
+  it('lets a PM resend the account email for an approved inquiry', async () => {
+    idempotency.run = vi.fn(async ({ handler }) => ({
+      fromCache: false,
+      responseStatus: HttpStatus.OK,
+      body: await handler(),
+    }));
+
+    await expect(
+      controller.sendAccountInvitation('inquiry-1', pmUser, 'request-key-2'),
+    ).resolves.toEqual({
+      status: 'SENT',
+      email: 'casey@example.com',
+      message: 'The client account invitation email was sent.',
+    });
+
+    expect(idempotency.run).toHaveBeenCalledWith(expect.objectContaining({
+      key: 'request-key-2',
+      scope: `user:${pmUser.id}:POST:/inquiries/inquiry-1/send-account-invite`,
+      requestHash: 'hash-1',
+      responseStatus: HttpStatus.OK,
+      handler: expect.any(Function),
+    }));
+    expect(inquiries.sendAccountInvitation).toHaveBeenCalledWith('inquiry-1');
   });
 });

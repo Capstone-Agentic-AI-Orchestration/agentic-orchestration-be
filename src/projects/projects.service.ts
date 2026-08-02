@@ -13,7 +13,7 @@ import {
   OrchestrationStatus,
 } from '../orchestration/orchestration.service';
 import { CreateProjectDto } from './dto/create-project.dto';
-import { ArtifactOutputReviewStatus, ArtifactReviewStatus, ArtifactValidationStatus, ClientInviteStatus, CollaborationDocumentStatus, NotificationType, OrchestrationRunTrigger, ProjectDeliveryReview, ProjectDeliveryReviewStatus, ProjectStatus, ProjectTimelineEvent, ProjectTimelineEventType, ProjectTimelineVisibility, ProjectTaskActivity, ProjectTaskActivityType, ProjectTaskStatus, Project, GateEvent, Artifact, EventLog, Prisma, ProjectKickoff, ProjectKickoffStatus, ProjectTask, RepositoryKind, RepositoryStatus, UserRole, WorkOrder, WorkOrderAgentType, WorkOrderPriority, WorkOrderStatus } from '@prisma/client';
+import { ArtifactOutputReviewStatus, ArtifactReviewStatus, ArtifactValidationStatus, ClientInviteStatus, CollaborationDocumentStatus, InquiryStatus, NotificationType, OrchestrationRunTrigger, ProjectDeliveryReview, ProjectDeliveryReviewStatus, ProjectStatus, ProjectTimelineEvent, ProjectTimelineEventType, ProjectTimelineVisibility, ProjectTaskActivity, ProjectTaskActivityType, ProjectTaskStatus, Project, GateEvent, Artifact, EventLog, Prisma, ProjectKickoff, ProjectKickoffStatus, ProjectTask, RepositoryKind, RepositoryStatus, UserRole, WorkOrder, WorkOrderAgentType, WorkOrderPriority, WorkOrderStatus } from '@prisma/client';
 import { AuthUser } from '../auth/auth.types';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { AddProjectMemberDto } from './dto/project-member.dto';
@@ -587,6 +587,8 @@ export class ProjectsService {
       throw new NotFoundException(`Project ${id} not found`);
     }
 
+    await this.assertDeliveryStarted(id);
+
     if (project.runId) {
       return { accepted: true, runId: project.runId };
     }
@@ -627,6 +629,68 @@ export class ProjectsService {
   }
 
   /**
+   * Refuses orchestration while a project is still in discovery.
+   *
+   * Discovery exists so the PM can talk to the client and gather documents before committing to
+   * a build. Letting a run start from that state would defeat the point and would consume the
+   * client's budget on a brief nobody has agreed yet.
+   */
+  private async assertDeliveryStarted(id: string): Promise<void> {
+    const project = await this.prisma.project.findUnique({
+      where: { id },
+      select: { status: true },
+    });
+    if (project?.status === ProjectStatus.DISCOVERY) {
+      throw new BadRequestException(
+        'This project is still in discovery. Start delivery once you have agreed the scope and ' +
+          'collected the documents you need.',
+      );
+    }
+  }
+
+  /**
+   * Promotes a discovery workspace into a delivery project.
+   *
+   * The deliberate hand-off between "we are talking to this client" and "we are building this":
+   * everything gathered during discovery - the conversation, documents and intake - carries over
+   * untouched, because it was always attached to this same project.
+   */
+  async startDelivery(id: string, user: AuthUser) {
+    await this.assertAccessible(id, user);
+    const project = await this.prisma.project.findUnique({
+      where: { id },
+      select: { id: true, status: true, companyName: true },
+    });
+    if (!project) throw new NotFoundException(`Project ${id} not found`);
+
+    if (project.status !== ProjectStatus.DISCOVERY) {
+      throw new BadRequestException('Delivery has already started for this project.');
+    }
+
+    const updated = await this.prisma.project.update({
+      where: { id },
+      data: { status: ProjectStatus.PENDING },
+      select: { id: true, status: true, companyName: true },
+    });
+
+    // The inquiry this came from, if any, now genuinely counts as approved.
+    await this.prisma.clientInquiry.updateMany({
+      where: { approvedProjectId: id, status: InquiryStatus.IN_DISCOVERY },
+      data: { status: InquiryStatus.APPROVED },
+    });
+
+    await this.recordTimelineEvent(id, user, {
+      type: ProjectTimelineEventType.PROJECT_CREATED,
+      visibility: ProjectTimelineVisibility.TEAM,
+      title: 'Delivery started',
+      body: `${project.companyName} moved out of discovery.`,
+    });
+
+    this.logger.log(`Project ${id} promoted from discovery to delivery`);
+    return updated;
+  }
+
+  /**
    * Developer-initiated orchestration start. Unlike {@link startOrchestration}
    * (which requires a completed PM kickoff + READY work orders), this only needs
    * the project's GitHub repository to be provisioned. The developer's prompt
@@ -653,6 +717,9 @@ export class ProjectsService {
     if (!project) {
       throw new NotFoundException(`Project ${id} not found`);
     }
+
+    await this.assertDeliveryStarted(id);
+
     if (project.runId) {
       return { accepted: true, runId: project.runId };
     }

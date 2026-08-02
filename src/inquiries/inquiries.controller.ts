@@ -124,4 +124,23 @@ export class InquiriesController {
       handler: () => this.inquiriesService.reject(id, user, dto),
     });
   }
+
+  @Post(':id/send-account-invite')
+  @Roles(UserRole.PM, UserRole.ADMIN)
+  @UseGuards(SupabaseAuthGuard, RolesGuard)
+  @HttpCode(HttpStatus.OK)
+  sendAccountInvitation(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return executeIdempotentCommand({
+      idempotency: this.idempotency,
+      idempotencyKey,
+      scope: `user:${user.id}:POST:/inquiries/${id}/send-account-invite`,
+      requestPayload: { id },
+      responseStatus: HttpStatus.OK,
+      handler: () => this.inquiriesService.sendAccountInvitation(id),
+    });
+  }
 }

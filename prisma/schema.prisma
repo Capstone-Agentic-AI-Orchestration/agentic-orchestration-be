@@ -117,6 +117,8 @@ model Project {
 
 enum InquiryStatus {
   NEW
+  /// Accepted and in conversation with the client, but delivery has not started.
+  IN_DISCOVERY
   APPROVED
   REJECTED
 
@@ -398,6 +400,9 @@ enum ArtifactValidationStatus {
 }
 
 enum ProjectStatus {
+  /// Accepted lead, before any delivery work starts. The PM is still talking to the client and
+  /// collecting documents; orchestration is refused until the project is promoted to PENDING.
+  DISCOVERY
   PENDING
   PARSING_REQUIREMENTS
   NEGOTIATING_CONTRACT
