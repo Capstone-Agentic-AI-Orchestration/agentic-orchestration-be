@@ -1,8 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   ClientInquiry,
   ClientInvite,
   ClientInviteStatus,
+  ClientStatus,
   CollaborationDocumentKind,
   CollaborationDocumentStatus,
   CollaborationVisibility,
@@ -22,6 +23,7 @@ import {
   hasCursorPage,
 } from '../shared/pagination/cursor-pagination';
 import { CreateInquiryDto } from './dto/create-inquiry.dto';
+import { isPlaceholderClientName, resolveClientNameForInquiry } from '../clients/client-name';
 
 export type InquiryWithReviewer = ClientInquiry & {
   reviewedBy: {
@@ -123,12 +125,41 @@ export class IntakeRepository {
       actorId: string;
       reviewNote: string | null;
       reviewedAt: Date;
+      /**
+       * The client this lead belongs to. The PM picks an existing client when the console
+       * suggests a match, so a repeat customer's second project lands under the client they
+       * already have. Omitted means "resolve or create by company name".
+       */
+      clientId?: string | null;
+      /** Name to create the client under when no existing client is chosen. */
+      clientName?: string | null;
     },
-  ): Promise<{ inquiry: InquiryWithReviewer; projectId: string; clientProfileId: string | null }> {
+  ): Promise<{
+    inquiry: InquiryWithReviewer;
+    projectId: string;
+    clientProfileId: string | null;
+    clientId: string;
+  }> {
     const { inquiry, actorId, reviewNote, reviewedAt } = input;
+    const client = await this.resolveClientId(tx, {
+      clientId: input.clientId ?? null,
+      clientName: input.clientName ?? null,
+      companyName: inquiry.companyName,
+      contactName: inquiry.contactName,
+      email: inquiry.email,
+      actorId,
+    });
+    const clientId = client.id;
+    // A lead from the marketing call-to-action carries a placeholder company; naming the project
+    // after the resolved client keeps "TBD" out of every surface that reads companyName directly.
+    const projectName = isPlaceholderClientName(inquiry.companyName)
+      ? client.name
+      : inquiry.companyName;
+
     const project = await tx.project.create({
       data: {
-        companyName: inquiry.companyName,
+        companyName: projectName,
+        clientId,
         brief: inquiry.brief,
         stackKey: inquiry.stackKey,
         status: ProjectStatus.PENDING,
@@ -238,15 +269,93 @@ export class IntakeRepository {
         reviewedAt,
         reviewedById: actorId,
         approvedProjectId: project.id,
+        clientId,
       },
       include: reviewerInclude,
     });
+
+    // Record the signed-up client as a contact of the company, so the client page lists who it
+    // is dealing with. This is directory data only — project access still comes from the
+    // ProjectMember row created above.
+    if (clientProfile) {
+      await tx.clientContact.upsert({
+        where: { clientId_profileId: { clientId, profileId: clientProfile.id } },
+        update: {},
+        create: { clientId, profileId: clientProfile.id, isPrimary: true },
+      });
+    }
 
     return {
       inquiry: approvedInquiry,
       projectId: project.id,
       clientProfileId: clientProfile?.id ?? null,
+      clientId,
     };
+  }
+
+  /**
+   * Picks the client a newly approved inquiry belongs to.
+   *
+   * An explicit id from the console always wins — that is the PM confirming a suggested match.
+   * Otherwise a usable name is resolved case-insensitively, so "Acme" and "acme" converge on one
+   * client instead of creating the duplicates this entity exists to prevent.
+   *
+   * Placeholder names are refused outright. The marketing call-to-action form collects only an
+   * email and a brief, so it sends a stand-in company; accepting it would create a client
+   * literally named "TBD" and then file every later placeholder lead under that same fake
+   * company. Where the lead used a work email the name is derived from its domain instead, and
+   * where even that is impossible the PM is asked to supply one.
+   */
+  private async resolveClientId(
+    tx: Prisma.TransactionClient,
+    input: {
+      clientId: string | null;
+      clientName: string | null;
+      companyName: string;
+      contactName: string;
+      email: string;
+      actorId: string;
+    },
+  ): Promise<{ id: string; name: string }> {
+    if (input.clientId) {
+      const chosen = await tx.client.findUnique({
+        where: { id: input.clientId },
+        select: { id: true, name: true },
+      });
+      if (!chosen) throw new NotFoundException(`Client ${input.clientId} not found`);
+      return chosen;
+    }
+
+    const name = resolveClientNameForInquiry({
+      explicitName: input.clientName,
+      companyName: input.companyName,
+      email: input.email,
+    });
+
+    if (!name) {
+      throw new BadRequestException(
+        `"${input.companyName}" is a placeholder, not a company name, and one cannot be derived ` +
+          'from the contact email. Choose an existing client or supply clientName when approving ' +
+          'this inquiry.',
+      );
+    }
+
+    const existing = await tx.client.findFirst({
+      where: { name: { equals: name, mode: 'insensitive' } },
+      select: { id: true, name: true },
+    });
+    if (existing) return existing;
+
+    return tx.client.create({
+      data: {
+        name,
+        status: ClientStatus.ACTIVE,
+        primaryContactName: input.contactName,
+        primaryContactEmail: input.email.toLowerCase(),
+        createdById: input.actorId,
+      },
+      select: { id: true, name: true },
+    });
   }
 
   rejectInquiry(

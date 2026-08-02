@@ -56,6 +56,16 @@ function makePrismaMock() {
     project: {
       create: vi.fn().mockResolvedValue({ id: 'project-1' }),
     },
+    // Approval resolves the client company the lead belongs to. Defaults to "no existing match"
+    // so the handoff exercises the create path; tests that need a match override findFirst.
+    client: {
+      findUnique: vi.fn().mockResolvedValue({ id: 'client-1' }),
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({ id: 'client-1' }),
+    },
+    clientContact: {
+      upsert: vi.fn().mockResolvedValue({ id: 'contact-1' }),
+    },
     profile: {
       findFirst: vi.fn().mockResolvedValue({ id: '22222222-2222-4222-8222-222222222222' }),
     },
