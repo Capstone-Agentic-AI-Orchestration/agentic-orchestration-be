@@ -45,6 +45,22 @@ import { executeIdempotentCommand } from '../shared/idempotency/idempotent-comma
 import { IdempotencyService } from '../shared/idempotency/idempotency.service';
 import { CursorPageInput } from '../shared/pagination/cursor-pagination';
 
+/**
+ * Role split between the two staff consoles.
+ *
+ * The **developer builds**: prompting, kickoff/setup, tasks, work orders, orchestration
+ * control and both approval gates are DEV + ADMIN. The **PM runs the engagement**:
+ * creating the project, provisioning its repository, managing members, and everything
+ * client-facing (artifacts, delivery review, messages, documents).
+ *
+ * PMs keep GET access to the build surface so they can report on progress — the split is
+ * on writes, not reads. Two routes look like build actions but are deliberately PM's:
+ * `POST /projects` and `POST :id/start-delivery`, which is the commercial decision to
+ * commit to building, not a build step.
+ *
+ * These decorators are the authoritative enforcement. Hiding a button in the frontend is
+ * presentation only; anything not listed here is still reachable with a bearer token.
+ */
 @Controller('projects')
 @UseGuards(SupabaseAuthGuard, RolesGuard)
 export class ProjectsController {
@@ -106,8 +122,11 @@ export class ProjectsController {
     return this.projectsService.findOrchestrationModelDefaults(user);
   }
 
+  // Choosing the models a run uses is part of prompting, so it follows the build to DEV.
+  // The matching GETs stay open to PM: seeing which model produced an artifact is
+  // reporting, not building.
   @Patch('orchestration/model-defaults')
-  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @UsePipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true }))
   updateOrchestrationModelDefaults(
     @Body() dto: OrchestrationModelSelectionDto,
@@ -414,14 +433,16 @@ export class ProjectsController {
     return this.projectsService.findTasks(id, user, page);
   }
 
+  // Readable by the PM so they can report on delivery progress; only the developer
+  // running the build may change it. See the role-split note at the top of this class.
   @Get(':id/kickoff')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
   findKickoff(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.projectsService.findKickoff(id, user);
   }
 
   @Patch(':id/kickoff')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   updateKickoff(
     @Param('id') id: string,
@@ -439,7 +460,7 @@ export class ProjectsController {
   }
 
   @Post(':id/kickoff/tasks')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.CREATED)
   createKickoffTasks(
     @Param('id') id: string,
@@ -456,7 +477,7 @@ export class ProjectsController {
   }
 
   @Post(':id/kickoff/work-orders')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.CREATED)
   createKickoffWorkOrders(
     @Param('id') id: string,
@@ -473,7 +494,7 @@ export class ProjectsController {
   }
 
   @Post(':id/tasks')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   createTask(
     @Param('id') id: string,
@@ -491,7 +512,7 @@ export class ProjectsController {
   }
 
   @Patch(':id/tasks/:taskId')
-  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   updateTask(
     @Param('id') id: string,
@@ -550,7 +571,7 @@ export class ProjectsController {
   }
 
   @Post(':id/work-orders')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   createWorkOrder(
     @Param('id') id: string,
@@ -568,7 +589,7 @@ export class ProjectsController {
   }
 
   @Patch(':id/work-orders/:workOrderId')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   updateWorkOrder(
     @Param('id') id: string,
@@ -587,7 +608,7 @@ export class ProjectsController {
   }
 
   @Post(':id/work-orders/:workOrderId/dispatch')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.ACCEPTED)
   dispatchWorkOrder(
     @Param('id') id: string,
@@ -605,7 +626,7 @@ export class ProjectsController {
   }
 
   @Post(':id/work-orders/:workOrderId/retry')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.ACCEPTED)
   retryWorkOrder(
     @Param('id') id: string,
@@ -666,7 +687,7 @@ export class ProjectsController {
   }
 
   @Post(':id/orchestration/start')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.ACCEPTED)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   startOrchestration(
@@ -678,9 +699,11 @@ export class ProjectsController {
   }
 
   // Developer-initiated start: the prompt is the build requirement and starts the
-  // run once the repo is provisioned (no PM kickoff required).
+  // run once the repo is provisioned (no PM kickoff required). Prompting is the
+  // developer's job by design — the PM provisions the repository and approves nothing
+  // here, so PM was removed from this route rather than left as a second way in.
   @Post(':id/orchestration/start-from-prompt')
-  @Roles(UserRole.DEV, UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.ACCEPTED)
   startOrchestrationFromPrompt(
     @Param('id') id: string,
@@ -725,28 +748,28 @@ export class ProjectsController {
   }
 
   @Post(':id/orchestration/github-delivery/verify')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   verifyOrchestrationGithubDelivery(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.projectsService.verifyOrchestrationGithubDelivery(id, user);
   }
 
   @Post(':id/orchestration/llm-provider/verify')
-  @Roles(UserRole.PM, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   verifyOrchestrationLlmProvider(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.projectsService.verifyOrchestrationLlmProvider(id, user);
   }
 
   @Post(':id/orchestration/rerun-ready')
-  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.ACCEPTED)
   rerunReadyWorkOrders(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.projectsService.rerunReadyWorkOrders(id, user);
   }
 
   @Post(':id/orchestration/control')
-  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   controlOrchestration(
@@ -758,7 +781,7 @@ export class ProjectsController {
   }
 
   @Post(':id/gates/architecture')
-  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   approveGate1(
@@ -779,7 +802,7 @@ export class ProjectsController {
   }
 
   @Post(':id/gates/code')
-  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
+  @Roles(UserRole.DEV, UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   approveGate2(

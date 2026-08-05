@@ -2294,20 +2294,26 @@ export class ProjectsService {
       throw new NotFoundException(`Task ${taskId} not found`);
     }
 
-    const canManage = this.canManageProjects(user.role);
+    // Delivery work is owned by developers, so "can manage this task" is NOT
+    // canManageProjects (PM/ADMIN). Using that here would let a developer create a task via
+    // POST :id/tasks and then be unable to edit its own title or reassign it — the guard
+    // would admit them and the body would refuse. canManageDelivery is the matching
+    // predicate; canManageProjects still governs PM-only concerns like project membership
+    // and INTERNAL timeline visibility, which deliberately did not move.
+    const canManage = this.canManageDelivery(user.role);
     if (!canManage) {
       if (task.assignedToId !== user.id) {
         throw new NotFoundException(`Task ${taskId} not found`);
       }
 
-      const hasManagerOnlyFields =
+      const hasOwnerOnlyFields =
         dto.title !== undefined ||
         dto.description !== undefined ||
         dto.assignedToId !== undefined ||
         dto.artifactId !== undefined;
 
-      if (hasManagerOnlyFields) {
-        throw new BadRequestException('Developers can only update task status');
+      if (hasOwnerOnlyFields) {
+        throw new BadRequestException('Only the delivery team can change task details');
       }
     }
 
@@ -3805,7 +3811,20 @@ export class ProjectsService {
     };
   }
 
+  /** Owns the engagement: the project itself, its members, and client-facing delivery. */
   private canManageProjects(role: UserRole): boolean {
     return role === UserRole.PM || role === UserRole.ADMIN;
+  }
+
+  /**
+   * Owns the build: kickoff, tasks, work orders, orchestration and the approval gates.
+   *
+   * Kept separate from {@link canManageProjects} on purpose. The two answer different
+   * questions and only ADMIN is in both — collapsing them would either hand developers
+   * project membership and INTERNAL timeline events, or lock them out of the work they
+   * are now solely responsible for.
+   */
+  private canManageDelivery(role: UserRole): boolean {
+    return role === UserRole.DEV || role === UserRole.ADMIN;
   }
 }

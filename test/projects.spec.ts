@@ -2088,7 +2088,47 @@ describe('ProjectsService', () => {
     });
   });
 
-  it('updateTask rejects DEV edits to manager-owned fields', async () => {
+  // Delivery moved to the developer, so a DEV now owns task details outright. This used to
+  // assert the opposite ("Developers can only update task status") — with tasks created by
+  // developers, that rule left the author unable to edit the task they had just written.
+  it('updateTask lets a DEV change task details now that delivery is theirs', async () => {
+    prisma.project.findFirst.mockResolvedValue({ id: 'project-1' });
+    prisma.projectTask.findFirst.mockResolvedValue({
+      id: 'task-1',
+      assignedToId: devUser.id,
+      artifactId: null,
+      status: ProjectTaskStatus.TODO,
+    });
+    prisma.projectTask.update.mockResolvedValue({
+      id: 'task-1',
+      projectId: 'project-1',
+      artifactId: null,
+      title: 'Rename task',
+      description: null,
+      status: ProjectTaskStatus.TODO,
+      assignedToId: devUser.id,
+      createdById: devUser.id,
+      createdAt: new Date('2026-05-28T00:00:00.000Z'),
+      updatedAt: new Date('2026-05-28T00:00:00.000Z'),
+      assignedTo: null,
+      createdBy: null,
+      artifact: null,
+    });
+
+    await service.updateTask('project-1', 'task-1', devUser, { title: 'Rename task' });
+
+    expect(prisma.projectTask.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'task-1' },
+        data: expect.objectContaining({ title: 'Rename task' }),
+      }),
+    );
+  });
+
+  // The PM keeps read access to tasks for progress reporting, but no longer writes them.
+  // RolesGuard already refuses PM on PATCH :id/tasks/:taskId; this covers the service being
+  // called directly, so the two layers cannot drift into disagreeing.
+  it('updateTask refuses a PM editing task details', async () => {
     prisma.project.findFirst.mockResolvedValue({ id: 'project-1' });
     prisma.projectTask.findFirst.mockResolvedValue({
       id: 'task-1',
@@ -2098,10 +2138,8 @@ describe('ProjectsService', () => {
     });
 
     await expect(
-      service.updateTask('project-1', 'task-1', devUser, {
-        title: 'Rename task',
-      }),
-    ).rejects.toThrow('Developers can only update task status');
+      service.updateTask('project-1', 'task-1', pmUser, { title: 'Rename task' }),
+    ).rejects.toThrow('Task task-1 not found');
   });
 
   it('updateTask rejects stale versions without writing activity', async () => {

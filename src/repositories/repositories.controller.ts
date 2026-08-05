@@ -22,6 +22,15 @@ import { RepositoriesService } from './repositories.service';
 import { IdempotencyService } from '../shared/idempotency/idempotency.service';
 import { executeIdempotentCommand } from '../shared/idempotency/idempotent-command';
 
+/**
+ * Provisioning a project repository is the PM's job: it decides where a client's code
+ * lives and who may push to it, which is an engagement decision rather than a build step.
+ *
+ * The class-level @Roles is the READ baseline — developers need to see the repositories
+ * they work in. Every mutating route re-declares @Roles(PM, ADMIN) to override it, because
+ * RolesGuard resolves with getAllAndOverride: the handler decorator wins when present, and
+ * the class decorator applies only where a handler declares none.
+ */
 @Controller('repositories')
 @UseGuards(SupabaseAuthGuard, RolesGuard)
 @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
@@ -50,6 +59,7 @@ export class RepositoriesController {
   }
 
   @Post()
+  @Roles(UserRole.PM, UserRole.ADMIN)
   create(@Body() dto: CreateRepositoryDto, @CurrentUser() user: AuthUser, @Headers('idempotency-key') key?: string) {
     return this.runIdempotent(key, `user:${user.id}:POST:/repositories`, dto, HttpStatus.CREATED, () => this.repositories.create(dto, user));
   }
@@ -65,11 +75,13 @@ export class RepositoriesController {
   }
 
   @Post(':repositoryId/retry')
+  @Roles(UserRole.PM, UserRole.ADMIN)
   retry(@Param('repositoryId') repositoryId: string, @CurrentUser() user: AuthUser, @Headers('idempotency-key') key?: string) {
     return this.runIdempotent(key, `user:${user.id}:POST:/repositories/${repositoryId}/retry`, {}, HttpStatus.CREATED, () => this.repositories.retryProvisioning(repositoryId, user));
   }
 
   @Post(':repositoryId/archive')
+  @Roles(UserRole.PM, UserRole.ADMIN)
   archive(@Param('repositoryId') repositoryId: string, @CurrentUser() user: AuthUser, @Headers('idempotency-key') key?: string) {
     return this.runIdempotent(key, `user:${user.id}:POST:/repositories/${repositoryId}/archive`, {}, HttpStatus.CREATED, () => this.repositories.archive(repositoryId, user));
   }
@@ -80,6 +92,7 @@ export class RepositoriesController {
   }
 
   @Post(':repositoryId/assignments')
+  @Roles(UserRole.PM, UserRole.ADMIN)
   assign(
     @Param('repositoryId') repositoryId: string,
     @Body() dto: CreateRepositoryAssignmentDto,
@@ -90,6 +103,7 @@ export class RepositoriesController {
   }
 
   @Delete(':repositoryId/assignments/:userId')
+  @Roles(UserRole.PM, UserRole.ADMIN)
   revoke(
     @Param('repositoryId') repositoryId: string,
     @Param('userId') userId: string,
@@ -100,6 +114,7 @@ export class RepositoriesController {
   }
 
   @Post(':repositoryId/assignments/:userId/reconcile')
+  @Roles(UserRole.PM, UserRole.ADMIN)
   reconcile(
     @Param('repositoryId') repositoryId: string,
     @Param('userId') userId: string,
