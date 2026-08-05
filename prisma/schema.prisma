@@ -71,8 +71,17 @@ model ClientContact {
 model Project {
   id          String          @id @default(cuid())
   companyName String
-  clientId    String?
-  client      Client?         @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  /// Every project belongs to a client company — the client comes first, always.
+  ///
+  /// This was nullable, which let a project exist with nobody to deliver it to. Two
+  /// consequences followed: a whole "unassigned projects" mop-up screen had to exist, and any
+  /// surface that reads through to the client had to treat its absence as normal. Requiring it
+  /// removes the state rather than continuing to handle it.
+  ///
+  /// Restrict, not SetNull: nulling this out on client deletion is exactly the state the
+  /// non-null constraint forbids, so a client with projects cannot be deleted at all.
+  clientId    String
+  client      Client          @relation(fields: [clientId], references: [id], onDelete: Restrict)
   brief       String          @db.Text
   stackKey    String
   status      ProjectStatus   @default(PENDING)

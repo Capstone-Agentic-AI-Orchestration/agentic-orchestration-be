@@ -278,9 +278,24 @@ async function seed() {
   const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
   const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
 
+  // A project belongs to a client, so the seed creates the client first — the same order the
+  // console now enforces. Upserted rather than created so re-seeding does not accumulate
+  // duplicate demo clients.
+  const demoClient = await prisma.client.upsert({
+    where: { id: 'demo-client-devflow' },
+    update: {},
+    create: {
+      id: 'demo-client-devflow',
+      name: 'DevFlow Demo Co',
+      status: 'ACTIVE',
+      createdById: pm.id,
+    },
+  });
+
   await prisma.project.create({
     data: {
       id: projectId,
+      clientId: demoClient.id,
       companyName: 'DevFlow Demo Co',
       brief:
         'A seeded demo project for testing PM, Developer, and Client views with artifacts, tasks, notifications, timeline events, and work orders.',

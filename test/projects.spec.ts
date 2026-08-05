@@ -227,6 +227,7 @@ describe('ProjectsService', () => {
         companyName: 'Acme Logistics',
         brief: 'Build a delivery dashboard',
         stackKey: 'nextjs-nestjs-supabase',
+        clientId: 'client-1',
       },
       pmUser,
     );
@@ -238,12 +239,31 @@ describe('ProjectsService', () => {
         brief: 'Build a delivery dashboard',
         stackKey: 'nextjs-nestjs-supabase',
         createdById: pmUser.id,
-        // Written explicitly: a project with no client is a supported, flagged state rather
-        // than an omission, and the console surfaces it as unassigned.
-        clientId: null,
+        groupId: undefined,
+        clientId: 'client-1',
       },
     });
     expect(orchestration.startRun).not.toHaveBeenCalled();
+  });
+
+  // A project exists for a client, so there is no "unassigned" path any more. The DTO makes
+  // clientId required at the HTTP boundary; this covers the service being called directly, so
+  // the two layers cannot drift into disagreeing about the invariant.
+  it('create refuses a project with no client at all', async () => {
+    prisma.client.findUnique.mockResolvedValue(null);
+
+    await expect(
+      service.create(
+        {
+          companyName: 'Acme Logistics',
+          brief: 'Build a delivery dashboard',
+          stackKey: 'nextjs-nestjs-supabase',
+        } as never,
+        pmUser,
+      ),
+    ).rejects.toThrow('not found');
+
+    expect(prisma.project.create).not.toHaveBeenCalled();
   });
 
   it('create rejects a clientId that does not exist', async () => {

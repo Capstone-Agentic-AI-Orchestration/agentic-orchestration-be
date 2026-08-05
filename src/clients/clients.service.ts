@@ -49,22 +49,21 @@ export class ClientsService {
       ? { name: { contains: search.trim(), mode: 'insensitive' } }
       : {};
 
-    const [clients, unassignedProjects] = await Promise.all([
-      this.prisma.client.findMany({
-        where,
-        orderBy: [{ status: 'asc' }, { name: 'asc' }],
-        include: {
-          _count: { select: { projects: true, contacts: true } },
-          projects: {
-            select: { updatedAt: true },
-            orderBy: { updatedAt: 'desc' },
-            take: 1,
-          },
+    // The client-less project count used to be returned here. Project.clientId is now non-null,
+    // so that query no longer type-checks and could only ever have returned zero — the state it
+    // counted cannot be created.
+    const clients = await this.prisma.client.findMany({
+      where,
+      orderBy: [{ status: 'asc' }, { name: 'asc' }],
+      include: {
+        _count: { select: { projects: true, contacts: true } },
+        projects: {
+          select: { updatedAt: true },
+          orderBy: { updatedAt: 'desc' },
+          take: 1,
         },
-      }),
-      // Surfaced alongside the list so client-less projects are visible rather than merely absent.
-      this.prisma.project.count({ where: { clientId: null } }),
-    ]);
+      },
+    });
 
     return {
       clients: clients.map((client) => ({
@@ -79,7 +78,6 @@ export class ClientsService {
         createdAt: client.createdAt,
         updatedAt: client.updatedAt,
       })),
-      unassignedProjectCount: unassignedProjects,
     };
   }
 
@@ -140,15 +138,6 @@ export class ClientsService {
     await this.findOne(id);
     return this.prisma.project.findMany({
       where: { clientId: id },
-      select: clientProjectSelect,
-      orderBy: { updatedAt: 'desc' },
-    });
-  }
-
-  /** Projects with no client, so the console can offer them for linking. */
-  findUnassignedProjects() {
-    return this.prisma.project.findMany({
-      where: { clientId: null },
       select: clientProjectSelect,
       orderBy: { updatedAt: 'desc' },
     });
@@ -291,14 +280,28 @@ export class ClientsService {
    * Unlinking is allowed on purpose: a project without a client is a supported (if flagged)
    * state, so a mistaken link must be reversible without touching the database by hand.
    */
+  /**
+   * Moves a project to a different client.
+   *
+   * This used to accept `null` to unlink, which is the one thing it must not do now: a project
+   * exists for a client, so clearing the link would recreate the orphan state the schema forbids
+   * and surface as a raw not-null violation instead of something a PM can act on. Reassignment
+   * is still allowed — a project attached to the wrong client is a mistake worth correcting.
+   */
   async setProjectClient(projectId: string, clientId: string | null) {
+    if (!clientId) {
+      throw new BadRequestException(
+        'A project must belong to a client. Move it to a different client instead of clearing it.',
+      );
+    }
+
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
       select: { id: true, companyName: true },
     });
     if (!project) throw new NotFoundException(`Project ${projectId} not found`);
 
-    if (clientId) await this.findOne(clientId);
+    await this.findOne(clientId);
 
     const updated = await this.prisma.project.update({
       where: { id: projectId },
@@ -306,11 +309,7 @@ export class ClientsService {
       select: { id: true, clientId: true, companyName: true },
     });
 
-    this.logger.log(
-      clientId
-        ? `Linked project ${projectId} to client ${clientId}`
-        : `Unlinked project ${projectId} from its client`,
-    );
+    this.logger.log(`Linked project ${projectId} to client ${clientId}`);
     return updated;
   }
 

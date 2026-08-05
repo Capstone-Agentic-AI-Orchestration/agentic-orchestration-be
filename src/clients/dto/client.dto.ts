@@ -69,14 +69,14 @@ export class AddClientContactDto {
 }
 
 /**
- * Linking a project to a client, or clearing it.
+ * Moving a project to a different client.
  *
- * `clientId: null` is a meaningful value (unlink), not an omission, so the field is required and
- * explicitly nullable rather than optional.
+ * No longer nullable: `clientId: null` used to mean "unlink", and that state no longer exists —
+ * a project belongs to a client for its whole life. The service rejects null as well, so a
+ * caller that skips validation gets a clear message rather than a not-null violation.
  */
 export class SetProjectClientDto {
-  @IsOptional()
-  @IsString()
-  @MinLength(1)
-  clientId!: string | null;
+  @IsString({ message: 'clientId is required: a project must belong to a client' })
+  @MinLength(1, { message: 'clientId is required: a project must belong to a client' })
+  clientId!: string;
 }

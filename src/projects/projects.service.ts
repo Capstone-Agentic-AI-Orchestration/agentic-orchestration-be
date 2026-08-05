@@ -498,12 +498,17 @@ export class ProjectsService {
     if (dto.repositoryName && !dto.groupId) {
       throw new BadRequestException('groupId is required when creating a repository');
     }
-    if (dto.clientId) {
-      const client = await this.prisma.client.findUnique({
-        where: { id: dto.clientId },
-        select: { id: true },
-      });
-      if (!client) throw new BadRequestException(`Client ${dto.clientId} not found`);
+    // Client first, then project. The DTO makes clientId required, but the existence check has
+    // to happen here: a well-formed id for a client that does not exist would otherwise reach
+    // Prisma and surface as a foreign-key error rather than something a PM can act on.
+    const client = await this.prisma.client.findUnique({
+      where: { id: dto.clientId },
+      select: { id: true },
+    });
+    if (!client) {
+      throw new BadRequestException(
+        `Client ${dto.clientId} not found. A project must be created for an existing client.`,
+      );
     }
 
     const project = await this.prisma.project.create({
@@ -513,8 +518,7 @@ export class ProjectsService {
         stackKey: dto.stackKey,
         createdById: user.id,
         groupId: dto.groupId,
-        // Nullable by design: an unlinked project is flagged as unassigned, never rejected.
-        clientId: dto.clientId ?? null,
+        clientId: dto.clientId,
       },
     });
 

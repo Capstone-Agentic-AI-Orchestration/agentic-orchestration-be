@@ -65,11 +65,8 @@ export class ClientsController {
     return this.clients.list(search);
   }
 
-  // Declared before ':id' so the literal segment is not swallowed by the id parameter.
-  @Get('unassigned-projects')
-  findUnassignedProjects() {
-    return this.clients.findUnassignedProjects();
-  }
+  // GET unassigned-projects was here. Project.clientId is non-null, so it could only ever
+  // return an empty list — a project without a client cannot be created or left behind.
 
   @Get('contact-candidates')
   searchContactCandidates(@Query('search') search?: string) {

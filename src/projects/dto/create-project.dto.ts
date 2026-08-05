@@ -29,15 +29,17 @@ export class CreateProjectDto {
   groupId?: string;
 
   /**
-   * The client company this project is for.
+   * The client company this project is for. Required — there is no such thing as a project
+   * without a client.
    *
-   * Optional so a project is never blocked at creation, but a project without one is flagged as
-   * unassigned in the console until it is linked.
+   * This used to be optional "so a project is never blocked at creation". The cost of that
+   * convenience was a project that existed with nobody to deliver it to, plus a mop-up screen
+   * to find and link them later. A client must be created (or an inquiry accepted) first; the
+   * project is created inside that client's context.
    */
-  @IsOptional()
-  @IsString()
-  @MinLength(1)
-  clientId?: string;
+  @IsString({ message: 'clientId is required: create the client first, then the project' })
+  @MinLength(1, { message: 'clientId is required: create the client first, then the project' })
+  clientId!: string;
 
   @ValidateIf((input: CreateProjectDto) => Boolean(input.groupId) || Boolean(input.repositoryName))
   @IsString()
