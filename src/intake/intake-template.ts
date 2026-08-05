@@ -14,6 +14,21 @@
  */
 
 export interface IntakeTemplateField {
+  /**
+   * The `ClientIntakePayload` property this question fills.
+   *
+   * This is what turns the worksheet from a document into the single source of the question
+   * wording. The header above claims the worksheet "mirrors ClientIntakePayload field for
+   * field" — until these keys existed that alignment was a convention nobody could check, and
+   * it had already broken: the worksheet asked "Rules that must always hold" while the in-app
+   * form asked for "Business rules", and "How you will know it works" appeared in the form as
+   * "Testable acceptance criteria". A client read plain English in the download and analyst
+   * jargon in the portal for the same answer.
+   *
+   * Both frontends now look their labels up by key, so the two cannot drift again. Omitted on
+   * the review checklist, whose items are reminders rather than inputs.
+   */
+  key?: string;
   label: string;
   /** Shown under the label to explain what a good answer looks like. */
   helper: string;
@@ -51,21 +66,23 @@ export const INTAKE_TEMPLATE_SECTIONS: IntakeTemplateSection[] = [
     title: '1. What you want to achieve',
     purpose: 'Anchors the business outcome and names who can make final decisions.',
     fields: [
-      { label: 'Project name', helper: 'The name your team will recognise.', example: 'Branch appointment booking' },
+      { key: 'projectName', label: 'Project name', helper: 'The name your team will recognise.', example: 'Branch appointment booking' },
       {
+        key: 'businessGoal',
         label: 'Business goal',
         helper: 'What problem are you solving, and what changes when this succeeds? Describe the outcome, not the screens.',
         example: 'Customers currently book by phone, which ties up two staff all morning. We want customers to book themselves online.',
       },
       {
+        key: 'successMeasures',
         label: 'How you will measure success',
         helper: 'One measure per line. Make each one countable by a person, a date, or a number.',
         example: 'Cut phone bookings by 40% within three months of launch.',
         list: true,
       },
-      { label: 'Main contact', helper: 'Who the delivery team should ask when something is unclear.' },
-      { label: 'Final approver', helper: 'Who can accept scope decisions on your behalf.' },
-      { label: 'Preferred launch period', helper: 'A month, quarter, or fixed date is fine.', example: 'October 2026' },
+      { key: 'primaryContact', label: 'Main contact', helper: 'Who the delivery team should ask when something is unclear.' },
+      { key: 'approver', label: 'Final approver', helper: 'Who can accept scope decisions on your behalf.' },
+      { key: 'targetLaunch', label: 'Preferred launch period', helper: 'A month, quarter, or fixed date is fine.', example: 'October 2026' },
     ],
   },
   {
@@ -74,9 +91,10 @@ export const INTAKE_TEMPLATE_SECTIONS: IntakeTemplateSection[] = [
     purpose: 'Knowing who does what prevents access that is too broad or too restrictive.',
     repeatFor: 'each type of user',
     fields: [
-      { label: 'Role name', helper: 'Name a real group of people, not a feature.', example: 'Branch scheduler' },
-      { label: 'What they do', helper: 'One responsibility per line.', example: 'Creates and reschedules appointments.', list: true },
+      { key: 'name', label: 'Role name', helper: 'Name a real group of people, not a feature.', example: 'Branch scheduler' },
+      { key: 'responsibilities', label: 'What they do', helper: 'One responsibility per line.', example: 'Creates and reschedules appointments.', list: true },
       {
+        key: 'permissions',
         label: 'What they are allowed to see or change',
         helper: 'One rule per line. Be specific about limits.',
         example: 'Can edit appointments only for their own branch.',
@@ -90,22 +108,25 @@ export const INTAKE_TEMPLATE_SECTIONS: IntakeTemplateSection[] = [
     purpose: 'A focused, checkable list is what lets your PM agree a scope that can actually be built and verified.',
     repeatFor: 'each thing the system must do',
     fields: [
-      { label: 'Feature name', helper: 'Short and plain.', example: 'Customer self-service booking' },
-      { label: 'Why it matters', helper: 'Tie it to a person or a business outcome.', example: 'Lets customers book outside office hours without calling.' },
-      { label: 'Who uses it', helper: 'Pick one of the roles you named in section 2.' },
+      { key: 'title', label: 'Feature name', helper: 'Short and plain.', example: 'Customer self-service booking' },
+      { key: 'purpose', label: 'Why it matters', helper: 'Tie it to a person or a business outcome.', example: 'Lets customers book outside office hours without calling.' },
+      { key: 'primaryRole', label: 'Who uses it', helper: 'Pick one of the roles you named in section 2.' },
       {
+        key: 'priority',
         label: 'How important is it',
         helper: 'Must-have (the first release fails without it), Should-have (important, could follow shortly), or Nice-to-have (only if there is room).',
         example: 'Must-have',
       },
-      { label: 'What happens when someone uses it', helper: 'Describe it as a short story from start to finish.' },
+      { key: 'workflow', label: 'What happens when someone uses it', helper: 'Describe it as a short story from start to finish.' },
       {
+        key: 'businessRules',
         label: 'Rules that must always hold',
         helper: 'One rule per line. Write "None" if nothing special applies.',
         example: 'Two appointments can never be booked in the same slot.',
         list: true,
       },
       {
+        key: 'acceptanceCriteria',
         label: 'How you will know it works',
         helper: 'One check per line, each something a person could sit down and verify.',
         example: 'Booking a taken slot shows alternatives and does not create a booking.',
@@ -119,18 +140,19 @@ export const INTAKE_TEMPLATE_SECTIONS: IntakeTemplateSection[] = [
     purpose: 'Steps, decisions, and failures tell the team how things should behave in real situations, not just the happy path.',
     repeatFor: 'each process worth walking through',
     fields: [
-      { label: 'Process name', helper: 'What this walkthrough covers.', example: 'Rescheduling an appointment' },
-      { label: 'What starts it', helper: 'What must be true before this begins?' },
-      { label: 'Who is doing it', helper: 'One of your roles from section 2.' },
-      { label: 'The steps', helper: 'One step per line, in order.', list: true },
-      { label: 'Points where someone must choose or approve', helper: 'One per line. Write "None" if there are none.', list: true },
+      { key: 'workflowTitle', label: 'Process name', helper: 'What this walkthrough covers.', example: 'Rescheduling an appointment' },
+      { key: 'startCondition', label: 'What starts it', helper: 'What must be true before this begins?' },
+      { key: 'actor', label: 'Who is doing it', helper: 'One of your roles from section 2.' },
+      { key: 'steps', label: 'The steps', helper: 'One step per line, in order.', list: true },
+      { key: 'decisionPoints', label: 'Points where someone must choose or approve', helper: 'One per line. Write "None" if there are none.', list: true },
       {
+        key: 'errorCases',
         label: 'What can go wrong, and what should happen then',
         helper: 'One per line. This is the part most often missed.',
         example: 'Customer arrives at a cancelled slot — send a text the moment it is cancelled.',
         list: true,
       },
-      { label: 'How it ends', helper: 'What is true once this finishes successfully?' },
+      { key: 'outcome', label: 'How it ends', helper: 'What is true once this finishes successfully?' },
     ],
   },
   {
@@ -139,12 +161,14 @@ export const INTAKE_TEMPLATE_SECTIONS: IntakeTemplateSection[] = [
     purpose: 'Knowing what is recorded, and who may see it, keeps privacy and access visible from the start.',
     fields: [
       {
+        key: 'entities',
         label: 'Things you need to record',
         helper: 'One per line, in business terms. For each, note the details that matter and who may see or change it.',
         example: 'Appointment — customer name, service, date and time. Staff see only their own branch.',
         list: true,
       },
       {
+        key: 'integrations',
         label: 'Other systems this must work with',
         helper: 'One per line. Name the service, what is exchanged, and who at your company owns it. Write "None" if there are none.',
         example: 'Payment provider — takes deposits at booking. Owned by Finance.',
@@ -158,25 +182,28 @@ export const INTAKE_TEMPLATE_SECTIONS: IntakeTemplateSection[] = [
     purpose: 'These shape the right experience and make the delivery plan realistic.',
     fields: [
       {
+        key: 'designNotes',
         label: 'Look, feel, and branding',
         helper: 'Brand colours and logos, which devices people will use, and any accessibility expectations.',
         example: 'Must match our brand guide, work well on phones, and be usable with a screen reader.',
       },
       {
+        key: 'securityRequirements',
         label: 'Privacy, safety, and reliability expectations',
         helper: 'One per line. Describe expectations, never actual credentials.',
         example: 'Customer phone numbers must not be visible to staff at other branches.',
         list: true,
       },
-      { label: 'Things you must provide or approve', helper: 'One per line — content, sign-offs, or access your team owes the project.', list: true },
-      { label: 'Dates that matter', helper: 'One per line, including anything you are committed to externally.', list: true },
+      { key: 'constraints', label: 'Things you must provide or approve', helper: 'One per line — content, sign-offs, or access your team owes the project.', list: true },
+      { key: 'milestones', label: 'Dates that matter', helper: 'One per line, including anything you are committed to externally.', list: true },
       {
+        key: 'outOfScope',
         label: 'Explicitly NOT in this release',
         helper: 'One per line. Naming exclusions protects you as much as the team.',
         example: 'No mobile app — web only for this release.',
         list: true,
       },
-      { label: 'Wanted later, but must not delay this release', helper: 'One per line.', list: true },
+      { key: 'futurePhase', label: 'Wanted later, but must not delay this release', helper: 'One per line.', list: true },
     ],
   },
   {
@@ -186,6 +213,7 @@ export const INTAKE_TEMPLATE_SECTIONS: IntakeTemplateSection[] = [
       'Documents give the delivery team evidence instead of guesswork. Anything you attach is read by the team and by the automated build agents.',
     fields: [
       {
+        key: 'documentsList',
         label: 'Documents you can share',
         helper:
           'One per line. Useful examples: a current process map, an example of a form you use today, ' +
@@ -194,6 +222,7 @@ export const INTAKE_TEMPLATE_SECTIONS: IntakeTemplateSection[] = [
         list: true,
       },
       {
+        key: 'documentsNotApplicable',
         label: 'If you have no documents',
         helper: 'Say so explicitly in the portal by ticking "No supporting documents apply". The team then knows nothing is missing.',
       },

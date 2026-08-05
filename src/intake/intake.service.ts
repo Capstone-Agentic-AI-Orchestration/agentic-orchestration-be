@@ -20,11 +20,18 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DocumentExtractionService } from './document-extraction.service';
 import { DocumentStorageService } from './document-storage.service';
-import { renderIntakeTemplateHtml, renderIntakeTemplateMarkdown } from './intake-template';
+import {
+  INTAKE_TEMPLATE_INTRO,
+  INTAKE_TEMPLATE_SECTIONS,
+  renderIntakeTemplateHtml,
+  renderIntakeTemplateMarkdown,
+} from './intake-template';
 import {
   ClientIntakePayload,
   emptyClientIntakePayload,
+  INTAKE_SECTION_IDS,
   IntakeContextPackage,
+  IntakeSectionBlocker,
 } from './intake.types';
 
 type UploadedFile = {
@@ -100,6 +107,11 @@ export class IntakeService {
       documents: user.role === UserRole.CLIENT ? documents.filter((document) => document.clientVisible) : documents,
       readiness: this.readinessFor(this.toPayload(loaded?.payload), documents),
       templateMarkdown: this.templateMarkdown(),
+      // The question wording itself, so both frontends render labels from the worksheet instead
+      // of hardcoding their own. Sent on every intake read rather than fetched separately: it is
+      // a few KB, it never changes without a deploy, and a second round-trip is the kind of thing
+      // that gets skipped, which is how the wording drifted apart in the first place.
+      template: { intro: INTAKE_TEMPLATE_INTRO, sections: INTAKE_TEMPLATE_SECTIONS },
     };
   }
 
@@ -522,46 +534,69 @@ export class IntakeService {
   }
 
   private readinessFor(payload: ClientIntakePayload, documents: Array<{ storageKey: string | null; extraction: { status: DocumentExtractionStatus } | null }>) {
-    const blockers = this.payloadBlockers(payload);
+    const tagged = this.payloadBlockers(payload);
     const uploaded = documents.filter((document) => Boolean(document.storageKey));
     const extracting = uploaded.filter((document) => document.extraction?.status === DocumentExtractionStatus.PENDING || document.extraction?.status === DocumentExtractionStatus.EXTRACTING);
     const failed = uploaded.filter((document) => document.extraction?.status === DocumentExtractionStatus.FAILED || !document.extraction);
-    if (extracting.length) blockers.push(`${extracting.length} uploaded document${extracting.length === 1 ? ' is' : 's are'} still being processed.`);
-    if (failed.length) blockers.push(`${failed.length} uploaded document${failed.length === 1 ? ' needs' : 's need'} a successful extraction or replacement.`);
+    if (extracting.length) tagged.push({ section: 'documents', message: `${extracting.length} uploaded document${extracting.length === 1 ? ' is' : 's are'} still being processed.` });
+    if (failed.length) tagged.push({ section: 'documents', message: `${failed.length} uploaded document${failed.length === 1 ? ' needs' : 's need'} a successful extraction or replacement.` });
     if (!uploaded.length && !payload.experienceAndDelivery.documentsNotApplicable) {
-      blockers.push('Upload supporting documents or explicitly mark documents as not applicable.');
+      tagged.push({ section: 'documents', message: 'Attach a supporting document, or tick that you have none.' });
     }
+
+    // `sections` carries one entry per worksheet step, INCLUDING the complete ones with an empty
+    // list, so a client form can render its progress rail straight from this without inventing
+    // the section order or re-deriving which steps are done.
+    const sections = INTAKE_SECTION_IDS.map((section) => {
+      const missing = tagged.filter((blocker) => blocker.section === section).map((blocker) => blocker.message);
+      return { section, complete: missing.length === 0, missing };
+    });
+
     return {
-      blockers,
-      readyForSubmission: blockers.length === 0,
-      readyForLock: blockers.length === 0,
+      // Kept as a flat string list so existing callers and the submit/lock error messages are
+      // unchanged; `sections` is the additive part.
+      blockers: tagged.map((blocker) => blocker.message),
+      sections,
+      readyForSubmission: tagged.length === 0,
+      readyForLock: tagged.length === 0,
       counts: { uploaded: uploaded.length, extracting: extracting.length, failed: failed.length, ready: uploaded.length - extracting.length - failed.length },
     };
   }
 
-  private payloadBlockers(payload: ClientIntakePayload): string[] {
-    const blockers: string[] = [];
+  /**
+   * What is still missing, attributed to the worksheet section that would fix it.
+   *
+   * The section tag is what lets a step-by-step client form mark each step complete or
+   * incomplete, and lets the PM see at a glance which part of the brief is thin — from ONE
+   * computation. Both frontends previously had to guess the mapping from the wording of a flat
+   * string list, which meant the same rule was expressed three times and could disagree.
+   *
+   * Wording is client-facing: these strings are shown to the person who has to act on them, so
+   * they name the thing to add rather than the field that failed validation.
+   */
+  private payloadBlockers(payload: ClientIntakePayload): IntakeSectionBlocker[] {
+    const blockers: IntakeSectionBlocker[] = [];
     const overview = payload.overview;
-    if (!overview.projectName.trim()) blockers.push('Add a project name.');
-    if (!overview.businessGoal.trim()) blockers.push('Describe the business goal.');
-    if (!overview.successMeasures.some((measure) => measure.trim())) blockers.push('Add at least one measurable success criterion.');
-    if (!overview.primaryContact.trim()) blockers.push('Add a primary contact.');
-    if (!overview.approver.trim()) blockers.push('Name the final approver.');
-    if (!overview.targetLaunch.trim()) blockers.push('Provide a target launch period.');
-    if (!payload.roles.some((role) => role.name.trim() && role.responsibilities.length && role.permissions.length)) blockers.push('Add at least one complete user role.');
+    if (!overview.projectName.trim()) blockers.push({ section: 'overview', message: 'Add a project name.' });
+    if (!overview.businessGoal.trim()) blockers.push({ section: 'overview', message: 'Describe the business goal.' });
+    if (!overview.successMeasures.some((measure) => measure.trim())) blockers.push({ section: 'overview', message: 'Add at least one measurable success criterion.' });
+    if (!overview.primaryContact.trim()) blockers.push({ section: 'overview', message: 'Add a primary contact.' });
+    if (!overview.approver.trim()) blockers.push({ section: 'overview', message: 'Name the final approver.' });
+    if (!overview.targetLaunch.trim()) blockers.push({ section: 'overview', message: 'Provide a target launch period.' });
+    if (!payload.roles.some((role) => role.name.trim() && role.responsibilities.length && role.permissions.length)) blockers.push({ section: 'roles', message: 'Add at least one complete user role.' });
     const mustHave = payload.features.filter((feature) => feature.priority === 'MUST_HAVE');
-    if (!mustHave.length) blockers.push('Add at least one Must-have feature.');
+    if (!mustHave.length) blockers.push({ section: 'features', message: 'Add at least one Must-have feature.' });
     if (mustHave.some((feature) => !feature.title.trim() || !feature.purpose.trim() || !feature.primaryRole.trim() || !feature.workflow.trim() || !feature.businessRules.some((item) => item.trim()) || !feature.acceptanceCriteria.some((item) => item.trim()))) {
-      blockers.push('Every Must-have feature needs a purpose, user, workflow, business rules, and acceptance criteria.');
+      blockers.push({ section: 'features', message: 'Every Must-have feature needs a purpose, user, workflow, business rules, and acceptance criteria.' });
     }
     if (!payload.workflows.some((workflow) => workflow.title.trim() && workflow.startCondition.trim() && workflow.actor.trim() && workflow.steps.some((step) => step.trim()) && workflow.decisionPoints.some((item) => item.trim()) && workflow.errorCases.some((item) => item.trim()) && workflow.outcome.trim())) {
-      blockers.push('Add at least one complete workflow with steps, decisions, error cases, and an outcome.');
+      blockers.push({ section: 'workflows', message: 'Add at least one complete workflow with steps, decisions, error cases, and an outcome.' });
     }
     if (!payload.dataAndIntegrations.entities.length && !payload.dataAndIntegrations.dataNotApplicable) {
-      blockers.push('List data entities or explicitly mark data as not applicable.');
+      blockers.push({ section: 'data', message: 'List the information you keep track of, or tick that none applies.' });
     }
     if (!payload.dataAndIntegrations.integrations.length && !payload.dataAndIntegrations.integrationsNotApplicable) {
-      blockers.push('List integrations or explicitly mark integrations as not applicable.');
+      blockers.push({ section: 'data', message: 'List other systems this must work with, or tick that none applies.' });
     }
     return blockers;
   }

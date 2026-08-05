@@ -229,7 +229,9 @@ const DEFAULT_AUTO_ANALYZE_MAX_TOKENS = 1200;
  * already asked to cite them — but nothing ever read those citations back, so a run could be
  * approved having quietly ignored every document the client supplied. This closes that loop:
  * when the locked intake package carries readable source documents, the requirements must cite
- * at least one of them before a PM can approve the gate.
+ * at least one of them before the gate can be approved. (The approver is the developer since
+ * the delivery split — the rule is about grounding the build in the client's documents, so it
+ * binds whoever decides, not a particular role.)
  *
  * Citations are validated against the supplied sources in the requirements parser, so anything
  * still present here is known to resolve to real text an agent received.

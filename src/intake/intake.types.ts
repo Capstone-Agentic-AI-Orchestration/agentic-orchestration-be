@@ -1,5 +1,31 @@
 export type IntakeFeaturePriority = 'MUST_HAVE' | 'SHOULD_HAVE' | 'NICE_TO_HAVE';
 
+/**
+ * The worksheet steps, in the order a client works through them.
+ *
+ * Shared by the template, the readiness report and both frontends so the step order exists in
+ * one place. `as const` keeps the ids literal, which is what makes IntakeSectionId a union
+ * rather than plain string.
+ */
+export const INTAKE_SECTION_IDS = [
+  'overview',
+  'roles',
+  'features',
+  'workflows',
+  'data',
+  'delivery',
+  'documents',
+  'review',
+] as const;
+
+export type IntakeSectionId = (typeof INTAKE_SECTION_IDS)[number];
+
+/** A missing answer, tagged with the step that would fix it. */
+export interface IntakeSectionBlocker {
+  section: IntakeSectionId;
+  message: string;
+}
+
 export interface ClientIntakePayload {
   overview: {
     projectName: string;
