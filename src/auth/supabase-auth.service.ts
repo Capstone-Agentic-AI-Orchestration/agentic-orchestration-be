@@ -380,6 +380,14 @@ export class SupabaseAuthService implements OnModuleInit {
       : null;
 
     if (!role || role === UserRole.CLIENT) {
+      // Logged because this refusal is indistinguishable, from the user's side, from the API
+      // being unreachable — they just fail to get in. The line names the login that was
+      // checked, which is what tells a PM whether the person signed in with the GitHub
+      // account they actually added to the team.
+      this.logger.warn(
+        `Refused sign-in: ${githubLogin ? `@${githubLogin}` : 'a GitHub account with no login in its token'} ` +
+          `is in no mapped team of ${this.org()}`,
+      );
       throw new ForbiddenException({
         code: NOT_A_TEAM_MEMBER,
         message: this.notATeamMemberMessage(githubLogin),
