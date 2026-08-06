@@ -54,6 +54,11 @@ function makePrismaMock() {
       // existence check; tests that care set their own value.
       findUnique: vi.fn().mockResolvedValue({ id: 'client-1' }),
     },
+    groupMember: {
+      // Defaults to "the team has a developer" for the same reason: only the tests that are
+      // about the developer requirement should have to think about it.
+      findFirst: vi.fn().mockResolvedValue({ id: 'group-member-1' }),
+    },
     clientInquiry: {
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
@@ -244,6 +249,56 @@ describe('ProjectsService', () => {
       },
     });
     expect(orchestration.startRun).not.toHaveBeenCalled();
+  });
+
+  // The developer is the only role that can build, and a PM cannot stand in for one, so a
+  // project created into a developer-less team could never be built by anybody. Failing at
+  // creation is the only point where the PM can still act on it.
+  // groupId only reaches the developer check when GroupsService is wired in, so these build
+  // their own service — the shared one is constructed without the optional group dependency.
+  const serviceWithGroups = () =>
+    new ProjectsService(
+      prisma as unknown as PrismaService,
+      orchestration as unknown as OrchestrationService,
+      notifications as unknown as NotificationsService,
+      undefined,
+      { assertManager: vi.fn().mockResolvedValue(undefined) } as never,
+    );
+
+  it('create refuses a team with no developer in it', async () => {
+    prisma.groupMember.findFirst.mockResolvedValue(null);
+
+    await expect(
+      serviceWithGroups().create(
+        {
+          companyName: 'Acme Logistics',
+          brief: 'Build a delivery dashboard',
+          stackKey: 'nextjs-nestjs-supabase',
+          clientId: 'client-1',
+          groupId: 'group-1',
+        },
+        pmUser,
+      ),
+    ).rejects.toThrow('This team has no developer');
+
+    expect(prisma.project.create).not.toHaveBeenCalled();
+  });
+
+  it('create allows a team that has a developer', async () => {
+    prisma.groupMember.findFirst.mockResolvedValue({ id: 'group-member-1' });
+
+    await serviceWithGroups().create(
+      {
+        companyName: 'Acme Logistics',
+        brief: 'Build a delivery dashboard',
+        stackKey: 'nextjs-nestjs-supabase',
+        clientId: 'client-1',
+        groupId: 'group-1',
+      },
+      pmUser,
+    );
+
+    expect(prisma.project.create).toHaveBeenCalled();
   });
 
   // A project exists for a client, so there is no "unassigned" path any more. The DTO makes

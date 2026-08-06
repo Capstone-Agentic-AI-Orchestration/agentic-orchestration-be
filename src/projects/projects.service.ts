@@ -494,6 +494,7 @@ export class ProjectsService {
     if (dto.groupId) {
       if (!this.groups) throw new BadRequestException('Group management is unavailable');
       await this.groups.assertManager(dto.groupId, user);
+      await this.assertTeamHasDeveloper(dto.groupId);
     }
     if (dto.repositoryName && !dto.groupId) {
       throw new BadRequestException('groupId is required when creating a repository');
@@ -3597,14 +3598,44 @@ export class ProjectsService {
     }
   }
 
+  /**
+   * A project must be born into a team that has a developer in it.
+   *
+   * Since the delivery split, the developer is the ONLY role that can prompt, run orchestration
+   * or decide the gates — a PM cannot do any of it, and cannot add themselves as a developer
+   * either (assertRoleCompatible refuses a PM profile in a DEV seat). So a project created in a
+   * team with no developer is unbuildable by anyone, and nothing in the UI would have said so:
+   * it would sit in the PM's list looking normal while every build route refused every caller.
+   *
+   * Group membership is what grants a developer sight of a project (see projectAccessWhere), so
+   * that is what is checked here rather than project membership, which is assigned later.
+   */
+  private async assertTeamHasDeveloper(groupId: string): Promise<void> {
+    const developer = await this.prisma.groupMember.findFirst({
+      where: {
+        groupId,
+        status: 'ACTIVE',
+        user: { is: { role: UserRole.DEV } },
+      },
+      select: { id: true },
+    });
+
+    if (!developer) {
+      throw new BadRequestException(
+        'This team has no developer, so nobody could build the project. Add a developer to the ' +
+          'team first — project managers cannot run the build themselves.',
+      );
+    }
+  }
+
   private async assertCanRemoveMember(projectId: string, userId: string): Promise<void> {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
       select: {
         createdById: true,
         members: {
-          where: { role: { in: [UserRole.PM, UserRole.ADMIN] } },
-          select: { userId: true },
+          where: { role: { in: [UserRole.PM, UserRole.ADMIN, UserRole.DEV] } },
+          select: { userId: true, role: true },
         },
       },
     });
@@ -3615,11 +3646,27 @@ export class ProjectsService {
 
     const managerIds = new Set([
       project.createdById,
-      ...project.members.map((member) => member.userId),
+      ...project.members
+        .filter((member) => member.role === UserRole.PM || member.role === UserRole.ADMIN)
+        .map((member) => member.userId),
     ].filter(Boolean) as string[]);
 
     if (managerIds.has(userId) && managerIds.size <= 1) {
       throw new BadRequestException('Cannot remove the last project manager');
+    }
+
+    // The mirror of the rule above, and it matters more since the delivery split: with no
+    // developer nobody can prompt, run or gate the build, and the PM cannot stand in for one.
+    // Removing the last developer would quietly strand the project rather than fail loudly.
+    const developerIds = project.members
+      .filter((member) => member.role === UserRole.DEV)
+      .map((member) => member.userId);
+
+    if (developerIds.includes(userId) && developerIds.length <= 1) {
+      throw new BadRequestException(
+        'Cannot remove the last developer: nobody would be able to build this project. Add ' +
+          'another developer first.',
+      );
     }
   }
 
