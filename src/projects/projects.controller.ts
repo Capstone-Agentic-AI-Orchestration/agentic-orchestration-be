@@ -493,8 +493,16 @@ export class ProjectsController {
     );
   }
 
+  /**
+   * PM is allowed here, unlike on the build routes next door.
+   *
+   * Starting a run and approving a gate are execution decisions the developer owns, which is
+   * why those stay DEV/ADMIN. Deciding what work exists, who holds it and whether it is blocked
+   * is project management — refusing it would leave the PM with an issue board they can read
+   * and not use. Dispatching an agent work order remains DEV-only for the same reason gates are.
+   */
   @Post(':id/tasks')
-  @Roles(UserRole.DEV, UserRole.ADMIN)
+  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   createTask(
     @Param('id') id: string,
@@ -512,7 +520,7 @@ export class ProjectsController {
   }
 
   @Patch(':id/tasks/:taskId')
-  @Roles(UserRole.DEV, UserRole.ADMIN)
+  @Roles(UserRole.PM, UserRole.DEV, UserRole.ADMIN)
   @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
   updateTask(
     @Param('id') id: string,

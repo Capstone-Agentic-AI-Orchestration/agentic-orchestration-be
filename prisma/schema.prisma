@@ -4,12 +4,12 @@ generator client {
 }
 
 datasource db {
-  provider      = "postgresql"
-  url           = env("DATABASE_URL")
-  directUrl     = env("DIRECT_URL")
-  schemas       = ["admin", "collaboration", "identity", "intake", "integration", "memory", "notifications", "orchestration", "projects", "scheduling"]
-  extensions    = [pgvector(map: "vector")]
-  relationMode  = "prisma"
+  provider     = "postgresql"
+  url          = env("DATABASE_URL")
+  directUrl    = env("DIRECT_URL")
+  schemas      = ["admin", "collaboration", "identity", "intake", "integration", "memory", "notifications", "orchestration", "projects", "scheduling"]
+  extensions   = [pgvector(map: "vector")]
+  relationMode = "prisma"
 }
 
 enum ClientStatus {
@@ -30,6 +30,21 @@ model Client {
   id                  String          @id @default(cuid())
   name                String
   status              ClientStatus    @default(ACTIVE)
+  /// The team workspace that owns this client relationship.
+  ///
+  /// Clients used to be global: every workspace saw every company, which made the workspace
+  /// switcher a lie for two of the three things it claims to scope. A client belongs to the
+  /// team that sells to and delivers for it, and a project's workspace is now derived from
+  /// its client rather than tracked separately.
+  ///
+  /// Required. Was nullable while the backfill ran: it infers a workspace from a client's
+  /// existing projects, and a client with no projects had nothing to infer from. Those were
+  /// assigned by a human rather than attached to an arbitrary team, and the state is now
+  /// forbidden — see 20260807000700_client_requires_workspace.
+  ///
+  /// Restrict, not Cascade: deleting a workspace must not delete the companies it served.
+  groupId             String
+  group               Group           @relation(fields: [groupId], references: [id], onDelete: Restrict)
   primaryContactName  String?
   primaryContactEmail String?
   notes               String?         @db.Text
@@ -43,6 +58,7 @@ model Client {
 
   @@index([status, name])
   @@index([createdById])
+  @@index([groupId, name])
   @@map("clients")
   @@schema("projects")
 }
@@ -69,8 +85,8 @@ model ClientContact {
 }
 
 model Project {
-  id          String          @id @default(cuid())
-  companyName String
+  id                     String                  @id @default(cuid())
+  companyName            String
   /// Every project belongs to a client company — the client comes first, always.
   ///
   /// This was nullable, which let a project exist with nobody to deliver it to. Two
@@ -80,42 +96,42 @@ model Project {
   ///
   /// Restrict, not SetNull: nulling this out on client deletion is exactly the state the
   /// non-null constraint forbids, so a client with projects cannot be deleted at all.
-  clientId    String
-  client      Client          @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  brief       String          @db.Text
-  stackKey    String
-  status      ProjectStatus   @default(PENDING)
-  runId       String?         @unique
-  repoUrl     String?
-  groupId     String?
-  group       Group?          @relation(fields: [groupId], references: [id], onDelete: SetNull)
-  repositories Repository[]
-  agentRepoSessions AgentRepoSession[]
-  createdById String?         @db.Uuid
-  createdBy   Profile?        @relation("ProjectCreatedBy", fields: [createdById], references: [id])
-  version     Int             @default(1)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
-  gates       GateEvent[]
-  artifacts   Artifact[]
-  eventLogs   EventLog[]
-  runBudget   RunBudget?
-  members     ProjectMember[]
-  tasks       ProjectTask[]
-  timelineEvents ProjectTimelineEvent[]
-  workOrders  WorkOrder[]
-  conversations ProjectConversation[]
+  clientId               String
+  client                 Client                  @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  brief                  String                  @db.Text
+  stackKey               String
+  status                 ProjectStatus           @default(PENDING)
+  runId                  String?                 @unique
+  repoUrl                String?
+  groupId                String?
+  group                  Group?                  @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  repositories           Repository[]
+  agentRepoSessions      AgentRepoSession[]
+  createdById            String?                 @db.Uuid
+  createdBy              Profile?                @relation("ProjectCreatedBy", fields: [createdById], references: [id])
+  version                Int                     @default(1)
+  createdAt              DateTime                @default(now())
+  updatedAt              DateTime                @updatedAt
+  gates                  GateEvent[]
+  artifacts              Artifact[]
+  eventLogs              EventLog[]
+  runBudget              RunBudget?
+  members                ProjectMember[]
+  tasks                  ProjectTask[]
+  timelineEvents         ProjectTimelineEvent[]
+  workOrders             WorkOrder[]
+  conversations          ProjectConversation[]
   collaborationDocuments CollaborationDocument[]
-  clientInvites ClientInvite[]
-  kickoff     ProjectKickoff?
-  deliveryReview ProjectDeliveryReview?
-  intake       ProjectIntake?
-  intakeSnapshots ProjectIntakeSnapshot[]
-  orchestrationRuns OrchestrationRun[]
-  orchestrationJobs OrchestrationJob[]
-  providerInvocations ProviderInvocation[]
-  workOrderExecutions WorkOrderExecution[]
-  scheduleEvents ScheduleEvent[]
+  clientInvites          ClientInvite[]
+  kickoff                ProjectKickoff?
+  deliveryReview         ProjectDeliveryReview?
+  intake                 ProjectIntake?
+  intakeSnapshots        ProjectIntakeSnapshot[]
+  orchestrationRuns      OrchestrationRun[]
+  orchestrationJobs      OrchestrationJob[]
+  providerInvocations    ProviderInvocation[]
+  workOrderExecutions    WorkOrderExecution[]
+  scheduleEvents         ScheduleEvent[]
 
   @@index([createdById])
   @@index([groupId])
@@ -229,23 +245,23 @@ enum DocumentExtractionStatus {
 }
 
 model ProjectIntake {
-  id            String              @id @default(cuid())
-  projectId     String              @unique
-  project       Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  payload       Json                @default("{}")
-  status        ProjectIntakeStatus @default(DRAFT)
-  createdById   String?             @db.Uuid
-  createdBy     Profile?            @relation("ProjectIntakeCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  submittedById String?             @db.Uuid
-  submittedBy   Profile?            @relation("ProjectIntakeSubmitter", fields: [submittedById], references: [id], onDelete: SetNull)
+  id            String                  @id @default(cuid())
+  projectId     String                  @unique
+  project       Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  payload       Json                    @default("{}")
+  status        ProjectIntakeStatus     @default(DRAFT)
+  createdById   String?                 @db.Uuid
+  createdBy     Profile?                @relation("ProjectIntakeCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  submittedById String?                 @db.Uuid
+  submittedBy   Profile?                @relation("ProjectIntakeSubmitter", fields: [submittedById], references: [id], onDelete: SetNull)
   submittedAt   DateTime?
-  reviewedById  String?             @db.Uuid
-  reviewedBy    Profile?            @relation("ProjectIntakeReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
-  reviewNote    String?             @db.Text
+  reviewedById  String?                 @db.Uuid
+  reviewedBy    Profile?                @relation("ProjectIntakeReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewNote    String?                 @db.Text
   reviewedAt    DateTime?
-  version       Int                 @default(1)
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
+  version       Int                     @default(1)
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
   comments      ProjectIntakeComment[]
   snapshots     ProjectIntakeSnapshot[]
 
@@ -258,15 +274,15 @@ model ProjectIntake {
 }
 
 model ProjectIntakeComment {
-  id          String         @id @default(cuid())
+  id          String        @id @default(cuid())
   intakeId    String
-  intake      ProjectIntake  @relation(fields: [intakeId], references: [id], onDelete: Cascade)
+  intake      ProjectIntake @relation(fields: [intakeId], references: [id], onDelete: Cascade)
   section     String
-  message     String         @db.Text
+  message     String        @db.Text
   resolvedAt  DateTime?
-  createdById String?        @db.Uuid
-  createdBy   Profile?       @relation("ProjectIntakeCommentCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt   DateTime       @default(now())
+  createdById String?       @db.Uuid
+  createdBy   Profile?      @relation("ProjectIntakeCommentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime      @default(now())
 
   @@index([intakeId, createdAt])
   @@index([createdById])
@@ -275,19 +291,19 @@ model ProjectIntakeComment {
 }
 
 model ProjectIntakeSnapshot {
-  id             String              @id @default(cuid())
-  projectId      String
-  project        Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  intakeId       String
-  intake         ProjectIntake       @relation(fields: [intakeId], references: [id], onDelete: Cascade)
-  version        Int
-  payload        Json
-  contextPackage Json
-  pmNotes        String?             @db.Text
-  lockedById     String?             @db.Uuid
-  lockedBy       Profile?            @relation("ProjectIntakeLocker", fields: [lockedById], references: [id], onDelete: SetNull)
-  lockedAt       DateTime            @default(now())
-  createdAt      DateTime            @default(now())
+  id                String             @id @default(cuid())
+  projectId         String
+  project           Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  intakeId          String
+  intake            ProjectIntake      @relation(fields: [intakeId], references: [id], onDelete: Cascade)
+  version           Int
+  payload           Json
+  contextPackage    Json
+  pmNotes           String?            @db.Text
+  lockedById        String?            @db.Uuid
+  lockedBy          Profile?           @relation("ProjectIntakeLocker", fields: [lockedById], references: [id], onDelete: SetNull)
+  lockedAt          DateTime           @default(now())
+  createdAt         DateTime           @default(now())
   orchestrationRuns OrchestrationRun[]
 
   @@unique([projectId, version])
@@ -298,31 +314,31 @@ model ProjectIntakeSnapshot {
 }
 
 model ProjectKickoff {
-  id                     String               @id @default(cuid())
-  projectId              String               @unique
-  project                Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  scopeSummary           String?              @db.Text
-  milestones             String?              @db.Text
-  requiredDocuments      String?              @db.Text
-  techStackNotes         String?              @db.Text
-  deliveryRoles          String?              @db.Text
-  readinessNotes         String?              @db.Text
-  scopeConfirmed         Boolean              @default(false)
-  milestonesConfirmed    Boolean              @default(false)
-  documentsConfirmed     Boolean              @default(false)
-  techStackConfirmed     Boolean              @default(false)
-  rolesConfirmed         Boolean              @default(false)
-  clientAccessConfirmed  Boolean              @default(false)
-  initialTasksCreated    Boolean              @default(false)
-  initialWorkOrdersCreated Boolean            @default(false)
-  status                 ProjectKickoffStatus @default(DRAFT)
-  completedById          String?              @db.Uuid
-  completedBy            Profile?             @relation("KickoffCompleter", fields: [completedById], references: [id], onDelete: SetNull)
-  completedAt            DateTime?
-  updatedById            String?              @db.Uuid
-  updatedBy              Profile?             @relation("KickoffUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
-  createdAt              DateTime             @default(now())
-  updatedAt              DateTime             @updatedAt
+  id                       String               @id @default(cuid())
+  projectId                String               @unique
+  project                  Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scopeSummary             String?              @db.Text
+  milestones               String?              @db.Text
+  requiredDocuments        String?              @db.Text
+  techStackNotes           String?              @db.Text
+  deliveryRoles            String?              @db.Text
+  readinessNotes           String?              @db.Text
+  scopeConfirmed           Boolean              @default(false)
+  milestonesConfirmed      Boolean              @default(false)
+  documentsConfirmed       Boolean              @default(false)
+  techStackConfirmed       Boolean              @default(false)
+  rolesConfirmed           Boolean              @default(false)
+  clientAccessConfirmed    Boolean              @default(false)
+  initialTasksCreated      Boolean              @default(false)
+  initialWorkOrdersCreated Boolean              @default(false)
+  status                   ProjectKickoffStatus @default(DRAFT)
+  completedById            String?              @db.Uuid
+  completedBy              Profile?             @relation("KickoffCompleter", fields: [completedById], references: [id], onDelete: SetNull)
+  completedAt              DateTime?
+  updatedById              String?              @db.Uuid
+  updatedBy                Profile?             @relation("KickoffUpdater", fields: [updatedById], references: [id], onDelete: SetNull)
+  createdAt                DateTime             @default(now())
+  updatedAt                DateTime             @updatedAt
 
   @@index([status])
   @@index([completedById])
@@ -345,36 +361,36 @@ model GateEvent {
 }
 
 model Artifact {
-  id            String               @id @default(cuid())
-  projectId     String
-  project       Project              @relation(fields: [projectId], references: [id])
-  agentType     String
-  filePath      String
-  content       String               @db.Text
-  clientVisible Boolean              @default(false)
-  displayName   String?
-  sharedAt      DateTime?
-  reviewStatus  ArtifactReviewStatus @default(PENDING)
-  reviewNote    String?              @db.Text
-  reviewedAt    DateTime?
-  reviewedById  String?              @db.Uuid
-  outputReviewStatus ArtifactOutputReviewStatus @default(PENDING)
-  outputReviewNote String?           @db.Text
-  outputReviewedAt DateTime?
-  outputReviewedById String?         @db.Uuid
-  validationStatus ArtifactValidationStatus @default(PENDING)
-  validationSummary String?           @db.Text
-  validationErrors Json               @default("[]")
-  publishedAt DateTime?
-  publishedById String?              @db.Uuid
-  revisionHandledAt DateTime?
-  revisionHandledById String?         @db.Uuid
-  revisionResolutionNote String?      @db.Text
-  source        String?              @default("llm")
-  createdAt     DateTime             @default(now())
-  tasks         ProjectTask[]
-  workOrders    WorkOrder[]
-  workOrderExecutions WorkOrderExecution[]
+  id                     String                     @id @default(cuid())
+  projectId              String
+  project                Project                    @relation(fields: [projectId], references: [id])
+  agentType              String
+  filePath               String
+  content                String                     @db.Text
+  clientVisible          Boolean                    @default(false)
+  displayName            String?
+  sharedAt               DateTime?
+  reviewStatus           ArtifactReviewStatus       @default(PENDING)
+  reviewNote             String?                    @db.Text
+  reviewedAt             DateTime?
+  reviewedById           String?                    @db.Uuid
+  outputReviewStatus     ArtifactOutputReviewStatus @default(PENDING)
+  outputReviewNote       String?                    @db.Text
+  outputReviewedAt       DateTime?
+  outputReviewedById     String?                    @db.Uuid
+  validationStatus       ArtifactValidationStatus   @default(PENDING)
+  validationSummary      String?                    @db.Text
+  validationErrors       Json                       @default("[]")
+  publishedAt            DateTime?
+  publishedById          String?                    @db.Uuid
+  revisionHandledAt      DateTime?
+  revisionHandledById    String?                    @db.Uuid
+  revisionResolutionNote String?                    @db.Text
+  source                 String?                    @default("llm")
+  createdAt              DateTime                   @default(now())
+  tasks                  ProjectTask[]
+  workOrders             WorkOrder[]
+  workOrderExecutions    WorkOrderExecution[]
 
   @@index([projectId])
   @@index([projectId, clientVisible])
@@ -484,66 +500,75 @@ enum DeveloperAvailabilityStatus {
   @@schema("identity")
 }
 
+/// Issue board columns.
+///
+/// Declared in board order, and the Postgres type is built in the same order, so `ORDER BY
+/// status` sorts the way the board reads instead of alphabetically or by insertion accident.
 enum ProjectTaskStatus {
+  BACKLOG
   TODO
   IN_PROGRESS
   IN_REVIEW
   DONE
+  BLOCKED
+  CANCELLED
 
   @@schema("projects")
 }
 
 model Profile {
-  id              String          @id @db.Uuid
-  email           String?         @unique
-  fullName        String?
-  githubLogin     String?         @unique
-  avatarUrl       String?
-  role            UserRole        @default(CLIENT)
-  status          ProfileStatus   @default(ACTIVE)
-  preferences     Json            @default("{}")
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
-  createdProjects Project[]       @relation("ProjectCreatedBy")
-  createdClients  Client[]        @relation("ClientCreatedBy")
-  clientContacts  ClientContact[] @relation("ClientContactProfile")
-  memberships     ProjectMember[]
-  assignedTasks    ProjectTask[]   @relation("TaskAssignee")
-  createdTasks     ProjectTask[]   @relation("TaskCreator")
-  createdWorkOrders WorkOrder[]     @relation("WorkOrderCreator")
-  taskActivities   ProjectTaskActivity[] @relation("TaskActivityActor")
-  notifications    Notification[]  @relation("NotificationRecipient")
-  sentNotifications Notification[] @relation("NotificationActor")
-  timelineEvents  ProjectTimelineEvent[] @relation("TimelineActor")
-  createdConversations ProjectConversation[] @relation("ConversationCreator")
-  messages        ProjectMessage[] @relation("MessageAuthor")
-  messageReads    ConversationRead[]
-  uploadedDocuments CollaborationDocument[] @relation("DocumentUploader")
-  reviewedDocuments CollaborationDocument[] @relation("DocumentReviewer")
-  createdIntakes ProjectIntake[] @relation("ProjectIntakeCreator")
-  submittedIntakes ProjectIntake[] @relation("ProjectIntakeSubmitter")
-  reviewedIntakes ProjectIntake[] @relation("ProjectIntakeReviewer")
-  intakeComments ProjectIntakeComment[] @relation("ProjectIntakeCommentCreator")
-  lockedIntakeSnapshots ProjectIntakeSnapshot[] @relation("ProjectIntakeLocker")
-  reviewedInquiries ClientInquiry[] @relation("InquiryReviewer")
-  createdClientInvites ClientInvite[] @relation("InviteCreator")
-  acceptedClientInvites ClientInvite[] @relation("InviteAcceptor")
-  completedKickoffs ProjectKickoff[] @relation("KickoffCompleter")
-  updatedKickoffs ProjectKickoff[] @relation("KickoffUpdater")
-  acceptedDeliveries ProjectDeliveryReview[] @relation("DeliveryAcceptor")
+  id                         String                  @id @db.Uuid
+  email                      String?                 @unique
+  fullName                   String?
+  githubLogin                String?                 @unique
+  avatarUrl                  String?
+  role                       UserRole                @default(CLIENT)
+  status                     ProfileStatus           @default(ACTIVE)
+  preferences                Json                    @default("{}")
+  createdAt                  DateTime                @default(now())
+  updatedAt                  DateTime                @updatedAt
+  createdProjects            Project[]               @relation("ProjectCreatedBy")
+  createdClients             Client[]                @relation("ClientCreatedBy")
+  ownedWorkspaceAgents       WorkspaceAgent[]        @relation("WorkspaceAgentOwner")
+  createdAgentSkills         AgentSkill[]            @relation("AgentSkillCreatedBy")
+  clientContacts             ClientContact[]         @relation("ClientContactProfile")
+  memberships                ProjectMember[]
+  assignedTasks              ProjectTask[]           @relation("TaskAssignee")
+  createdTasks               ProjectTask[]           @relation("TaskCreator")
+  createdWorkOrders          WorkOrder[]             @relation("WorkOrderCreator")
+  taskActivities             ProjectTaskActivity[]   @relation("TaskActivityActor")
+  notifications              Notification[]          @relation("NotificationRecipient")
+  sentNotifications          Notification[]          @relation("NotificationActor")
+  timelineEvents             ProjectTimelineEvent[]  @relation("TimelineActor")
+  createdConversations       ProjectConversation[]   @relation("ConversationCreator")
+  messages                   ProjectMessage[]        @relation("MessageAuthor")
+  messageReads               ConversationRead[]
+  uploadedDocuments          CollaborationDocument[] @relation("DocumentUploader")
+  reviewedDocuments          CollaborationDocument[] @relation("DocumentReviewer")
+  createdIntakes             ProjectIntake[]         @relation("ProjectIntakeCreator")
+  submittedIntakes           ProjectIntake[]         @relation("ProjectIntakeSubmitter")
+  reviewedIntakes            ProjectIntake[]         @relation("ProjectIntakeReviewer")
+  intakeComments             ProjectIntakeComment[]  @relation("ProjectIntakeCommentCreator")
+  lockedIntakeSnapshots      ProjectIntakeSnapshot[] @relation("ProjectIntakeLocker")
+  reviewedInquiries          ClientInquiry[]         @relation("InquiryReviewer")
+  createdClientInvites       ClientInvite[]          @relation("InviteCreator")
+  acceptedClientInvites      ClientInvite[]          @relation("InviteAcceptor")
+  completedKickoffs          ProjectKickoff[]        @relation("KickoffCompleter")
+  updatedKickoffs            ProjectKickoff[]        @relation("KickoffUpdater")
+  acceptedDeliveries         ProjectDeliveryReview[] @relation("DeliveryAcceptor")
   requestedDeliveryRevisions ProjectDeliveryReview[] @relation("DeliveryRevisionRequester")
-  resolvedDeliveryRevisions ProjectDeliveryReview[] @relation("DeliveryRevisionResolver")
-  scheduleEvents ScheduleEvent[] @relation("ScheduleOwner")
-  developerProfile DeveloperProfile?
-  adminAuditLogs AdminAuditLog[] @relation("AdminAuditActor")
-  ownedGroups Group[] @relation("GroupOwner")
-  groupMemberships GroupMember[] @relation("GroupMembershipUser")
-  groupInvitations GroupInvitation[] @relation("GroupInvitationRecipient")
-  sentGroupInvitations GroupInvitation[] @relation("GroupInvitationSender")
-  createdRepositories Repository[] @relation("RepositoryCreator")
-  repositoryAssignments RepositoryAssignment[] @relation("RepositoryAssignmentUser")
-  assignedRepositoryAccess RepositoryAssignment[] @relation("RepositoryAssignmentActor")
-  groupActivityEvents GroupActivityEvent[] @relation("GroupActivityActor")
+  resolvedDeliveryRevisions  ProjectDeliveryReview[] @relation("DeliveryRevisionResolver")
+  scheduleEvents             ScheduleEvent[]         @relation("ScheduleOwner")
+  developerProfile           DeveloperProfile?
+  adminAuditLogs             AdminAuditLog[]         @relation("AdminAuditActor")
+  ownedGroups                Group[]                 @relation("GroupOwner")
+  groupMemberships           GroupMember[]           @relation("GroupMembershipUser")
+  groupInvitations           GroupInvitation[]       @relation("GroupInvitationRecipient")
+  sentGroupInvitations       GroupInvitation[]       @relation("GroupInvitationSender")
+  createdRepositories        Repository[]            @relation("RepositoryCreator")
+  repositoryAssignments      RepositoryAssignment[]  @relation("RepositoryAssignmentUser")
+  assignedRepositoryAccess   RepositoryAssignment[]  @relation("RepositoryAssignmentActor")
+  groupActivityEvents        GroupActivityEvent[]    @relation("GroupActivityActor")
 
   @@index([role])
   @@index([status])
@@ -684,8 +709,11 @@ model Group {
   members              GroupMember[]
   invitations          GroupInvitation[]
   projects             Project[]
+  clients              Client[]
   repositories         Repository[]
   activityEvents       GroupActivityEvent[]
+  workspaceAgents      WorkspaceAgent[]
+  agentSkills          AgentSkill[]
 
   @@index([ownerId, status])
   @@index([githubInstallationId])
@@ -808,21 +836,21 @@ model GroupActivityEvent {
 }
 
 model ProjectTask {
-  id           String            @id @default(cuid())
+  id           String                @id @default(cuid())
   projectId    String
-  project      Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project      Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
   artifactId   String?
-  artifact     Artifact?         @relation(fields: [artifactId], references: [id], onDelete: SetNull)
+  artifact     Artifact?             @relation(fields: [artifactId], references: [id], onDelete: SetNull)
   title        String
-  description  String?           @db.Text
-  status       ProjectTaskStatus @default(TODO)
-  assignedToId String?           @db.Uuid
-  assignedTo   Profile?          @relation("TaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
-  createdById  String?           @db.Uuid
-  createdBy    Profile?          @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  version      Int               @default(1)
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
+  description  String?               @db.Text
+  status       ProjectTaskStatus     @default(TODO)
+  assignedToId String?               @db.Uuid
+  assignedTo   Profile?              @relation("TaskAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdById  String?               @db.Uuid
+  createdBy    Profile?              @relation("TaskCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  version      Int                   @default(1)
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
   activities   ProjectTaskActivity[]
   workOrders   WorkOrder[]
 
@@ -1056,31 +1084,31 @@ enum CollaborationDocumentStatus {
 }
 
 model CollaborationDocument {
-  id             String                      @id @default(cuid())
-  projectId      String
-  project        Project                     @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  artifactId     String?
-  title          String
-  description    String?                     @db.Text
-  fileName       String?
-  externalUrl    String?
-  storageKey     String?
-  mimeType       String?
-  sizeBytes      Int?
-  sha256         String?
-  kind           CollaborationDocumentKind   @default(GENERAL)
-  status         CollaborationDocumentStatus @default(UPLOADED)
-  clientVisible  Boolean                     @default(false)
-  uploadedById   String?                     @db.Uuid
-  uploadedBy     Profile?                    @relation("DocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
-  reviewedById   String?                     @db.Uuid
-  reviewedBy     Profile?                    @relation("DocumentReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
-  reviewNote     String?                     @db.Text
-  reviewedAt     DateTime?
-  version        Int                         @default(1)
-  createdAt      DateTime                    @default(now())
-  updatedAt      DateTime                    @updatedAt
-  extraction     DocumentExtraction?
+  id            String                      @id @default(cuid())
+  projectId     String
+  project       Project                     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  artifactId    String?
+  title         String
+  description   String?                     @db.Text
+  fileName      String?
+  externalUrl   String?
+  storageKey    String?
+  mimeType      String?
+  sizeBytes     Int?
+  sha256        String?
+  kind          CollaborationDocumentKind   @default(GENERAL)
+  status        CollaborationDocumentStatus @default(UPLOADED)
+  clientVisible Boolean                     @default(false)
+  uploadedById  String?                     @db.Uuid
+  uploadedBy    Profile?                    @relation("DocumentUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+  reviewedById  String?                     @db.Uuid
+  reviewedBy    Profile?                    @relation("DocumentReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewNote    String?                     @db.Text
+  reviewedAt    DateTime?
+  version       Int                         @default(1)
+  createdAt     DateTime                    @default(now())
+  updatedAt     DateTime                    @updatedAt
+  extraction    DocumentExtraction?
 
   @@index([projectId, clientVisible, status])
   @@index([id, version])
@@ -1196,33 +1224,47 @@ enum WorkOrderExecutionStatus {
 }
 
 model WorkOrder {
-  id          String             @id @default(cuid())
-  projectId   String
-  project     Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  taskId      String?
-  task        ProjectTask?       @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  artifactId  String?
-  artifact    Artifact?          @relation(fields: [artifactId], references: [id], onDelete: SetNull)
-  title       String
-  instructions String?           @db.Text
-  agentType   WorkOrderAgentType
-  status      WorkOrderStatus    @default(DRAFT)
-  priority    WorkOrderPriority  @default(NORMAL)
-  createdById String?            @db.Uuid
-  createdBy   Profile?           @relation("WorkOrderCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  executionRunId String?
-  executionAttempt Int           @default(0)
-  executionStartedAt DateTime?
+  id                   String               @id @default(cuid())
+  projectId            String
+  project              Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  taskId               String?
+  task                 ProjectTask?         @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  artifactId           String?
+  artifact             Artifact?            @relation(fields: [artifactId], references: [id], onDelete: SetNull)
+  title                String
+  instructions         String?              @db.Text
+  /// What kind of file this work order must produce.
+  ///
+  /// Kept alongside `workspaceAgentId` because the two answer different questions: `agentType` is
+  /// the OUTPUT contract — required extensions, language, and the signals the validator checks —
+  /// while the agent is who does the work and how. A custom agent still has to declare what it
+  /// will produce, so this stays required.
+  agentType            WorkOrderAgentType
+  /// The configured agent assigned to this work order.
+  ///
+  /// Null keeps the previous behaviour, where the role text is derived from `agentType` alone.
+  /// Set, it is the path by which a workspace's own agent — its instructions, its skills, its
+  /// runtime — actually executes something. SetNull rather than Cascade: deleting an agent must
+  /// not delete the record of work it did.
+  workspaceAgentId     String?
+  workspaceAgent       WorkspaceAgent?      @relation(fields: [workspaceAgentId], references: [id], onDelete: SetNull)
+  status               WorkOrderStatus      @default(DRAFT)
+  priority             WorkOrderPriority    @default(NORMAL)
+  createdById          String?              @db.Uuid
+  createdBy            Profile?             @relation("WorkOrderCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  executionRunId       String?
+  executionAttempt     Int                  @default(0)
+  executionStartedAt   DateTime?
   executionCompletedAt DateTime?
-  executionError String?         @db.Text
-  lastEventAt DateTime?
-  dispatchedAt DateTime?
-  completedAt  DateTime?
-  failedAt     DateTime?
-  version      Int               @default(1)
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
-  executions   WorkOrderExecution[]
+  executionError       String?              @db.Text
+  lastEventAt          DateTime?
+  dispatchedAt         DateTime?
+  completedAt          DateTime?
+  failedAt             DateTime?
+  version              Int                  @default(1)
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  executions           WorkOrderExecution[]
 
   @@index([projectId, status])
   @@index([taskId])
@@ -1236,41 +1278,41 @@ model WorkOrder {
 }
 
 model OrchestrationRun {
-  id              String                  @id @default(cuid())
-  projectId       String
-  project         Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  runId           String                  @unique
-  providerMode    String                  @default("mock")
-  trigger         OrchestrationRunTrigger @default(START)
-  status          OrchestrationRunStatus  @default(RUNNING)
-  currentNode     String?
+  id                  String                  @id @default(cuid())
+  projectId           String
+  project             Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  runId               String                  @unique
+  providerMode        String                  @default("mock")
+  trigger             OrchestrationRunTrigger @default(START)
+  status              OrchestrationRunStatus  @default(RUNNING)
+  currentNode         String?
   // Eve migration (Hybrid) — see docs/architecture/EVE_MIGRATION.md §6.4.
   // Serialized DevFlowState snapshot for the OrchestrationSequencer to persist run state and
   // resume after a gate pause. Null until a run has produced a checkpointed state.
-  checkpointState Json?
+  checkpointState     Json?
   // Immutable user-selected AI Gateway model snapshot for this run.
   // One default applies to all agents unless a specialist override is present.
-  modelSelection Json?
-  error           String?                 @db.Text
-  actorId         String?                 @db.Uuid
-  intakeSnapshotId String?
-  intakeSnapshot   ProjectIntakeSnapshot? @relation(fields: [intakeSnapshotId], references: [id], onDelete: SetNull)
-  dispatchLabel   String?
-  dispatchQueuedAt DateTime?
-  leaseOwner      String?
-  leaseAcquiredAt DateTime?
-  leaseExpiresAt  DateTime?
-  lastHeartbeatAt DateTime?
-  readyWorkOrders Int                     @default(0)
-  completedWorkOrders Int                 @default(0)
-  failedWorkOrders Int                    @default(0)
-  completedArtifacts Int                  @default(0)
-  startedAt       DateTime                @default(now())
-  completedAt     DateTime?
-  createdAt       DateTime                @default(now())
-  updatedAt       DateTime                @updatedAt
-  executions      WorkOrderExecution[]
-  jobs            OrchestrationJob[]
+  modelSelection      Json?
+  error               String?                 @db.Text
+  actorId             String?                 @db.Uuid
+  intakeSnapshotId    String?
+  intakeSnapshot      ProjectIntakeSnapshot?  @relation(fields: [intakeSnapshotId], references: [id], onDelete: SetNull)
+  dispatchLabel       String?
+  dispatchQueuedAt    DateTime?
+  leaseOwner          String?
+  leaseAcquiredAt     DateTime?
+  leaseExpiresAt      DateTime?
+  lastHeartbeatAt     DateTime?
+  readyWorkOrders     Int                     @default(0)
+  completedWorkOrders Int                     @default(0)
+  failedWorkOrders    Int                     @default(0)
+  completedArtifacts  Int                     @default(0)
+  startedAt           DateTime                @default(now())
+  completedAt         DateTime?
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  executions          WorkOrderExecution[]
+  jobs                OrchestrationJob[]
   providerInvocations ProviderInvocation[]
 
   @@index([projectId, createdAt])
@@ -1292,19 +1334,19 @@ model OrchestrationRun {
 /// repository scope is enforced server-side against the database, never from a value the
 /// model produced. Tokens are single-run, time-boxed, and revocable.
 model AgentRepoSession {
-  id          String    @id @default(cuid())
-  token       String    @unique
-  runId       String
-  projectId   String
-  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id         String    @id @default(cuid())
+  token      String    @unique
+  runId      String
+  projectId  String
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   /// Branch every write from this turn lands on; never the default branch.
-  branch      String
-  agentType   String
-  expiresAt   DateTime
-  revokedAt   DateTime?
-  lastUsedAt  DateTime?
-  useCount    Int       @default(0)
-  createdAt   DateTime  @default(now())
+  branch     String
+  agentType  String
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  lastUsedAt DateTime?
+  useCount   Int       @default(0)
+  createdAt  DateTime  @default(now())
 
   @@index([projectId])
   @@index([runId])
@@ -1361,6 +1403,15 @@ model ProviderInvocation {
   continuationToken  String?
   status             ProviderInvocationStatus @default(STARTED)
   error              String?                  @db.Text
+  /// SHA-256 of the exact system prompt sent on this invocation.
+  ///
+  /// Agent instructions are editable, so the prompt that produced an artifact may since have
+  /// been rewritten and the run becomes unexplainable. Storing the hash — rather than the text,
+  /// which would be enormous — answers the questions that actually get asked: did the prompt
+  /// change between these two runs, and which runs shared one.
+  promptHash         String?
+  /// Character length of that prompt. Cheap to store and the only way to notice prompt bloat.
+  promptChars        Int?
   inputTokens        Int?
   outputTokens       Int?
   startedAt          DateTime                 @default(now())
@@ -1463,32 +1514,32 @@ model Notification {
 // ─── Phase 2A: Agent Memory ────────────────────────────────────────────────────
 
 model AgentMemory {
-  id         String                      @id @default(cuid())
+  id             String                      @id @default(cuid())
   /// Which agent produced this memory: frontend | backend | database | architecture | contract
-  agentType  String
+  agentType      String
   /// Optional profile for future named agents; current runtime still keys by agentType.
   agentProfileId String?
-  agentProfile AgentProfile?            @relation(fields: [agentProfileId], references: [id], onDelete: SetNull)
+  agentProfile   AgentProfile?               @relation(fields: [agentProfileId], references: [id], onDelete: SetNull)
   /// Controls whether a memory is private to an agent, shared by one project, or globally reusable.
-  scope      AgentMemoryScope            @default(AGENT_PRIVATE)
+  scope          AgentMemoryScope            @default(AGENT_PRIVATE)
   /// Partition key for similarity search scoping
-  memoryType AgentMemoryType
+  memoryType     AgentMemoryType
   /// The raw text that was embedded (artifact content or summary)
-  content    String                      @db.Text
+  content        String                      @db.Text
   /// 1536-dim vector from text-embedding-3-small
-  embedding  Unsupported("vector(1536)")
+  embedding      Unsupported("vector(1536)")
   /// Flexible metadata: stackKey, projectType, complexity, contractId, etc.
-  metadata   Json                        @default("{}")
+  metadata       Json                        @default("{}")
   /// Source project — nullable so global patterns survive project deletion
-  projectId  String?
-  sourceType String?
-  importance Float                       @default(0.5)
-  lastUsedAt DateTime?
-  usageCount Int                         @default(0)
-  expiresAt  DateTime?
-  approvedAt DateTime?
+  projectId      String?
+  sourceType     String?
+  importance     Float                       @default(0.5)
+  lastUsedAt     DateTime?
+  usageCount     Int                         @default(0)
+  expiresAt      DateTime?
+  approvedAt     DateTime?
   approvalSource String?
-  createdAt  DateTime                    @default(now())
+  createdAt      DateTime                    @default(now())
 
   @@index([agentType, memoryType])
   @@index([projectId])
@@ -1621,15 +1672,15 @@ model AdminDomain {
 }
 
 model AdminAuditLog {
-  id        String   @id @default(cuid())
-  actorId   String?  @db.Uuid
-  actor     Profile? @relation("AdminAuditActor", fields: [actorId], references: [id], onDelete: SetNull)
-  action    String
+  id         String   @id @default(cuid())
+  actorId    String?  @db.Uuid
+  actor      Profile? @relation("AdminAuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  action     String
   targetType String
-  targetId  String?
-  summary   String
-  metadata  Json     @default("{}")
-  createdAt DateTime @default(now())
+  targetId   String?
+  summary    String
+  metadata   Json     @default("{}")
+  createdAt  DateTime @default(now())
 
   @@index([actorId, createdAt])
   @@index([targetType, targetId])
@@ -1694,4 +1745,115 @@ model IdempotencyRecord {
   @@index([status, lockedUntil])
   @@map("idempotency_records")
   @@schema("integration")
+}
+
+enum AgentAccessScope {
+  /// Visible to and usable by everyone in the team workspace.
+  WORKSPACE
+  /// Visible only to the profile that owns it.
+  PERSONAL
+
+  @@schema("orchestration")
+}
+
+enum WorkspaceAgentStatus {
+  ACTIVE
+  ARCHIVED
+
+  @@schema("orchestration")
+}
+
+/// A configurable orchestration agent.
+///
+/// The console used to render the agent roster from a hand-maintained TypeScript constant that
+/// mirrored `agentic-orchestration-ag/agent/subagents`. It could drift silently and nothing on
+/// the page could be changed. This is the same roster as editable records: the twelve built-ins
+/// are seeded per workspace and their `instructions` override the compiled-in system prompt at
+/// dispatch, so editing one changes what the agent is actually told on the next run.
+///
+/// `key` is the dispatch identity the orchestration knows an agent by ('frontend', 'qa', ...).
+/// Built-ins keep the package's key; custom agents get a generated one. It is unique per
+/// workspace, so two teams can each tune their own frontend agent without colliding.
+model WorkspaceAgent {
+  id           String             @id @default(cuid())
+  key          String
+  /// Which deployed Eve subagent executes this agent.
+  ///
+  /// `key` is identity — what a workspace names and configures. `runtimeKey` is capability —
+  /// which deployed directory carries the tools and the self-repair loop. The two coincide for
+  /// built-ins, which is exactly what hid the distinction: a custom agent has an identity with
+  /// no directory behind it, and so could never be dispatched.
+  ///
+  /// Null means "same as key", so existing rows keep working with no backfill.
+  runtimeKey   String?
+  name         String
+  description  String?            @db.Text
+  avatarEmoji  String?
+  /// Overrides the compiled-in system prompt. Null means "use the built-in", which is why it is
+  /// nullable rather than seeded with a copy — a copy would freeze the prompt at seed time and
+  /// silently diverge from the package every time the built-in is improved.
+  instructions String?            @db.Text
+  /// Gateway model id. Null means the run's default model applies.
+  model        String?
+  concurrency  Int                @default(1)
+  accessScope  AgentAccessScope   @default(WORKSPACE)
+  status       WorkspaceAgentStatus @default(ACTIVE)
+  /// Seeded from the agent package. Editable and archivable, never deletable: the pipeline
+  /// dispatches these by key and deleting one would break runs rather than tidy the list.
+  isBuiltIn    Boolean            @default(false)
+  groupId      String
+  group        Group              @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  ownerId      String?            @db.Uuid
+  owner        Profile?           @relation("WorkspaceAgentOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  skills       AgentSkillOnAgent[]
+  workOrders   WorkOrder[]
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@unique([groupId, key])
+  @@index([groupId, status, name])
+  @@index([ownerId])
+  @@map("workspace_agents")
+  @@schema("orchestration")
+}
+
+/// A reusable Markdown skill, authored once and attachable to many agents.
+///
+/// Workspace-global on purpose: a convention worth teaching one agent is almost always worth
+/// teaching its neighbours, and duplicating the text per agent guarantees the copies drift.
+/// `body` is Markdown and is appended to the system prompt of every agent it is attached to, so
+/// a skill is a functional instruction fragment rather than documentation about one.
+model AgentSkill {
+  id          String              @id @default(cuid())
+  slug        String
+  name        String
+  description String?             @db.Text
+  body        String              @db.Text
+  groupId     String
+  group       Group               @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  createdById String?             @db.Uuid
+  createdBy   Profile?            @relation("AgentSkillCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  agents      AgentSkillOnAgent[]
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@unique([groupId, slug])
+  @@index([groupId, name])
+  @@index([createdById])
+  @@map("agent_skills")
+  @@schema("orchestration")
+}
+
+model AgentSkillOnAgent {
+  id        String       @id @default(cuid())
+  agentId   String
+  agent     WorkspaceAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  skillId   String
+  skill     AgentSkill   @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  createdAt DateTime     @default(now())
+
+  @@unique([agentId, skillId])
+  @@index([skillId])
+  @@map("agent_skill_on_agent")
+  @@schema("orchestration")
 }

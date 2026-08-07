@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { DeveloperAvailabilityStatus, Prisma, ProjectStatus, ProjectTaskStatus, UserRole, WorkOrderStatus } from '@prisma/client';
+import { isOpenProjectTask } from '../shared/domain/project-task-status';
 import { AuthUser } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -103,7 +104,7 @@ export class DevelopersService {
   private toDeveloperView(developer: DeveloperRecord) {
     const profile = developer.developerProfile;
     const assignedProjects = new Set(developer.memberships.map((member) => member.projectId));
-    const openTasks = developer.assignedTasks.filter((task) => task.status !== ProjectTaskStatus.DONE).length;
+    const openTasks = developer.assignedTasks.filter((task) => isOpenProjectTask(task.status)).length;
     const activeStatuses: WorkOrderStatus[] = [
       WorkOrderStatus.READY,
       WorkOrderStatus.DISPATCHED,

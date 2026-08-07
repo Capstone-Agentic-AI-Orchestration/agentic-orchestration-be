@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { ProjectTaskStatus, UserRole, WorkOrderStatus } from '@prisma/client';
+import { UserRole, WorkOrderStatus } from '@prisma/client';
 import { AuthUser } from '../auth/auth.types';
 import { PrismaService } from '../prisma/prisma.service';
+import { CLOSED_PROJECT_TASK_STATUSES } from '../shared/domain/project-task-status';
 
 @Injectable()
 export class ReportsService {
@@ -26,7 +27,9 @@ export class ReportsService {
       }),
       this.prisma.clientInvite.count({ where: { project: projectWhere, status: 'PENDING' } }),
       this.prisma.projectTask.count({
-        where: { project: projectWhere, status: { not: ProjectTaskStatus.DONE } },
+        // Not `{ not: DONE }`: CANCELLED is also finished, and counting abandoned work as
+        // outstanding would overstate every report this number feeds.
+        where: { project: projectWhere, status: { notIn: CLOSED_PROJECT_TASK_STATUSES } },
       }),
       this.prisma.workOrder.count({
         where: {

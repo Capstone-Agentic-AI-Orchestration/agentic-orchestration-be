@@ -2463,6 +2463,9 @@ describe('ProjectsService', () => {
         title: 'Implement dashboard handoff',
         instructions: 'Build the dev dashboard from the approved artifact.',
         agentType: WorkOrderAgentType.FRONTEND,
+        // Null when no configured agent is assigned: the role is derived from agentType, which
+        // is exactly how work orders behaved before agents became assignable.
+        workspaceAgentId: null,
         priority: WorkOrderPriority.HIGH,
         taskId: 'task-1',
         artifactId: 'artifact-1',

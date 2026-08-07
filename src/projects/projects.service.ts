@@ -15,6 +15,7 @@ import {
 import { CreateProjectDto } from './dto/create-project.dto';
 import { ArtifactOutputReviewStatus, ArtifactReviewStatus, ArtifactValidationStatus, ClientInviteStatus, CollaborationDocumentStatus, InquiryStatus, NotificationType, OrchestrationRunTrigger, ProjectDeliveryReview, ProjectDeliveryReviewStatus, ProjectStatus, ProjectTimelineEvent, ProjectTimelineEventType, ProjectTimelineVisibility, ProjectTaskActivity, ProjectTaskActivityType, ProjectTaskStatus, Project, GateEvent, Artifact, EventLog, Prisma, ProjectKickoff, ProjectKickoffStatus, ProjectTask, RepositoryKind, RepositoryStatus, UserRole, WorkOrder, WorkOrderAgentType, WorkOrderPriority, WorkOrderStatus } from '@prisma/client';
 import { AuthUser } from '../auth/auth.types';
+import { isOpenProjectTask } from '../shared/domain/project-task-status';
 import { UpdateProjectDto } from './dto/update-project.dto';
 import { AddProjectMemberDto } from './dto/project-member.dto';
 import { ShareArtifactDto } from './dto/share-artifact.dto';
@@ -2578,6 +2579,7 @@ export class ProjectsService {
         title: dto.title.trim(),
         instructions: dto.instructions?.trim() || null,
         agentType: dto.agentType,
+        workspaceAgentId: dto.workspaceAgentId || null,
         priority: dto.priority,
         taskId: dto.taskId || null,
         artifactId: dto.artifactId || null,
@@ -2642,6 +2644,9 @@ export class ProjectsService {
       title: dto.title?.trim(),
       instructions: dto.instructions === undefined ? undefined : dto.instructions.trim() || null,
       agentType: dto.agentType,
+      // Empty string clears the assignment, which is a different intent from "no change".
+      workspaceAgentId:
+        dto.workspaceAgentId === undefined ? undefined : dto.workspaceAgentId || null,
       priority: dto.priority,
       status: dto.status,
       taskId: dto.taskId === undefined ? undefined : dto.taskId || null,
@@ -3181,7 +3186,7 @@ export class ProjectsService {
     const clientReviewOpen =
       deliveryReviewOpen ||
       clientVisibleArtifacts.some((artifact) => artifact.reviewStatus === ArtifactReviewStatus.PENDING);
-    const openTasks = tasks.filter((task) => task.status !== ProjectTaskStatus.DONE).length;
+    const openTasks = tasks.filter((task) => isOpenProjectTask(task.status)).length;
     const activeWorkOrderStatuses = new Set<WorkOrderStatus>([
       WorkOrderStatus.READY,
       WorkOrderStatus.DISPATCHED,
