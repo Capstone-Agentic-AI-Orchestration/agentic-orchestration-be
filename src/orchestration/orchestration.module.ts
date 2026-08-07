@@ -30,6 +30,7 @@ import { ProviderInvocationService } from './providers/provider-invocation.servi
 import { OrchestrationSequencer } from './graph/orchestration-sequencer';
 import { LlmAgentProvider } from './providers/llm-agent.provider';
 import { MockAgentProvider } from './providers/mock-agent.provider';
+import { CompanionAgentProvider } from './providers/companion-agent.provider';
 import { StreamEmitter } from './streaming/stream-emitter.service';
 import { OrchestrationEmitter } from './streaming/orchestration-emitter.service';
 import { OrchestrationRunDispatcher } from './run-dispatcher.service';
@@ -75,6 +76,7 @@ import { ModelCatalogService } from './models/model-catalog.service';
     OrchestrationSequencer,
     LlmAgentProvider,
     MockAgentProvider,
+    CompanionAgentProvider,
     StreamEmitter,
     OrchestrationEmitter,
     OrchestrationRunDispatcher,

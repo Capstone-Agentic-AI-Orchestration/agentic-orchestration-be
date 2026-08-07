@@ -6,6 +6,7 @@ import {
 } from './agent-provider.types';
 import { LlmAgentProvider } from './llm-agent.provider';
 import { MockAgentProvider } from './mock-agent.provider';
+import { CompanionAgentProvider } from './companion-agent.provider';
 import { llmConcurrencyLimit, llmRequestTimeoutMs } from './llm-runtime';
 
 @Injectable()
@@ -13,6 +14,7 @@ export class AgentProviderRegistry {
   constructor(
     private readonly mockAgentProvider: MockAgentProvider,
     private readonly llmAgentProvider: LlmAgentProvider,
+    private readonly companionAgentProvider: CompanionAgentProvider,
   ) {}
 
   getStatus(): AgentProviderStatus {
@@ -55,6 +57,19 @@ export class AgentProviderRegistry {
         requestTimeoutMs: llmRequestTimeoutMs(),
         concurrencyLimit: llmConcurrencyLimit(),
       },
+      {
+        // Whether a machine is actually awake is a live question, and this method is synchronous and
+        // called on hot paths. Reporting the mode as available and letting dispatch fail with a
+        // precise, actionable message beats making every caller of getStatus() async.
+        mode: 'companion' as AgentProviderMode,
+        displayName: 'Local Machine (Claude Code / Codex)',
+        active: requestedMode === 'companion',
+        available: true,
+        implemented: true,
+        missingRequirements: [],
+        reason: null,
+        provider: 'companion',
+      },
     ];
     const activeProvider = providers.find((provider) => provider.active) ?? providers[0];
 
@@ -82,6 +97,7 @@ export class AgentProviderRegistry {
       );
     }
 
+    if (status.activeMode === 'companion') return this.companionAgentProvider;
     return status.activeMode === this.llmAgentProvider.mode
       ? this.llmAgentProvider
       : this.mockAgentProvider;
@@ -90,6 +106,7 @@ export class AgentProviderRegistry {
   requestedMode(): AgentProviderMode {
     if (process.env.AGENT_PROVIDER === 'llm') return 'llm';
     if (process.env.AGENT_PROVIDER === 'simulation') return 'simulation';
+    if (process.env.AGENT_PROVIDER === 'companion') return 'companion';
     return 'mock';
   }
 

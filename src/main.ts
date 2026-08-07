@@ -30,8 +30,18 @@ async function bootstrap(): Promise<void> {
   app.enableCors({
     origin: corsOrigins(),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
+    // x-runtime-token authenticates the local companion daemon, which sends no Authorization header.
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Idempotency-Key',
+      'x-runtime-token',
+    ],
   });
+
+  // A companion reports up to 5MB of captured CLI output when it finishes a task. Express defaults
+  // to 100kb, which would 413 exactly the successful work we care most about keeping.
+  app.useBodyParser('json', { limit: '8mb' });
 
   // Observability: LangChain/LangGraph (and its LangSmith tracer) has been removed in the Eve
   // migration. Orchestration tracing now flows through the typed protocol channel

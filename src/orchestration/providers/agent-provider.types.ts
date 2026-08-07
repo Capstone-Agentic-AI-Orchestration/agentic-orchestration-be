@@ -1,6 +1,10 @@
 import { Prisma, WorkOrderAgentType, WorkOrderPriority } from '@prisma/client';
 
-export type AgentProviderMode = 'mock' | 'llm' | 'simulation';
+/**
+ * `companion` runs the work order on a user's own machine through an AI CLI they already have
+ * installed, instead of calling a metered model API.
+ */
+export type AgentProviderMode = 'mock' | 'llm' | 'simulation' | 'companion';
 export type AgentLlmEngine = 'eve' | 'direct';
 
 export interface WorkOrderAgentContext {

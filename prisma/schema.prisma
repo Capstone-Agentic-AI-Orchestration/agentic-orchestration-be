@@ -1265,6 +1265,7 @@ model WorkOrder {
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
   executions           WorkOrderExecution[]
+  runtimeTasks         RuntimeTask[]
 
   @@index([projectId, status])
   @@index([taskId])
@@ -1424,6 +1425,195 @@ model ProviderInvocation {
   @@index([agent, startedAt])
   @@index([engine, status])
   @@map("provider_invocations")
+  @@schema("orchestration")
+}
+
+/// A developer workstation running the `devflow-runtime` companion daemon.
+///
+/// This is the thing that actually knows which AI coding CLIs a person has installed, because it
+/// runs on their machine. The backend cannot answer that question about anyone but itself, which
+/// is why the old server-side CLI probe was removed: it described the API host, never the user.
+///
+/// Liveness is derived, not stored: the daemon heartbeats every 30s, so `lastSeenAt` newer than
+/// ~90s (three misses) reads as online. Nothing writes an "offline" state — a machine that stops
+/// talking simply ages out, which is the only signal a crashed or sleeping laptop ever gives.
+model RuntimeMachine {
+  id             String   @id @default(cuid())
+  /// The team workspace this machine was paired into, inherited from the pairing code.
+  groupId        String
+  /// The person who paired it. Machines are personal: you only ever see your own.
+  ownerId        String   @db.Uuid
+  name           String
+  os             String
+  arch           String
+  runtimeVersion String
+  /// SHA-256 of the machine token, never the token itself.
+  tokenHash      String   @unique
+  tokenVersion   Int      @default(1)
+  /// Rotation grace. A running daemon captured its token at startup — in memory and in its live
+  /// socket handshake — and never learns it was rotated, so hard-invalidating the old hash would
+  /// brick it until restart. The previous hash stays valid for a short window instead.
+  previousTokenHash      String?
+  previousTokenExpiresAt DateTime?
+  lastSeenAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  adapters  RuntimeAdapter[]
+  resources RuntimeResource[]
+  tasks     RuntimeTask[]
+
+  @@index([ownerId])
+  @@index([groupId])
+  @@index([lastSeenAt])
+  @@map("runtime_machines")
+  @@schema("orchestration")
+}
+
+/// One provider CLI installation on one machine — the unit work is dispatched to.
+///
+/// Rows are created implicitly by the heartbeat rather than by any explicit command, because the
+/// heartbeat response is the only channel through which the daemon ever learns its adapter ids.
+/// The unique constraint is what keeps those ids stable across daemon restarts.
+///
+/// `status` is derived here, not reported: the daemon deliberately strips `status` and the
+/// executable path before sending, so the server never receives a filesystem path.
+model RuntimeAdapter {
+  id             String         @id @default(cuid())
+  machineId      String
+  machine        RuntimeMachine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  /// CLAUDE_CODE | CODEX_CLI — kept as text to match the wire contract exactly.
+  kind           String
+  displayCommand String
+  version        String?
+  authenticated  Boolean        @default(false)
+  capabilities   Json           @default("{}")
+  status         String         @default("MISSING")
+  enabled        Boolean        @default(true)
+  lastSeenAt     DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@unique([machineId, kind])
+  @@map("runtime_adapters")
+  @@schema("orchestration")
+}
+
+/// An opaque handle to a project directory on a machine.
+///
+/// The server never learns the real path — only the client's `config.json` maps `opaqueId` to a
+/// directory. What is stored here is deliberately the least the server can know and still route
+/// work: an id it can name, a label to show, and a fingerprint the daemon re-verifies locally
+/// before every run. `access` is a ceiling the client enforces; a task cannot upgrade it.
+model RuntimeResource {
+  id           String         @id @default(cuid())
+  machineId    String
+  machine      RuntimeMachine @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  /// Client-generated (`res_<base64url>`); treat as untrusted input.
+  opaqueId     String
+  name         String
+  fingerprint  String
+  /// READ_ONLY | READ_WRITE
+  access       String
+  capabilities Json           @default("{}")
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@unique([machineId, opaqueId])
+  @@map("runtime_resources")
+  @@schema("orchestration")
+}
+
+enum RuntimeTaskStatus {
+  QUEUED
+  LEASED
+  SUCCEEDED
+  FAILED
+  CANCELLED
+
+  @@schema("orchestration")
+}
+
+/// One unit of agent work handed to a companion machine to execute locally.
+///
+/// This is what makes a configured agent run through someone's own installed CLI instead of a paid
+/// cloud call. The work order stays the unit of record; this row is the off-box execution attempt.
+///
+/// Leased rather than assigned: a laptop can sleep, lose network, or be killed mid-run, and the
+/// companion silently drops a failure report it cannot deliver. Without an expiring lease that a
+/// reaper can requeue, such a task would sit QUEUED-but-taken forever with nothing to notice.
+model RuntimeTask {
+  id               String            @id @default(cuid())
+  workOrderId      String
+  workOrder        WorkOrder         @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  machineId        String
+  machine          RuntimeMachine    @relation(fields: [machineId], references: [id], onDelete: Cascade)
+  /// Which CLI must run this. Only dispatchable kinds are ever written here.
+  adapterKind      String
+  /// The opaque local directory handle the companion should work in.
+  resourceOpaqueId String
+  status           RuntimeTaskStatus @default(QUEUED)
+  /// Incremented by the reaper on requeue; the companion embeds it in idempotency keys.
+  attempt          Int               @default(1)
+  /// Carries `instructions` — the assembled prompt the companion feeds to the CLI.
+  plan             Json              @default("{}")
+  /// SHA-256 of the lease token, never the token itself.
+  leaseTokenHash   String?
+  leaseExpiresAt   DateTime?
+  /// The only cancellation channel the companion has is the reply to its task heartbeat.
+  cancelRequested  Boolean           @default(false)
+  output           String?           @db.Text
+  usage            Json?
+  error            String?           @db.Text
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([machineId, status])
+  @@index([status, leaseExpiresAt])
+  @@index([workOrderId])
+  @@map("runtime_tasks")
+  @@schema("orchestration")
+}
+
+/// A short-lived, single-use code that pairs a machine to a person and workspace.
+///
+/// The code is what the user carries from the browser to their terminal, so it is stored hashed
+/// and normalized (case and dashes removed) — the daemon sends back whatever the user typed.
+model RuntimePairingCode {
+  id         String    @id @default(cuid())
+  codeHash   String    @unique
+  groupId    String
+  ownerId    String    @db.Uuid
+  expiresAt  DateTime
+  consumedAt DateTime?
+  machineId  String?
+  createdAt  DateTime  @default(now())
+
+  @@index([ownerId])
+  @@index([expiresAt])
+  @@map("runtime_pairing_codes")
+  @@schema("orchestration")
+}
+
+model AiRuntimeProvider {
+  id           String    @id @default(cuid())
+  provider     String
+  label        String
+  baseUrl      String?
+  model        String?
+  vaultSecretId String?  @db.Uuid
+  status       String    @default("unknown")
+  createdById  String?   @db.Uuid
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([provider])
+  @@index([status])
+  @@index([createdById])
+  @@map("ai_runtime_providers")
   @@schema("orchestration")
 }
 

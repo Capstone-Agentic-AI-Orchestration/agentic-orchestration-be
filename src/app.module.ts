@@ -30,6 +30,8 @@ import { ContextMemoryModule } from './context-memory/context-memory.module';
 import { IntakeModule } from './intake/intake.module';
 import { GroupsModule } from './groups/groups.module';
 import { RepositoriesModule } from './repositories/repositories.module';
+import { RuntimesModule } from './runtimes/runtimes.module';
+import { RuntimeCompanionModule } from './runtime-companion/runtime-companion.module';
 
 @Module({
   imports: [
@@ -65,6 +67,8 @@ import { RepositoriesModule } from './repositories/repositories.module';
     RepositoriesModule,
     ClientInvitesModule,
     AdminModule,
+    RuntimesModule,
+    RuntimeCompanionModule,
     DevFlowScheduleModule,
     ReportsModule,
     DevelopersModule,
