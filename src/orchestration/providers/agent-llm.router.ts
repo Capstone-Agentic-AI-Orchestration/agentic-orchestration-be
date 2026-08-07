@@ -1,4 +1,5 @@
 import { Injectable, Logger, Optional } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { DirectLlmProvider, type DirectLlmJsonOptions, type DirectLlmJsonResult } from './direct-llm.provider';
 import { EveLlmProvider } from './eve-llm.provider';
 import type { AgentLlmEngine, AgentLlmEngineStatus } from './agent-provider.types';
@@ -79,12 +80,19 @@ export class AgentLlmRouter {
     const requestId = this.invocations?.ensureRequestId(options.correlation) ?? options.correlation?.requestId;
     const correlation = { ...options.correlation, requestId };
     const agent = correlation.agent ?? options.subagent ?? options.agentName;
+    // Fingerprint the exact prompt being sent. This is the only point where the fully assembled
+    // prompt and the invocation record meet, so it is the only place the two can be tied
+    // together — every node builds its prompt independently and none of them know the
+    // invocation id, which is created here.
+    const fingerprint = fingerprintPrompt(options.systemPrompt);
     const invocation = await this.invocations?.start({
       correlation,
       agent,
       engine,
       provider,
       model: engine === 'eve' ? this.getStatus().model : this.direct.model(),
+      promptHash: fingerprint.hash,
+      promptChars: fingerprint.chars,
     }) ?? null;
     const routedOptions = { ...options, correlation: { ...correlation, requestId: invocation?.requestId ?? requestId } };
 
@@ -112,4 +120,23 @@ export class AgentLlmRouter {
     }
     return 'eve';
   }
+}
+
+/**
+ * A stable identity for a prompt, without storing the prompt.
+ *
+ * The assembled system prompt carries the contract, retrieved memory and prior feedback, so it
+ * is far too large to keep per invocation. The hash still answers the questions that get asked
+ * after the fact — did the prompt change between these runs, which runs shared one — and the
+ * length makes prompt bloat visible.
+ */
+export function fingerprintPrompt(prompt: string | undefined | null): {
+  hash: string | null;
+  chars: number | null;
+} {
+  if (typeof prompt !== 'string' || prompt.length === 0) return { hash: null, chars: null };
+  return {
+    hash: createHash('sha256').update(prompt).digest('hex'),
+    chars: prompt.length,
+  };
 }

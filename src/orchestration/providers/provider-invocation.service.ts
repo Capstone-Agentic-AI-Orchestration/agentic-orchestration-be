@@ -14,6 +14,9 @@ export interface ProviderInvocationStartInput {
   engine: 'eve' | 'direct';
   provider?: string | null;
   model?: string | null;
+  /** SHA-256 of the exact system prompt sent, so a past run stays explainable after an edit. */
+  promptHash?: string | null;
+  promptChars?: number | null;
 }
 
 export interface ProviderInvocationRecord {
@@ -55,6 +58,8 @@ export class ProviderInvocationService {
           engine: input.engine,
           provider: this.safeString(input.provider, 128),
           model: this.safeString(input.model, 256),
+          promptHash: this.safeString(input.promptHash, 64),
+          promptChars: typeof input.promptChars === 'number' ? input.promptChars : null,
           requestId,
           status: ProviderInvocationStatus.STARTED,
           metadata: this.metadataJson(input.correlation, requestId),
