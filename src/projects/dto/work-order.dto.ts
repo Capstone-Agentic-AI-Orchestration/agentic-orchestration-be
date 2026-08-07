@@ -10,8 +10,19 @@ export class CreateWorkOrderDto {
   @IsString()
   instructions?: string;
 
+  /** The OUTPUT contract: which extensions, language and signals the validator will require. */
   @IsEnum(WorkOrderAgentType)
   agentType!: WorkOrderAgentType;
+
+  /**
+   * The configured agent that should do the work.
+   *
+   * Optional: omitted, the role is derived from `agentType` exactly as before. Supplied, the
+   * agent's own instructions and attached skills shape the prompt.
+   */
+  @IsOptional()
+  @IsString()
+  workspaceAgentId?: string;
 
   @IsOptional()
   @IsEnum(WorkOrderPriority)
@@ -27,6 +38,11 @@ export class CreateWorkOrderDto {
 }
 
 export class UpdateWorkOrderDto {
+  /** Reassign the work order to a different configured agent, or clear it with an empty string. */
+  @IsOptional()
+  @IsString()
+  workspaceAgentId?: string;
+
   @IsOptional()
   @IsString()
   @MinLength(1, { message: 'title must not be empty' })

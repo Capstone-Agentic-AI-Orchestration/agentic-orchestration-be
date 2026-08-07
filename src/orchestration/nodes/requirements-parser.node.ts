@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { resolveAgentSystemPrompt } from '../../agents/agent-prompt-resolver';
 import { MemoryService } from '../../memory/memory.service';
 import {
   DevFlowStateType,
@@ -109,7 +110,12 @@ ${memoryBundle.context ? `Context from similar past requirements:\n${memoryBundl
           agent: 'requirements-parser',
         },
         onToken: (delta) => this.streamEmitter.emit(projectId, NODE.PARSE_REQUIREMENTS, runId ?? '', 'token', delta),
-        systemPrompt: REQUIREMENTS_PARSER_SYSTEM,
+        systemPrompt: await resolveAgentSystemPrompt(
+          this.prisma,
+          state.projectId,
+          'requirements-parser',
+          REQUIREMENTS_PARSER_SYSTEM,
+        ),
         userPrompt: prompt,
         expectedShape: 'object',
       });

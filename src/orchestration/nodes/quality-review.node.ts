@@ -1,4 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { QA_REVIEW_SYSTEM, SECURITY_REVIEW_SYSTEM, REVIEW_OUTPUT_CONTRACT } from '../prompts/agent-prompts';
+import { resolveAgentSystemPrompt } from '../../agents/agent-prompt-resolver';
+import { PrismaService } from '../../prisma/prisma.service';
 import type { DevFlowStateType } from '../graph/devflow.state';
 import { NODE } from '../graph/topology';
 import { resolveModelForNode } from '../providers/base-llm.provider';
@@ -21,6 +24,9 @@ export class QualityReviewNode {
   constructor(
     private readonly llm: AgentLlmRouter,
     private readonly streamEmitter: StreamEmitter,
+    // Injected so the workspace's own instructions for the qa and security agents can be
+    // resolved at dispatch, the same way the code agents resolve theirs.
+    private readonly prisma: PrismaService,
   ) {}
 
   executeQa(state: DevFlowStateType): Promise<Partial<DevFlowStateType>> {
@@ -66,20 +72,17 @@ export class QualityReviewNode {
       kind === 'security' && state.qaReview
         ? `\n\nPrior QA review:\n${state.qaReview}`
         : '';
-    const systemPrompt =
-      kind === 'qa'
-        ? [
-            'You are DevFlow Test and QA Reviewer.',
-            'Independently inspect the joined artifacts against the locked acceptance criteria.',
-            'Focus on missing tests, broken states, contract mismatches, accessibility, edge cases, and build risk.',
-            'Return one JSON object: {"verdict":"pass|needs_changes","issues":["string"],"recommendations":["string"]}.',
-          ].join(' ')
-        : [
-            'You are DevFlow Security Reviewer.',
-            'Review only concrete risks in the supplied implementation: authentication, authorization, validation, secrets, data exposure, uploads, payments, and dependency boundaries.',
-            'Do not invent vulnerabilities without evidence.',
-            'Return one JSON object: {"verdict":"pass|needs_changes","issues":["string"],"recommendations":["string"]}.',
-          ].join(' ');
+    // Role text is overridable by the workspace; the output contract is appended afterwards and
+    // is not, because every caller parses that JSON shape.
+    const roleText = await resolveAgentSystemPrompt(
+      this.prisma,
+      state.projectId,
+      kind === 'qa' ? 'qa' : 'security-review',
+      kind === 'qa' ? QA_REVIEW_SYSTEM : SECURITY_REVIEW_SYSTEM,
+    );
+    const systemPrompt = `${roleText}
+
+${REVIEW_OUTPUT_CONTRACT}`;
 
     try {
       const result = await this.llm.generateJson<ReviewResult>({

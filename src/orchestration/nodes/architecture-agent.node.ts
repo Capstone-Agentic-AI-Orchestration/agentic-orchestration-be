@@ -5,6 +5,7 @@ import { MemoryService } from '../../memory/memory.service';
 import { EventLogService } from '../../supervisor/event-log.service';
 import { AgentLlmRouter } from '../providers/agent-llm.router';
 import { PrismaService } from '../../prisma/prisma.service';
+import { resolveAgentSystemPrompt } from '../../agents/agent-prompt-resolver';
 import { StreamEmitter } from '../streaming/stream-emitter.service';
 import { humanReadableError } from './human-readable-error';
 import { ARCHITECTURE_AGENT_SYSTEM, buildAgentSystemPrompt, buildStructuredMemoryContext } from '../prompts/agent-prompts';
@@ -163,8 +164,12 @@ export class ArchitectureAgentNode {
         .filter(Boolean)
         .join('\n\n');
 
+      // The workspace's own instructions for this agent, falling back to the compiled-in
+      // prompt when it has none. This is what makes the console's Instructions field real.
+      const basePrompt = await resolveAgentSystemPrompt(this.prisma, projectId, 'architecture', ARCHITECTURE_AGENT_SYSTEM);
+
       const systemPrompt = buildAgentSystemPrompt({
-        basePrompt: ARCHITECTURE_AGENT_SYSTEM,
+        basePrompt,
         memoryContext: structuredMemory,
         artifactManifest,
         previousFeedback: combinedFeedback || undefined,

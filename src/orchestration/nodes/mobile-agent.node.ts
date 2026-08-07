@@ -4,6 +4,7 @@ import { MemoryService } from '../../memory/memory.service';
 import { EventLogService } from '../../supervisor/event-log.service';
 import { AgentLlmRouter } from '../providers/agent-llm.router';
 import { PrismaService } from '../../prisma/prisma.service';
+import { resolveAgentSystemPrompt } from '../../agents/agent-prompt-resolver';
 import { StreamEmitter } from '../streaming/stream-emitter.service';
 import { humanReadableError } from './human-readable-error';
 import { MOBILE_AGENT_SYSTEM, buildAgentSystemPrompt, buildRepoAccessBlock, buildStructuredMemoryContext } from '../prompts/agent-prompts';
@@ -156,8 +157,12 @@ export class MobileAgentNode {
         .filter(Boolean)
         .join('\n\n');
 
+      // The workspace's own instructions for this agent, falling back to the compiled-in
+      // prompt when it has none.
+      const basePrompt = await resolveAgentSystemPrompt(this.prisma, projectId, 'mobile', MOBILE_AGENT_SYSTEM);
+
       const systemPrompt = buildAgentSystemPrompt(
-        MOBILE_AGENT_SYSTEM,
+        basePrompt,
         structuredMemory,
         artifactManifest,
         combinedFeedback || undefined,

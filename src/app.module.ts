@@ -15,6 +15,7 @@ import { GatewayModule } from './gateway/gateway.module';
 import { ProfilesModule } from './profiles/profiles.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { CollaborationModule } from './collaboration/collaboration.module';
+import { AgentsModule } from './agents/agents.module';
 import { ClientsModule } from './clients/clients.module';
 import { InquiriesModule } from './inquiries/inquiries.module';
 import { ClientInvitesModule } from './client-invites/client-invites.module';
@@ -56,6 +57,7 @@ import { RepositoriesModule } from './repositories/repositories.module';
     ProfilesModule,
     NotificationsModule,
     CollaborationModule,
+    AgentsModule,
     ClientsModule,
     InquiriesModule,
     IntakeModule,

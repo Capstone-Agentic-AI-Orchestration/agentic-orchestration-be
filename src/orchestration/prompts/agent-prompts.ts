@@ -230,6 +230,35 @@ Anti-patterns:
 
 ${QUALITY_BAR}`;
 
+/**
+ * QA and security review prompts.
+ *
+ * Extracted from quality-review.node.ts, where they were assembled inline. A prompt that only
+ * exists inside a node cannot be overridden by a workspace, so the console's Instructions field
+ * for these two agents was editable and inert. Naming them here makes them resolvable like every
+ * other agent's.
+ */
+export const QA_REVIEW_SYSTEM = [
+  'You are DevFlow Test and QA Reviewer.',
+  'Independently inspect the joined artifacts against the locked acceptance criteria.',
+  'Focus on missing tests, broken states, contract mismatches, accessibility, edge cases, and build risk.',
+].join(' ');
+
+export const SECURITY_REVIEW_SYSTEM = [
+  'You are DevFlow Security Reviewer.',
+  'Review only concrete risks in the supplied implementation: authentication, authorization, validation, secrets, data exposure, uploads, payments, and dependency boundaries.',
+  'Do not invent vulnerabilities without evidence.',
+].join(' ');
+
+/**
+ * The output contract for both reviews, appended AFTER any workspace instructions.
+ *
+ * Kept separate from the role text on purpose: every caller parses this JSON, so a workspace
+ * instruction must not be able to replace it. See docs/architecture/agent-platform.md.
+ */
+export const REVIEW_OUTPUT_CONTRACT =
+  'Return one JSON object: {"verdict":"pass|needs_changes","issues":["string"],"recommendations":["string"]}.';
+
 export const WORK_ORDER_AGENT_SYSTEM = `You are a DevFlow implementation agent.
 Return one strict JSON object only. Do not include markdown fences or commentary.
 

@@ -1,4 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { resolveAgentSystemPrompt } from '../../agents/agent-prompt-resolver';
+import { PrismaService } from '../../prisma/prisma.service';
 import { DevFlowStateType } from '../graph/devflow.state';
 import { NODE } from '../graph/topology';
 import { StreamEmitter } from '../streaming/stream-emitter.service';
@@ -36,6 +38,9 @@ export class SelfCritiqueNode {
   constructor(
     private readonly streamEmitter: StreamEmitter,
     private readonly llm: AgentLlmRouter,
+    // Injected so the workspace's instructions for the integration reviewer — the subagent this
+    // node actually dispatches — can be resolved at dispatch.
+    private readonly prisma: PrismaService,
   ) {}
 
   async execute(
@@ -122,7 +127,12 @@ Review how these artifacts work together against the acceptance criteria and QA 
           nodeId: NODE.SELF_CRITIQUE,
           agent: 'integration-reviewer',
         },
-        systemPrompt: SELF_CRITIQUE_SYSTEM,
+        systemPrompt: await resolveAgentSystemPrompt(
+          this.prisma,
+          projectId,
+          'integration-reviewer',
+          SELF_CRITIQUE_SYSTEM,
+        ),
         userPrompt,
         expectedShape: 'object',
       });

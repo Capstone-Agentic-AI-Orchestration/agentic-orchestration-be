@@ -7,6 +7,8 @@ import {
   Optional,
 } from '@nestjs/common';
 import { createId } from '@paralleldrive/cuid2';
+import { resolveAgentSystemPrompt } from '../agents/agent-prompt-resolver';
+import { resolveRuntimeKey } from '../agents/built-in-agents';
 import { buildDevFlowNodeImpls, type DevFlowNodeImpls } from './graph/devflow.graph';
 import { buildSimulationNodeImpls } from './graph/simulation-nodes';
 import {
@@ -1296,6 +1298,9 @@ Rough idea: ${input.brief}`;
             content: true,
           },
         },
+        workspaceAgent: {
+          select: { id: true, key: true, runtimeKey: true, name: true, instructions: true },
+        },
       },
     });
 
@@ -1441,6 +1446,24 @@ Rough idea: ${input.brief}`;
             );
           }
         : undefined;
+      // The assigned agent's own instructions plus its attached skills, or the built-in when it
+      // has none. Resolved here rather than in the provider so every provider — direct, Eve or
+      // mock — receives the same already-resolved text.
+      const agentProfile = workOrder.workspaceAgent
+        ? {
+            key: workOrder.workspaceAgent.key,
+            runtimeKey: resolveRuntimeKey(workOrder.workspaceAgent),
+            name: workOrder.workspaceAgent.name,
+            instructions: await resolveAgentSystemPrompt(
+              this.prisma,
+              projectId,
+              workOrder.workspaceAgent.key,
+              workOrder.workspaceAgent.instructions?.trim()
+                || `You are ${workOrder.workspaceAgent.name}, a DevFlow implementation agent.`,
+            ),
+          }
+        : undefined;
+
       const agentContext = {
         project: workOrder.project,
         workOrder: {
@@ -1453,6 +1476,7 @@ Rough idea: ${input.brief}`;
         task: workOrder.task,
         sourceArtifact: workOrder.artifact,
         executionRunId,
+        ...(agentProfile ? { agentProfile } : {}),
         ...(onToken ? { onToken } : {}),
       };
       const output = await provider.generateWorkOrderOutput(agentContext);

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { resolveAgentSystemPrompt } from '../../agents/agent-prompt-resolver';
 import { DevFlowStateType, ProjectContract } from '../graph/devflow.state';
 import { NODE } from '../graph/topology';
 import { MemoryService } from '../../memory/memory.service';
@@ -140,8 +141,12 @@ export class ContractNegotiatorNode {
       this.streamEmitter.emit(projectId, NODE.NEGOTIATE_CONTRACT, runId ?? '', 'decision', `Calling LLM (${this.llm.model()}) to negotiate contract with ${memoryBundle.total} memory references...`);
 
       // ── 2. LLM call ───────────────────────────────────────────────────────
+      // The workspace's own instructions for this agent, falling back to the compiled-in
+      // prompt when it has none. This is what makes the console's Instructions field real.
+      const basePrompt = await resolveAgentSystemPrompt(this.prisma, projectId, 'planner-orchestrator', CONTRACT_NEGOTIATOR_SYSTEM);
+
       const systemPrompt = buildAgentSystemPrompt({
-        basePrompt: CONTRACT_NEGOTIATOR_SYSTEM,
+        basePrompt,
         memoryContext,
         agentSkillRole: 'contract',
       });

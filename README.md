@@ -234,6 +234,11 @@ Authenticated:
 
 See `docs/architecture/production-readiness.md` for the role matrix, lifecycle rules, data-integrity rules, and verification baseline. See `docs/architecture/microservices-readiness.md` for the service boundary map, outbox event contracts, extraction order, and follow-up architecture recommendations.
 
+Cross-repository architecture — how agents are stored and dispatched across the control plane, the
+execution plane (`agentic-orchestration-ag`) and the console, and the human-action list — lives in
+[docs/platform/](docs/platform/). It is versioned here because this repo is where those decisions
+are enforced.
+
 ## Frontend Pairing
 
 Run the frontend separately from `../agentic-orchestration-fe`:

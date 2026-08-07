@@ -85,7 +85,11 @@ export class LlmAgentProvider extends BaseLlmProvider implements WorkOrderAgentP
         .map((signal) => signal.anyOf.map((value) => `"${value}"`).join(' or '))
         .join('; ')} — but treat these only as a floor and deliver substantially more complete, well-structured work than the minimum.`,
       skillPack,
-      this.agentInstruction(context.workOrder.agentType),
+      // The assigned agent's role, when one is attached; otherwise the role implied by the
+      // work order's agentType. Note the ordering: this sits AFTER the output schema above and
+      // before QUALITY_BAR, so a workspace can define how the agent works but cannot replace the
+      // JSON shape the validator parses. See docs/architecture/agent-platform.md.
+      context.agentProfile?.instructions ?? this.agentInstruction(context.workOrder.agentType),
       QUALITY_BAR,
       memoryContext ? `Relevant layered memory:\n${memoryContext}` : null,
     ].filter(Boolean).join('\n');

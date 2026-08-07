@@ -17,6 +17,22 @@ export interface WorkOrderAgentContext {
     agentType: WorkOrderAgentType;
     priority: WorkOrderPriority;
   };
+  /**
+   * The configured agent assigned to this work order, when there is one.
+   *
+   * `instructions` is already resolved: the workspace's own text plus its attached skills, or
+   * the built-in fallback. Absent means no agent was assigned and the role is derived from
+   * `agentType` as before.
+   *
+   * `runtimeKey` is which deployed Eve subagent should execute it — identity and capability are
+   * separate, and only coincide for built-ins.
+   */
+  agentProfile?: {
+    key: string;
+    runtimeKey: string;
+    name: string;
+    instructions: string;
+  };
   task: {
     title: string;
     description: string | null;
