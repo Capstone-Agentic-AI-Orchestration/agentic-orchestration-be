@@ -133,6 +133,14 @@ export class IntakeRepository {
       clientId?: string | null;
       /** Name to create the client under when no existing client is chosen. */
       clientName?: string | null;
+      /**
+       * The workspace this lead becomes work in.
+       *
+       * Applied to both the client and the project. Before this, approval produced a client the
+       * workspace switcher could not show and a project every workspace filtered out — the exact
+       * pair of orphans that made Client.groupId nullable in the first place.
+       */
+      groupId: string;
     },
   ): Promise<{
     inquiry: InquiryWithReviewer;
@@ -148,6 +156,7 @@ export class IntakeRepository {
       contactName: inquiry.contactName,
       email: inquiry.email,
       actorId,
+      groupId: input.groupId,
     });
     const clientId = client.id;
     // A lead from the marketing call-to-action carries a placeholder company; naming the project
@@ -165,6 +174,9 @@ export class IntakeRepository {
         // Accepted, but not delivery work yet. The PM talks to the client and collects
         // documents in this workspace first; promoting to PENDING is a separate, explicit act.
         status: ProjectStatus.DISCOVERY,
+        // Same workspace as the client. A project reached through its client but grouped
+        // elsewhere would be visible in one workspace and editable from another.
+        groupId: input.groupId,
         createdById: actorId,
       },
     });
@@ -318,6 +330,7 @@ export class IntakeRepository {
       contactName: string;
       email: string;
       actorId: string;
+      groupId: string;
     },
   ): Promise<{ id: string; name: string }> {
     if (input.clientId) {
@@ -355,6 +368,7 @@ export class IntakeRepository {
         status: ClientStatus.ACTIVE,
         primaryContactName: input.contactName,
         primaryContactEmail: input.email.toLowerCase(),
+        groupId: input.groupId,
         createdById: input.actorId,
       },
       select: { id: true, name: true },

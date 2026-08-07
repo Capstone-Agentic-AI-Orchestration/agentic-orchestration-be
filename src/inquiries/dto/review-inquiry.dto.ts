@@ -6,6 +6,18 @@ export class ReviewInquiryDto {
   reviewNote?: string;
 
   /**
+   * The workspace this lead becomes work in.
+   *
+   * Approval creates both a client and a project. Neither carried a workspace before, which is
+   * how a client could exist that the switcher could not show and a project could exist that the
+   * Projects page filtered out of every workspace. Required now that Client.groupId is NOT NULL.
+   */
+  @IsString()
+  @MinLength(1)
+  @MaxLength(64)
+  groupId!: string;
+
+  /**
    * Existing client to file this lead under, chosen by the PM from the suggested matches.
    *
    * Omitted means "resolve or create by company name". The console suggests rather than

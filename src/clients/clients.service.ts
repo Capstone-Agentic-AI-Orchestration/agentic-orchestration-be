@@ -5,7 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { ClientStatus, Prisma, UserRole } from '@prisma/client';
+import { ClientStatus, Prisma, ProjectStatus, UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuthUser } from '../auth/auth.types';
 import { isPlaceholderClientName, resolveClientNameForInquiry } from './client-name';
@@ -44,10 +44,24 @@ export class ClientsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(search?: string) {
-    const where: Prisma.ClientWhereInput = search?.trim()
-      ? { name: { contains: search.trim(), mode: 'insensitive' } }
-      : {};
+  /**
+   * @param groupId Active team workspace. Omit to list across every workspace (admin views).
+   *
+   * A client belongs to the team that delivers for it. Listing every company in every workspace
+   * made the switcher a lie and let a client card report projects the caller could not open.
+   *
+   * The `OR groupId IS NULL` clause that used to live here is gone: the column is NOT NULL now,
+   * so the unassigned state it existed to surface can no longer be created.
+   */
+  async list(search?: string, groupId?: string) {
+    const filters: Prisma.ClientWhereInput[] = [];
+    if (search?.trim()) {
+      filters.push({ name: { contains: search.trim(), mode: 'insensitive' } });
+    }
+    if (groupId) {
+      filters.push({ groupId });
+    }
+    const where: Prisma.ClientWhereInput = filters.length ? { AND: filters } : {};
 
     // The client-less project count used to be returned here. Project.clientId is now non-null,
     // so that query no longer type-checks and could only ever have returned zero — the state it
@@ -56,11 +70,10 @@ export class ClientsService {
       where,
       orderBy: [{ status: 'asc' }, { name: 'asc' }],
       include: {
-        _count: { select: { projects: true, contacts: true } },
+        _count: { select: { contacts: true } },
         projects: {
-          select: { updatedAt: true },
+          select: { updatedAt: true, status: true },
           orderBy: { updatedAt: 'desc' },
-          take: 1,
         },
       },
     });
@@ -72,7 +85,12 @@ export class ClientsService {
         status: client.status,
         primaryContactName: client.primaryContactName,
         primaryContactEmail: client.primaryContactEmail,
-        projectCount: client._count.projects,
+        groupId: client.groupId,
+        // A discovery space is not a project. Approving an inquiry creates one so the client has
+        // somewhere to be invited and to upload documents into — counting it as delivery work
+        // makes a client you are only talking to read as one you are building for.
+        projectCount: client.projects.filter((p) => p.status !== ProjectStatus.DISCOVERY).length,
+        discoveryCount: client.projects.filter((p) => p.status === ProjectStatus.DISCOVERY).length,
         contactCount: client._count.contacts,
         lastProjectActivityAt: client.projects[0]?.updatedAt ?? null,
         createdAt: client.createdAt,
@@ -100,6 +118,7 @@ export class ClientsService {
     const client = await this.prisma.client.create({
       data: {
         name,
+        groupId: dto.groupId,
         status: dto.status ?? ClientStatus.ACTIVE,
         primaryContactName: dto.primaryContactName?.trim() || null,
         primaryContactEmail: dto.primaryContactEmail?.trim().toLowerCase() || null,
@@ -122,6 +141,9 @@ export class ClientsService {
       where: { id },
       data: {
         ...(dto.name ? { name: dto.name.trim() } : {}),
+        // Moving a client to another workspace is allowed; clearing it is not. An empty string
+        // is therefore ignored rather than mapped to null, which the column now forbids.
+        ...(dto.groupId ? { groupId: dto.groupId } : {}),
         ...(dto.status ? { status: dto.status } : {}),
         ...(dto.primaryContactName !== undefined
           ? { primaryContactName: dto.primaryContactName.trim() || null }
@@ -366,9 +388,17 @@ export class ClientsService {
     return { suggestions, suggestedName, companyNameIsPlaceholder };
   }
 
-  /** Resolves an existing client by exact (case-insensitive) name, or creates one. */
+  /**
+   * Resolves an existing client by exact (case-insensitive) name, or creates one.
+   *
+   * `groupId` is required rather than optional: a client with no workspace is invisible to the
+   * switcher and its projects have nobody to belong to, and the column is NOT NULL. Currently
+   * unreferenced — kept because the intake flow reaches for this shape, and made correct so it
+   * cannot reintroduce the orphan state if it is ever wired up.
+   */
   async findOrCreateByName(
     name: string,
+    groupId: string,
     actorId: string | null,
     tx?: Prisma.TransactionClient,
   ): Promise<{ id: string; created: boolean }> {
@@ -383,7 +413,7 @@ export class ClientsService {
     if (existing) return { id: existing.id, created: false };
 
     const created = await client.client.create({
-      data: { name: trimmed, status: ClientStatus.ACTIVE, createdById: actorId },
+      data: { name: trimmed, groupId, status: ClientStatus.ACTIVE, createdById: actorId },
       select: { id: true },
     });
     return { id: created.id, created: true };

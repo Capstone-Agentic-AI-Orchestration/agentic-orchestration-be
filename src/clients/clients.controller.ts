@@ -61,8 +61,8 @@ export class ClientsController {
   }
 
   @Get()
-  list(@Query('search') search?: string) {
-    return this.clients.list(search);
+  list(@Query('search') search?: string, @Query('groupId') groupId?: string) {
+    return this.clients.list(search, groupId);
   }
 
   // GET unassigned-projects was here. Project.clientId is non-null, so it could only ever

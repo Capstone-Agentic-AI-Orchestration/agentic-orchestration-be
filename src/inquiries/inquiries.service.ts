@@ -102,6 +102,7 @@ export class InquiriesService {
         actorId: user.id,
         reviewNote: note,
         reviewedAt: now,
+        groupId: dto.groupId,
         clientId: dto.clientId ?? null,
         clientName: dto.clientName ?? null,
       });

@@ -15,6 +15,15 @@ export class CreateClientDto {
   @MaxLength(160)
   name!: string;
 
+  /**
+   * The team workspace that owns this client. Required — a client with no workspace is invisible
+   * to the switcher and its projects have nobody to belong to, so the column is NOT NULL and
+   * this rejects the request rather than letting the database do it.
+   */
+  @IsString()
+  @MaxLength(64)
+  groupId!: string;
+
   @IsOptional()
   @IsEnum(ClientStatus)
   status?: ClientStatus;
@@ -40,6 +49,12 @@ export class UpdateClientDto {
   @MinLength(1, { message: 'name must not be empty' })
   @MaxLength(160)
   name?: string;
+
+  /** Moves the client to another workspace, or assigns one the backfill could not infer. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  groupId?: string;
 
   @IsOptional()
   @IsEnum(ClientStatus)
