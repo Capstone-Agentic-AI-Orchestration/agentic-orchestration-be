@@ -13,7 +13,7 @@ import {
   OrchestrationStatus,
 } from '../orchestration/orchestration.service';
 import { CreateProjectDto } from './dto/create-project.dto';
-import { ArtifactOutputReviewStatus, ArtifactReviewStatus, ArtifactValidationStatus, ClientInviteStatus, CollaborationDocumentStatus, InquiryStatus, NotificationType, OrchestrationRunTrigger, ProjectDeliveryReview, ProjectDeliveryReviewStatus, ProjectStatus, ProjectTimelineEvent, ProjectTimelineEventType, ProjectTimelineVisibility, ProjectTaskActivity, ProjectTaskActivityType, ProjectTaskStatus, Project, GateEvent, Artifact, EventLog, Prisma, ProjectKickoff, ProjectKickoffStatus, ProjectTask, RepositoryKind, RepositoryStatus, UserRole, WorkOrder, WorkOrderAgentType, WorkOrderPriority, WorkOrderStatus } from '@prisma/client';
+import { ArtifactOutputReviewStatus, ArtifactReviewStatus, ArtifactValidationStatus, ClientInviteStatus, CollaborationDocumentStatus, InquiryStatus, NotificationType, OrchestrationRunTrigger, ProjectDeliveryReview, ProjectDeliveryReviewStatus, ProjectStatus, ProjectTimelineEvent, ProjectTimelineEventType, ProjectTimelineVisibility, ProjectTaskActivity, ProjectTaskActivityType, ProjectTaskStatus, Project, GateEvent, Artifact, EventLog, Prisma, ProjectKickoff, ProjectKickoffStatus, ProjectTask, RepositoryAssignmentDesiredState, RepositoryKind, RepositoryStatus, UserRole, WorkOrder, WorkOrderAgentType, WorkOrderPriority, WorkOrderStatus } from '@prisma/client';
 import { AuthUser } from '../auth/auth.types';
 import { isOpenProjectTask } from '../shared/domain/project-task-status';
 import { UpdateProjectDto } from './dto/update-project.dto';
@@ -1437,6 +1437,21 @@ export class ProjectsService {
       },
     });
 
+    // Membership is the grant. A developer assigned to a project works across all of its
+    // repositories, so adding them here gives them access to every one — there is no longer a
+    // per-repository control, because having two places to say the same thing meant projects with
+    // a team and a repository that nobody could push to.
+    //
+    // Developers only: PM and CLIENT members are not GitHub collaborators on the delivery repos.
+    if (dto.role === UserRole.DEV) {
+      await this.repositories?.syncProjectAccess(
+        projectId,
+        profile.id,
+        RepositoryAssignmentDesiredState.ASSIGNED,
+        user,
+      );
+    }
+
     await this.recordTimelineEvent(projectId, user, {
       type: ProjectTimelineEventType.MEMBER_ADDED,
       visibility: ProjectTimelineVisibility.TEAM,
@@ -1475,6 +1490,16 @@ export class ProjectsService {
         }
         throw error;
       });
+
+    // Removing someone from the project takes their repository access with it. Not conditional on
+    // role: whatever they were recorded as, leaving the project means leaving its code, and a
+    // revoke for someone who never had an assignment is a no-op the sync absorbs.
+    await this.repositories?.syncProjectAccess(
+      projectId,
+      userId,
+      RepositoryAssignmentDesiredState.UNASSIGNED,
+      user,
+    );
 
     await this.recordTimelineEvent(projectId, user, {
       type: ProjectTimelineEventType.MEMBER_REMOVED,

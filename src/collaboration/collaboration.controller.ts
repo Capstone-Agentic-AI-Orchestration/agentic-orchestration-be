@@ -22,15 +22,24 @@ import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
 import { executeIdempotentCommand } from '../shared/idempotency/idempotent-command';
 import { IdempotencyService } from '../shared/idempotency/idempotency.service';
 import { CursorPageInput } from '../shared/pagination/cursor-pagination';
-import { CollaborationService, projectScope } from './collaboration.service';
+import { CollaborationService } from './collaboration.service';
 import {
   CreateCollaborationDocumentDto,
-  CreateConversationDto,
-  CreateMessageDto,
   ReviewCollaborationDocumentDto,
   UpdateCollaborationDocumentDto,
 } from './dto/collaboration.dto';
 
+/**
+ * A project's client documents.
+ *
+ * Conversations used to live here too, on two footings: CLIENT threads with the company and TEAM
+ * threads between developers and the project manager. Both are gone. The company conversation moved
+ * to the client, which owns the relationship, and the developer-to-project-manager channel was
+ * removed rather than moved — delivery talk belongs on the issues and work orders it is about, and a
+ * second inbox nobody was obliged to read was worse than no inbox at all.
+ *
+ * Documents stay project-scoped: a requirements brief is uploaded for one build.
+ */
 @Controller('projects/:projectId')
 @UseGuards(SupabaseAuthGuard, RolesGuard)
 export class CollaborationController {
@@ -54,83 +63,6 @@ export class CollaborationController {
       responseStatus,
       handler,
     });
-  }
-
-  @Get('conversations')
-  @Roles(UserRole.CLIENT, UserRole.PM, UserRole.DEV, UserRole.ADMIN)
-  listConversations(
-    @Param('projectId') projectId: string,
-    @CurrentUser() user: AuthUser,
-    @Query() page?: CursorPageInput,
-  ) {
-    return this.collaborationService.listConversations(projectScope(projectId), user, page);
-  }
-
-  @Post('conversations')
-  @Roles(UserRole.CLIENT, UserRole.PM, UserRole.DEV, UserRole.ADMIN)
-  @HttpCode(HttpStatus.CREATED)
-  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
-  createConversation(
-    @Param('projectId') projectId: string,
-    @Body() dto: CreateConversationDto,
-    @CurrentUser() user: AuthUser,
-    @Headers('idempotency-key') idempotencyKey?: string,
-  ) {
-    return this.runIdempotent(
-      idempotencyKey,
-      `user:${user.id}:POST:/projects/${projectId}/conversations`,
-      dto,
-      HttpStatus.CREATED,
-      () => this.collaborationService.createConversation(projectScope(projectId), user, dto),
-    );
-  }
-
-  @Get('conversations/:conversationId/messages')
-  @Roles(UserRole.CLIENT, UserRole.PM, UserRole.DEV, UserRole.ADMIN)
-  listMessages(
-    @Param('projectId') projectId: string,
-    @Param('conversationId') conversationId: string,
-    @CurrentUser() user: AuthUser,
-    @Query() page?: CursorPageInput,
-  ) {
-    return this.collaborationService.listMessages(projectScope(projectId), conversationId, user, page);
-  }
-
-  @Post('conversations/:conversationId/messages')
-  @Roles(UserRole.CLIENT, UserRole.PM, UserRole.DEV, UserRole.ADMIN)
-  @HttpCode(HttpStatus.CREATED)
-  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
-  addMessage(
-    @Param('projectId') projectId: string,
-    @Param('conversationId') conversationId: string,
-    @Body() dto: CreateMessageDto,
-    @CurrentUser() user: AuthUser,
-    @Headers('idempotency-key') idempotencyKey?: string,
-  ) {
-    return this.runIdempotent(
-      idempotencyKey,
-      `user:${user.id}:POST:/projects/${projectId}/conversations/${conversationId}/messages`,
-      dto,
-      HttpStatus.CREATED,
-      () => this.collaborationService.addMessage(projectScope(projectId), conversationId, user, dto),
-    );
-  }
-
-  @Patch('conversations/:conversationId/read')
-  @Roles(UserRole.CLIENT, UserRole.PM, UserRole.DEV, UserRole.ADMIN)
-  markConversationRead(
-    @Param('projectId') projectId: string,
-    @Param('conversationId') conversationId: string,
-    @CurrentUser() user: AuthUser,
-    @Headers('idempotency-key') idempotencyKey?: string,
-  ) {
-    return this.runIdempotent(
-      idempotencyKey,
-      `user:${user.id}:PATCH:/projects/${projectId}/conversations/${conversationId}/read`,
-      { projectId, conversationId },
-      HttpStatus.OK,
-      () => this.collaborationService.markConversationRead(projectScope(projectId), conversationId, user),
-    );
   }
 
   @Get('documents')

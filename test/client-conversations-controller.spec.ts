@@ -3,7 +3,7 @@ import { UserRole } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthUser } from '../src/auth/auth.types';
 import { ClientConversationsController } from '../src/collaboration/client-conversations.controller';
-import { clientScope, type CollaborationService } from '../src/collaboration/collaboration.service';
+import type { CollaborationService } from '../src/collaboration/collaboration.service';
 import type { IdempotencyService } from '../src/shared/idempotency/idempotency.service';
 
 const pmUser: AuthUser = {
@@ -52,19 +52,19 @@ describe('ClientConversationsController', () => {
     );
   });
 
-  // Every route must pass a client scope. Handing the service a project scope from here would
-  // serve one company's page from another owner's threads.
-  it('reads threads under a client scope', async () => {
+  // Every route must pass the client id straight through. Substituting anything else would serve
+  // one company's page from another's threads.
+  it('reads threads for the client in the path', async () => {
     await controller.listConversations('client-1', pmUser, undefined);
 
     expect(collaboration.listConversations).toHaveBeenCalledWith(
-      clientScope('client-1'),
+      'client-1',
       pmUser,
       undefined,
     );
   });
 
-  it('creates a thread under a client scope with a client-keyed idempotency scope', async () => {
+  it('creates a thread with a client-keyed idempotency scope', async () => {
     const dto = { title: 'Renewal terms' };
 
     await expect(
@@ -77,13 +77,13 @@ describe('ClientConversationsController', () => {
       responseStatus: HttpStatus.CREATED,
     }));
     expect(collaboration.createConversation).toHaveBeenCalledWith(
-      clientScope('client-1'),
+      'client-1',
       pmUser,
       dto,
     );
   });
 
-  it('sends a message under a client scope', async () => {
+  it('sends a message for the client in the path', async () => {
     const dto = { body: 'Sending the revised quote.' };
 
     await expect(
@@ -94,18 +94,18 @@ describe('ClientConversationsController', () => {
       scope: `user:${pmUser.id}:POST:/clients/client-1/conversations/conversation-1/messages`,
     }));
     expect(collaboration.addMessage).toHaveBeenCalledWith(
-      clientScope('client-1'),
+      'client-1',
       'conversation-1',
       pmUser,
       dto,
     );
   });
 
-  it('marks a thread read under a client scope', async () => {
+  it('marks a thread read for the client in the path', async () => {
     await controller.markConversationRead('client-1', 'conversation-1', pmUser, 'request-key-3');
 
     expect(collaboration.markConversationRead).toHaveBeenCalledWith(
-      clientScope('client-1'),
+      'client-1',
       'conversation-1',
       pmUser,
     );

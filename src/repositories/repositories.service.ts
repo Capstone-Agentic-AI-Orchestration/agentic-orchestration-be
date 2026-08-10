@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import {
@@ -38,6 +39,8 @@ const repositoryInclude = {
 
 @Injectable()
 export class RepositoriesService {
+  private readonly logger = new Logger(RepositoriesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly github: GithubService,
@@ -188,6 +191,86 @@ export class RepositoriesService {
     return synced;
   }
 
+  /**
+   * Bring one person's access to every repository of a project in line with their membership.
+   *
+   * Access to a project's code is not a per-repository decision. A developer assigned to a project
+   * works across its repositories — backend, frontend, mobile — and granting them one at a time
+   * produced exactly the state the console kept showing: a project with members and repositories
+   * where nobody could push, because a second, easily-forgotten step had never been taken. Project
+   * membership is now the single grant, and this reconciles the repositories to it.
+   *
+   * Never throws. Membership is the act the caller asked for; repository access is its consequence.
+   * A developer with no GitHub login, a repository still provisioning, a GitHub outage — none of
+   * those should undo adding someone to a project. Failures are recorded on the assignment
+   * (`effectiveState: FAILED`, `lastError`) and surfaced by the reconcile route.
+   *
+   * @returns Per-repository outcome, so a caller can report what actually happened.
+   */
+  async syncProjectAccess(
+    projectId: string,
+    userId: string,
+    desired: RepositoryAssignmentDesiredState,
+    user: AuthUser,
+  ): Promise<Array<{ repositoryId: string; ok: boolean; error?: string }>> {
+    const repositories = await this.prisma.repository.findMany({
+      where: {
+        projectId,
+        // ARCHIVED is excluded deliberately: it is no longer worked in, and re-granting access to
+        // one on every membership change would resurrect collaborators on retired code.
+        status: { in: [RepositoryStatus.ACTIVE, RepositoryStatus.PENDING, RepositoryStatus.FAILED] },
+      },
+      select: { id: true },
+    });
+
+    const results: Array<{ repositoryId: string; ok: boolean; error?: string }> = [];
+    for (const repository of repositories) {
+      try {
+        if (desired === RepositoryAssignmentDesiredState.ASSIGNED) {
+          await this.assign(repository.id, userId, user);
+        } else {
+          await this.revoke(repository.id, userId, user);
+        }
+        results.push({ repositoryId: repository.id, ok: true });
+      } catch (error) {
+        // Expected, not exceptional: revoking someone who never had an assignment 404s, and
+        // assigning into a repository that is still provisioning is a 400.
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          `Repository ${repository.id}: could not ${desired === RepositoryAssignmentDesiredState.ASSIGNED ? 'grant' : 'revoke'} access for ${userId} — ${message}`,
+        );
+        results.push({ repositoryId: repository.id, ok: false, error: message });
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Grant every current developer member of the project access to one repository.
+   *
+   * The other half of `syncProjectAccess`: that one runs when membership changes, this one when a
+   * repository appears. Without it, a repository provisioned after the team was assembled would
+   * start with nobody able to push and no per-repository control left to fix it.
+   */
+  async grantProjectMembersAccess(repositoryId: string, projectId: string, user: AuthUser) {
+    const members = await this.prisma.projectMember.findMany({
+      where: { projectId, role: UserRole.DEV },
+      select: { userId: true },
+    });
+
+    for (const member of members) {
+      try {
+        await this.assign(repositoryId, member.userId, user);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.warn(
+          `Repository ${repositoryId}: could not grant access for project member ${member.userId} — ${message}`,
+        );
+      }
+    }
+  }
+
   async revoke(repositoryId: string, userId: string, user: AuthUser) {
     const repository = await this.findAccessible(repositoryId, user, true);
     const assignment = await this.prisma.repositoryAssignment.findUnique({
@@ -271,19 +354,20 @@ export class RepositoriesService {
         `chore: initialize ${record.kind.toLowerCase()} repository (DevFlow scaffold)`,
       );
 
-      const updated = await this.prisma.$transaction(async (tx) => {
+      await this.prisma.$transaction(async (tx) => {
         await tx.project.update({
           where: { id: record.projectId },
           data: { repoUrl: remote.htmlUrl, groupId: record.groupId },
         });
-        return tx.repository.update({
+        // No `include` here: the assignments written below would be missing from it anyway, so the
+        // read that does carry them happens once, after access has been granted.
+        await tx.repository.update({
           where: { id: repositoryId },
           data: {
             status: RepositoryStatus.ACTIVE,
             lastError: null,
             provisionedAt: new Date(),
           },
-          include: repositoryInclude,
         });
       });
       await this.activity(record.groupId, user, 'devflow.repository.created', record.id, `Created plain repository ${remote.fullName}`, {
@@ -291,7 +375,17 @@ export class RepositoriesService {
         repositoryUrl: remote.htmlUrl,
         ciCdConfigured: false,
       });
-      return updated;
+
+      // The repository only became ACTIVE on the line above, and `assign` refuses anything else, so
+      // this has to happen here rather than in create(). Whoever is already on the project gets
+      // access to the new repository immediately — there is no per-repository grant to fall back on.
+      await this.grantProjectMembersAccess(repositoryId, record.projectId, user);
+
+      // Re-read: the assignments just written are part of what the caller renders.
+      return this.prisma.repository.findUniqueOrThrow({
+        where: { id: repositoryId },
+        include: repositoryInclude,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.prisma.repository.update({

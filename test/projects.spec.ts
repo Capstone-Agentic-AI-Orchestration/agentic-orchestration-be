@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { ArtifactOutputReviewStatus, ArtifactReviewStatus, ArtifactValidationStatus, CollaborationDocumentStatus, NotificationType, OrchestrationRunTrigger, ProjectDeliveryReviewStatus, ProjectKickoffStatus, ProjectStatus, ProjectTimelineEventType, ProjectTimelineVisibility, ProjectTaskActivityType, ProjectTaskStatus, UserRole, WorkOrderAgentType, WorkOrderPriority, WorkOrderStatus } from '@prisma/client';
+import { ArtifactOutputReviewStatus, ArtifactReviewStatus, ArtifactValidationStatus, CollaborationDocumentStatus, NotificationType, OrchestrationRunTrigger, ProjectDeliveryReviewStatus, ProjectKickoffStatus, ProjectStatus, ProjectTimelineEventType, ProjectTimelineVisibility, ProjectTaskActivityType, ProjectTaskStatus, RepositoryAssignmentDesiredState, UserRole, WorkOrderAgentType, WorkOrderPriority, WorkOrderStatus } from '@prisma/client';
 import { ProjectsService } from '../src/projects/projects.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { OrchestrationService } from '../src/orchestration/orchestration.service';
@@ -1190,6 +1190,83 @@ describe('ProjectsService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
 
     expect(prisma.projectMember.upsert).not.toHaveBeenCalled();
+  });
+
+  // Project membership is the only place repository access is granted. The per-repository control
+  // was removed because two places to say the same thing meant projects with a team, a repository,
+  // and nobody able to push to it.
+  const serviceWithRepositories = (repositories: { syncProjectAccess: ReturnType<typeof vi.fn> }) =>
+    new ProjectsService(
+      prisma as unknown as PrismaService,
+      orchestration as unknown as OrchestrationService,
+      notifications as unknown as NotificationsService,
+      undefined,
+      undefined,
+      repositories as never,
+    );
+
+  const seedProjectDetailReads = () => {
+    prisma.project.findFirst
+      .mockResolvedValueOnce({ id: 'project-1' })
+      .mockResolvedValueOnce({
+        id: 'project-1',
+        gates: [],
+        members: [],
+        createdBy: null,
+        runBudget: null,
+        _count: { artifacts: 0, eventLogs: 0 },
+      });
+  };
+
+  it('addMember grants a developer access to every repository of the project', async () => {
+    const repositories = { syncProjectAccess: vi.fn().mockResolvedValue([]) };
+    seedProjectDetailReads();
+    prisma.profile.findFirst.mockResolvedValue({ id: devUser.id, role: UserRole.DEV });
+
+    await serviceWithRepositories(repositories).addMember('project-1', pmUser, {
+      userId: devUser.id,
+      role: UserRole.DEV,
+    });
+
+    expect(repositories.syncProjectAccess).toHaveBeenCalledWith(
+      'project-1',
+      devUser.id,
+      RepositoryAssignmentDesiredState.ASSIGNED,
+      pmUser,
+    );
+  });
+
+  // A client contact and a project manager are not GitHub collaborators on the delivery repos, so
+  // asking for access on their behalf would only produce noise in the logs.
+  it('addMember does not touch repositories for a non-developer member', async () => {
+    const repositories = { syncProjectAccess: vi.fn().mockResolvedValue([]) };
+    seedProjectDetailReads();
+    prisma.profile.findFirst.mockResolvedValue({ id: clientUser.id, role: UserRole.CLIENT });
+
+    await serviceWithRepositories(repositories).addMember('project-1', pmUser, {
+      email: clientUser.email ?? undefined,
+      role: UserRole.CLIENT,
+    });
+
+    expect(repositories.syncProjectAccess).not.toHaveBeenCalled();
+  });
+
+  it('removeMember revokes repository access along with membership', async () => {
+    const repositories = { syncProjectAccess: vi.fn().mockResolvedValue([]) };
+    seedProjectDetailReads();
+    prisma.project.findUnique.mockResolvedValue({
+      createdById: pmUser.id,
+      members: [{ userId: pmUser.id, role: UserRole.PM }],
+    });
+
+    await serviceWithRepositories(repositories).removeMember('project-1', devUser.id, pmUser);
+
+    expect(repositories.syncProjectAccess).toHaveBeenCalledWith(
+      'project-1',
+      devUser.id,
+      RepositoryAssignmentDesiredState.UNASSIGNED,
+      pmUser,
+    );
   });
 
   it('removeMember rejects removing the last project manager', async () => {

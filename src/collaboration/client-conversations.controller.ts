@@ -22,18 +22,17 @@ import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
 import { executeIdempotentCommand } from '../shared/idempotency/idempotent-command';
 import { IdempotencyService } from '../shared/idempotency/idempotency.service';
 import { CursorPageInput } from '../shared/pagination/cursor-pagination';
-import { CollaborationService, clientScope } from './collaboration.service';
+import { CollaborationService } from './collaboration.service';
 import { CreateConversationDto, CreateMessageDto } from './dto/collaboration.dto';
 
 /**
- * The conversation between a project manager and a client company.
+ * The conversation between a project manager and a client company. The only conversation surface
+ * there is: threads used to hang off projects, and none do now.
  *
- * Separate from CollaborationController, which serves the same threads scoped to a project,
- * because the two have different guest lists rather than different data. DEV is absent here on
- * purpose: a developer belongs to a build, not to the commercial relationship, and the project
- * routes are where they talk to the project manager. Leaving DEV in would have been harmless for
- * CLIENT-visibility threads — the visibility filter drops those anyway — but would have handed
- * them the staff's private TEAM notes about the company.
+ * DEV is absent on purpose. A developer belongs to a build, not to the commercial relationship, and
+ * the developer-to-project-manager channel that used to sit on the project has been removed rather
+ * than pointed here — delivery talk belongs on the issues and work orders it is about. Leaving DEV
+ * in would also have handed them the staff's private TEAM notes about the company.
  */
 @Controller('clients/:clientId')
 @UseGuards(SupabaseAuthGuard, RolesGuard)
@@ -68,7 +67,7 @@ export class ClientConversationsController {
     @CurrentUser() user: AuthUser,
     @Query() page?: CursorPageInput,
   ) {
-    return this.collaborationService.listConversations(clientScope(clientId), user, page);
+    return this.collaborationService.listConversations(clientId, user, page);
   }
 
   @Post('conversations')
@@ -85,7 +84,7 @@ export class ClientConversationsController {
       `user:${user.id}:POST:/clients/${clientId}/conversations`,
       dto,
       HttpStatus.CREATED,
-      () => this.collaborationService.createConversation(clientScope(clientId), user, dto),
+      () => this.collaborationService.createConversation(clientId, user, dto),
     );
   }
 
@@ -96,7 +95,7 @@ export class ClientConversationsController {
     @CurrentUser() user: AuthUser,
     @Query() page?: CursorPageInput,
   ) {
-    return this.collaborationService.listMessages(clientScope(clientId), conversationId, user, page);
+    return this.collaborationService.listMessages(clientId, conversationId, user, page);
   }
 
   @Post('conversations/:conversationId/messages')
@@ -114,7 +113,7 @@ export class ClientConversationsController {
       `user:${user.id}:POST:/clients/${clientId}/conversations/${conversationId}/messages`,
       dto,
       HttpStatus.CREATED,
-      () => this.collaborationService.addMessage(clientScope(clientId), conversationId, user, dto),
+      () => this.collaborationService.addMessage(clientId, conversationId, user, dto),
     );
   }
 
@@ -130,7 +129,7 @@ export class ClientConversationsController {
       `user:${user.id}:PATCH:/clients/${clientId}/conversations/${conversationId}/read`,
       { clientId, conversationId },
       HttpStatus.OK,
-      () => this.collaborationService.markConversationRead(clientScope(clientId), conversationId, user),
+      () => this.collaborationService.markConversationRead(clientId, conversationId, user),
     );
   }
 }
