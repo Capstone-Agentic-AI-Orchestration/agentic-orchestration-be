@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { SharedKernelModule } from '../shared/shared-kernel.module';
 import { RuntimeCompanionController } from './runtime-companion.controller';
 import { MachinesController } from './machines.controller';
 import { RuntimeCompanionService } from './runtime-companion.service';
@@ -14,10 +15,12 @@ import { RuntimeGateway } from './runtime.gateway';
  *
  * `AuthModule` is imported for the browser-facing machine routes, which still use the normal
  * Supabase session; the daemon routes authenticate on their own machine token instead. `PrismaModule`
- * is global, so it needs no import here.
+ * is global, so it needs no import here. `SharedKernelModule` supplies `IdempotencyService` for the
+ * browser-facing machine commands — the daemon routes are exempt from key-based replay and do not
+ * use it.
  */
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, SharedKernelModule],
   controllers: [RuntimeCompanionController, MachinesController],
   providers: [
     RuntimeCompanionService,

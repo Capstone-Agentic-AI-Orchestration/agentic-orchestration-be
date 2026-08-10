@@ -172,7 +172,7 @@ export const serviceBoundarySourceDirectories: Record<ServiceBoundary, string[]>
   'project-delivery': ['projects', 'reports', 'schedule', 'groups', 'clients', 'repositories'],
   collaboration: ['collaboration'],
   notifications: ['notifications'],
-  orchestration: ['orchestration', 'supervisor', 'memory', 'context-memory', 'gateway', 'agent-repo', 'agents'],
+  orchestration: ['orchestration', 'supervisor', 'memory', 'context-memory', 'gateway', 'agent-repo', 'agents', 'runtime-companion', 'runtimes'],
   admin: ['admin'],
 };
 
@@ -255,6 +255,13 @@ export const serviceBoundaries: ServiceBoundaryDefinition[] = [
       'memory_context_handoffs',
       'memory_context_snapshots',
       'realtime orchestration gateway',
+      'runtime_machines',
+      'runtime_adapters',
+      'runtime_resources',
+      'runtime_tasks',
+      'runtime_pairing_codes',
+      'ai_runtime_providers',
+      'self-hosted companion daemon pairing and task leasing',
     ],
     publishes: [],
     dependsOn: ['identity', 'intake', 'project-delivery', 'notifications', 'admin'],
@@ -279,8 +286,24 @@ const prismaModelAccessPattern = /\b(?:(?:this\.)?prisma|tx)\.(\w+)\b/gm;
 const integrationEventTypePattern = /^([a-z][a-z-]*)\.([a-z][a-z0-9_]*)\.([a-z][a-z0-9_]*)\.v([1-9]\d*)$/;
 const integrationEventAggregateTypePattern = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/;
 const defaultIgnoredMutationRouteFragments = ['orchestration'];
-/** Internal agent callback surface; authenticated by service secret, not a user command path. */
-const defaultIgnoredMutationSourcePathFragments = ['src/agent-repo/'];
+/**
+ * Machine callback surfaces, authenticated by a machine credential rather than a user session.
+ *
+ * These are not user command paths, so an `Idempotency-Key` has no user-visible command to replay.
+ * `src/agent-repo/` is reached with a service secret; the companion daemon's own controller is
+ * reached with a machine token and speaks a wire contract already fixed by a shipped client that
+ * sends no such header.
+ *
+ * The daemon's `adapters/:adapterId/claim` is the reason this is an exemption and not a TODO:
+ * claiming work MUST return a different task each call, so replaying a key would hand back a
+ * lease the companion already finished. Its safety comes from the lease token and the reaper,
+ * not from key-based replay. The browser-facing half of the feature
+ * (`machines.controller.ts`, `runtimes.controller.ts`) is a user command path and is NOT exempt.
+ */
+const defaultIgnoredMutationSourcePathFragments = [
+  'src/agent-repo/',
+  'src/runtime-companion/runtime-companion.controller.ts',
+];
 const allowedRawOffsetPaginationFiles = new Set([
   'src/shared/pagination/cursor-pagination.ts',
 ]);
@@ -329,6 +352,12 @@ export const prismaModelOwners: Record<string, PrismaModelOwner> = {
   agentSkillOnAgent: 'orchestration',
   eventLog: 'orchestration',
   runBudget: 'orchestration',
+  runtimeMachine: 'orchestration',
+  runtimeAdapter: 'orchestration',
+  runtimeResource: 'orchestration',
+  runtimeTask: 'orchestration',
+  runtimePairingCode: 'orchestration',
+  aiRuntimeProvider: 'orchestration',
   adminDomain: 'admin',
   adminAuditLog: 'admin',
   platformSetting: 'admin',
@@ -381,6 +410,12 @@ export const prismaModelSchemas: Record<string, string> = {
   agentSkillOnAgent: 'orchestration',
   eventLog: 'orchestration',
   runBudget: 'orchestration',
+  runtimeMachine: 'orchestration',
+  runtimeAdapter: 'orchestration',
+  runtimeResource: 'orchestration',
+  runtimeTask: 'orchestration',
+  runtimePairingCode: 'orchestration',
+  aiRuntimeProvider: 'orchestration',
   adminDomain: 'admin',
   adminAuditLog: 'admin',
   platformSetting: 'admin',
@@ -426,6 +461,7 @@ export const allowedCrossBoundaryPrismaModels: Partial<Record<ServiceBoundary, C
   ],
   orchestration: [
     crossBoundaryPrismaException('artifact', 'Orchestration writes generated delivery artifacts.', 'Project delivery artifact command API.'),
+    crossBoundaryPrismaException('groupMember', 'Companion pairing verifies the owner belongs to the workspace a machine is being placed in.', 'Project delivery workspace membership read model.'),
     crossBoundaryPrismaException('project', 'Orchestration advances project execution state.', 'Project delivery orchestration callback API.'),
     crossBoundaryPrismaException('repository', 'Orchestration reuses the PM-provisioned repository for artifact delivery.', 'Project delivery repository read model.'),
     crossBoundaryPrismaException('projectTask', 'Orchestration updates task execution status.', 'Project delivery task command API.'),

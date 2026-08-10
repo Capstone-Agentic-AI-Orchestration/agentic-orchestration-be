@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { SharedKernelModule } from '../shared/shared-kernel.module';
 import { RuntimesController } from './runtimes.controller';
 import { RuntimesService } from './runtimes.service';
 import { SupabaseVaultService } from './supabase-vault.service';
@@ -12,7 +13,7 @@ import { SupabaseVaultService } from './supabase-vault.service';
  * `RuntimeCompanionModule`.
  */
 @Module({
-  imports: [AuthModule],
+  imports: [AuthModule, SharedKernelModule],
   controllers: [RuntimesController],
   providers: [RuntimesService, SupabaseVaultService],
   exports: [RuntimesService, SupabaseVaultService],
