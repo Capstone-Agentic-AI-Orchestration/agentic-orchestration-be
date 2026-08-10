@@ -22,7 +22,7 @@ import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
 import { executeIdempotentCommand } from '../shared/idempotency/idempotent-command';
 import { IdempotencyService } from '../shared/idempotency/idempotency.service';
 import { CursorPageInput } from '../shared/pagination/cursor-pagination';
-import { CollaborationService } from './collaboration.service';
+import { CollaborationService, projectScope } from './collaboration.service';
 import {
   CreateCollaborationDocumentDto,
   CreateConversationDto,
@@ -63,7 +63,7 @@ export class CollaborationController {
     @CurrentUser() user: AuthUser,
     @Query() page?: CursorPageInput,
   ) {
-    return this.collaborationService.listConversations(projectId, user, page);
+    return this.collaborationService.listConversations(projectScope(projectId), user, page);
   }
 
   @Post('conversations')
@@ -81,7 +81,7 @@ export class CollaborationController {
       `user:${user.id}:POST:/projects/${projectId}/conversations`,
       dto,
       HttpStatus.CREATED,
-      () => this.collaborationService.createConversation(projectId, user, dto),
+      () => this.collaborationService.createConversation(projectScope(projectId), user, dto),
     );
   }
 
@@ -93,7 +93,7 @@ export class CollaborationController {
     @CurrentUser() user: AuthUser,
     @Query() page?: CursorPageInput,
   ) {
-    return this.collaborationService.listMessages(projectId, conversationId, user, page);
+    return this.collaborationService.listMessages(projectScope(projectId), conversationId, user, page);
   }
 
   @Post('conversations/:conversationId/messages')
@@ -112,7 +112,7 @@ export class CollaborationController {
       `user:${user.id}:POST:/projects/${projectId}/conversations/${conversationId}/messages`,
       dto,
       HttpStatus.CREATED,
-      () => this.collaborationService.addMessage(projectId, conversationId, user, dto),
+      () => this.collaborationService.addMessage(projectScope(projectId), conversationId, user, dto),
     );
   }
 
@@ -129,7 +129,7 @@ export class CollaborationController {
       `user:${user.id}:PATCH:/projects/${projectId}/conversations/${conversationId}/read`,
       { projectId, conversationId },
       HttpStatus.OK,
-      () => this.collaborationService.markConversationRead(projectId, conversationId, user),
+      () => this.collaborationService.markConversationRead(projectScope(projectId), conversationId, user),
     );
   }
 

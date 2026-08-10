@@ -4,6 +4,7 @@ import {
   CollaborationDocumentStatus,
   CollaborationVisibility,
   ConversationCategory,
+  GroupMemberStatus,
   NotificationType,
   Prisma,
   ProjectConversation,
@@ -31,6 +32,31 @@ import {
 } from './dto/collaboration.dto';
 
 type ProfileView = { id: string; email: string | null; fullName: string | null; role: UserRole };
+
+/**
+ * What a thread belongs to. Exactly one of the two, matching the CHECK constraint on
+ * project_conversations — see 20260811000100_client_scoped_conversations.
+ *
+ * A project scope is a delivery thread: developers and the project manager, about one build. A
+ * client scope is the relationship thread with a company, which outlives any single project and
+ * therefore cannot be stored inside one.
+ */
+export type ConversationScope =
+  | { kind: 'project'; projectId: string }
+  | { kind: 'client'; clientId: string };
+
+export const projectScope = (projectId: string): ConversationScope => ({ kind: 'project', projectId });
+export const clientScope = (clientId: string): ConversationScope => ({ kind: 'client', clientId });
+
+/** Owner columns for a scope. Doubles as the `where` fragment and the `data` fragment. */
+const scopeColumns = (scope: ConversationScope) =>
+  scope.kind === 'project'
+    ? { projectId: scope.projectId, clientId: null }
+    : { projectId: null, clientId: scope.clientId };
+
+/** Human-readable scope, for error messages that would otherwise say "not found" and stop. */
+const scopeLabel = (scope: ConversationScope) =>
+  scope.kind === 'project' ? `project ${scope.projectId}` : `client ${scope.clientId}`;
 
 type ConversationWithRelations = ProjectConversation & {
   createdBy: ProfileView | null;
@@ -92,16 +118,16 @@ export class CollaborationService {
   ) {}
 
   async listConversations(
-    projectId: string,
+    scope: ConversationScope,
     user: AuthUser,
     page?: CursorPageInput,
   ): Promise<ConversationWithRelations[] | CursorPage<ConversationWithRelations>> {
-    await this.assertProjectAccessible(projectId, user);
+    await this.assertScopeAccessible(scope, user);
     const paged = hasCursorPage(page);
 
     const conversations = await this.prisma.projectConversation.findMany({
       where: {
-        projectId,
+        ...scopeColumns(scope),
         visibility: { in: this.conversationVisibilityFor(user.role) },
       },
       include: conversationInclude(user.id),
@@ -141,16 +167,16 @@ export class CollaborationService {
   }
 
   async createConversation(
-    projectId: string,
+    scope: ConversationScope,
     user: AuthUser,
     dto: CreateConversationDto,
   ): Promise<ConversationWithRelations> {
-    await this.assertProjectAccessible(projectId, user);
-    const visibility = this.resolveRequestedVisibility(user.role, dto.visibility);
+    await this.assertScopeAccessible(scope, user);
+    const visibility = this.resolveRequestedVisibility(user.role, scope, dto.visibility);
 
     const conversation = await this.prisma.projectConversation.create({
       data: {
-        projectId,
+        ...scopeColumns(scope),
         title: dto.title.trim(),
         category: dto.category ?? ConversationCategory.GENERAL,
         visibility,
@@ -159,7 +185,7 @@ export class CollaborationService {
       include: conversationInclude(user.id),
     });
 
-    await this.recordTimelineEvent(projectId, user, {
+    await this.recordTimelineEvent(scope, user, {
       type: ProjectTimelineEventType.COLLAB_CONVERSATION_CREATED,
       visibility: visibility === CollaborationVisibility.CLIENT
         ? ProjectTimelineVisibility.CLIENT
@@ -170,45 +196,50 @@ export class CollaborationService {
     });
 
     if (dto.message?.trim()) {
-      await this.addMessage(projectId, conversation.id, user, { body: dto.message });
-      return this.findConversation(projectId, conversation.id, user);
+      await this.addMessage(scope, conversation.id, user, { body: dto.message });
+      return this.findConversation(scope, conversation.id, user);
     }
 
     return conversation;
   }
 
   async listMessages(
-    projectId: string,
+    scope: ConversationScope,
     conversationId: string,
     user: AuthUser,
     page?: CursorPageInput,
   ): Promise<MessageWithAuthor[] | CursorPage<MessageWithAuthor>> {
-    await this.assertConversationAccessible(projectId, conversationId, user);
+    await this.assertConversationAccessible(scope, conversationId, user);
     const paged = hasCursorPage(page);
 
+    // Keyed on conversationId alone. The conversation is what owns the scope, and it has already
+    // been checked against this caller; adding the scope's own columns here would return nothing
+    // for a client thread, whose messages carry no projectId at all.
     const messages = await this.prisma.projectMessage.findMany({
-      where: { projectId, conversationId },
+      where: { conversationId },
       include: messageInclude,
       orderBy: paged ? [{ createdAt: 'asc' }, { id: 'asc' }] : { createdAt: 'asc' },
       ...(paged ? cursorQueryArgs(page) : { take: 200 }),
     });
 
-    await this.markConversationRead(projectId, conversationId, user);
+    await this.markConversationRead(scope, conversationId, user);
     return paged ? toCursorPage(messages, page) : messages;
   }
 
   async addMessage(
-    projectId: string,
+    scope: ConversationScope,
     conversationId: string,
     user: AuthUser,
     dto: CreateMessageDto,
   ): Promise<MessageWithAuthor> {
-    const conversation = await this.assertConversationAccessible(projectId, conversationId, user);
+    const conversation = await this.assertConversationAccessible(scope, conversationId, user);
     const body = dto.body.trim();
 
     const message = await this.prisma.projectMessage.create({
       data: {
-        projectId,
+        // Mirrors the conversation's owner: a project id on a delivery thread, null on a client
+        // thread. Taken from the scope rather than a parameter so the two cannot disagree.
+        projectId: scope.kind === 'project' ? scope.projectId : null,
         conversationId,
         authorId: user.id,
         body,
@@ -221,19 +252,25 @@ export class CollaborationService {
       data: { lastMessageAt: message.createdAt },
     });
 
-    await this.markConversationRead(projectId, conversationId, user);
+    await this.markConversationRead(scope, conversationId, user);
 
     await this.notifications.notify({
-      recipientIds: await this.conversationRecipientIds(projectId, conversation.visibility),
+      recipientIds: await this.conversationRecipientIds(scope, conversation.visibility),
       actorId: user.id,
-      projectId,
+      // Null on a client thread, which is what suppresses the project timeline notification
+      // inside notify(). A relationship thread has no one project to log against.
+      projectId: scope.kind === 'project' ? scope.projectId : null,
       type: NotificationType.COLLAB_MESSAGE_SENT,
       title: `New message: ${conversation.title}`,
       body,
-      metadata: { conversationId, visibility: conversation.visibility },
+      metadata: {
+        conversationId,
+        visibility: conversation.visibility,
+        ...(scope.kind === 'client' ? { clientId: scope.clientId } : {}),
+      },
     });
 
-    await this.recordTimelineEvent(projectId, user, {
+    await this.recordTimelineEvent(scope, user, {
       type: ProjectTimelineEventType.COLLAB_MESSAGE_SENT,
       visibility: conversation.visibility === CollaborationVisibility.CLIENT
         ? ProjectTimelineVisibility.CLIENT
@@ -247,11 +284,11 @@ export class CollaborationService {
   }
 
   async markConversationRead(
-    projectId: string,
+    scope: ConversationScope,
     conversationId: string,
     user: AuthUser,
   ): Promise<{ read: true; lastReadAt: Date }> {
-    await this.assertConversationAccessible(projectId, conversationId, user);
+    await this.assertConversationAccessible(scope, conversationId, user);
     const now = new Date();
 
     await this.prisma.conversationRead.upsert({
@@ -331,7 +368,7 @@ export class CollaborationService {
       metadata: { documentId: document.id, status: document.status, clientVisible },
     });
 
-    await this.recordTimelineEvent(projectId, user, {
+    await this.recordTimelineEvent(projectScope(projectId), user, {
       type: ProjectTimelineEventType.COLLAB_DOCUMENT_UPLOADED,
       visibility: clientVisible ? ProjectTimelineVisibility.CLIENT : ProjectTimelineVisibility.TEAM,
       title: 'Document uploaded',
@@ -429,7 +466,7 @@ export class CollaborationService {
       metadata: { documentId, status: dto.status },
     });
 
-    await this.recordTimelineEvent(projectId, user, {
+    await this.recordTimelineEvent(projectScope(projectId), user, {
       type: ProjectTimelineEventType.COLLAB_DOCUMENT_REVIEWED,
       visibility: current.clientVisible ? ProjectTimelineVisibility.CLIENT : ProjectTimelineVisibility.TEAM,
       title: dto.status === CollaborationDocumentStatus.APPROVED
@@ -472,14 +509,14 @@ export class CollaborationService {
   }
 
   private async findConversation(
-    projectId: string,
+    scope: ConversationScope,
     conversationId: string,
     user: AuthUser,
   ): Promise<ConversationWithRelations> {
     const conversation = await this.prisma.projectConversation.findFirst({
       where: {
         id: conversationId,
-        projectId,
+        ...scopeColumns(scope),
         visibility: { in: this.conversationVisibilityFor(user.role) },
       },
       include: conversationInclude(user.id),
@@ -493,6 +530,44 @@ export class CollaborationService {
       ...conversation,
       unreadCount: await this.unreadCount(conversation.id, user.id, conversation.reads[0]?.lastReadAt),
     };
+  }
+
+  private assertScopeAccessible(scope: ConversationScope, user: AuthUser): Promise<void> {
+    return scope.kind === 'project'
+      ? this.assertProjectAccessible(scope.projectId, user)
+      : this.assertClientAccessible(scope.clientId, user);
+  }
+
+  /**
+   * Can this caller reach the relationship threads of this company?
+   *
+   * The rule is not project membership. That is the whole point of moving these threads: a client
+   * contact who has not been added to any project is still the person the project manager is
+   * talking to, and under the project rule they could reach nothing. So for a CLIENT the test is
+   * being a contact of this company — and only this company, which is what stops one client
+   * reading another's thread by editing the id in the URL.
+   *
+   * PM and ADMIN pass on role alone, matching ClientsController, which is a staff surface where
+   * the whole directory is readable. If workspace gating is ever added there, add it here too;
+   * gating one and not the other would mean a PM could open a client but not its messages.
+   */
+  private async assertClientAccessible(clientId: string, user: AuthUser): Promise<void> {
+    const exists = await this.prisma.client.findFirst({
+      where: this.clientAccessWhere(clientId, user),
+      select: { id: true },
+    });
+
+    if (!exists) {
+      throw new NotFoundException(`Client ${clientId} not found`);
+    }
+  }
+
+  private clientAccessWhere(clientId: string, user: AuthUser): Prisma.ClientWhereInput {
+    if (user.role === UserRole.CLIENT) {
+      return { id: clientId, contacts: { some: { profileId: user.id } } };
+    }
+
+    return { id: clientId };
   }
 
   private async assertProjectAccessible(projectId: string, user: AuthUser): Promise<void> {
@@ -515,16 +590,18 @@ export class CollaborationService {
   }
 
   private async assertConversationAccessible(
-    projectId: string,
+    scope: ConversationScope,
     conversationId: string,
     user: AuthUser,
   ): Promise<ProjectConversation> {
-    await this.assertProjectAccessible(projectId, user);
+    await this.assertScopeAccessible(scope, user);
 
+    // Scope columns are matched as well as the id, so a conversation id belonging to another
+    // project or company is a 404 here rather than a thread served under the wrong owner.
     const conversation = await this.prisma.projectConversation.findFirst({
       where: {
         id: conversationId,
-        projectId,
+        ...scopeColumns(scope),
         visibility: { in: this.conversationVisibilityFor(user.role) },
       },
     });
@@ -609,10 +686,16 @@ export class CollaborationService {
 
   private resolveRequestedVisibility(
     role: UserRole,
+    scope: ConversationScope,
     requested?: CollaborationVisibility,
   ): CollaborationVisibility {
+    // A client-scoped thread defaults to CLIENT whoever starts it: the reason it lives on the
+    // client rather than a project is that the client is in it. A project thread still defaults to
+    // TEAM for staff, because most talk about a build is not for the client to read.
     const visibility = requested ?? (
-      role === UserRole.CLIENT ? CollaborationVisibility.CLIENT : CollaborationVisibility.TEAM
+      scope.kind === 'client' || role === UserRole.CLIENT
+        ? CollaborationVisibility.CLIENT
+        : CollaborationVisibility.TEAM
     );
 
     if (!this.conversationVisibilityFor(role).includes(visibility)) {
@@ -658,17 +741,59 @@ export class CollaborationService {
   }
 
   private async conversationRecipientIds(
-    projectId: string,
+    scope: ConversationScope,
     visibility: CollaborationVisibility,
   ): Promise<string[]> {
+    if (scope.kind === 'client') {
+      return this.clientRecipientIds(scope.clientId, visibility);
+    }
+
     if (visibility === CollaborationVisibility.CLIENT) {
       return [
-        ...(await this.notifications.projectManagers(projectId)),
-        ...(await this.notifications.projectClients(projectId)),
+        ...(await this.notifications.projectManagers(scope.projectId)),
+        ...(await this.notifications.projectClients(scope.projectId)),
       ];
     }
 
-    return this.teamRecipientIds(projectId);
+    return this.teamRecipientIds(scope.projectId);
+  }
+
+  /**
+   * Who hears about a message on a company's relationship thread.
+   *
+   * Staff side is the PMs and admins in the workspace that owns the client, not every PM in the
+   * system: a relationship thread is one team's to answer. Client side is the company's contacts —
+   * the same list the console shows on the Contacts tab — because on a client thread they are the
+   * counterparty, whether or not anyone remembered to add them to a project.
+   */
+  private async clientRecipientIds(
+    clientId: string,
+    visibility: CollaborationVisibility,
+  ): Promise<string[]> {
+    const client = await this.prisma.client.findUnique({
+      where: { id: clientId },
+      select: { groupId: true, contacts: { select: { profileId: true } } },
+    });
+
+    // Bail rather than fall through. A findMany filtered on an undefined groupId matches every
+    // row, which would broadcast one company's message to every workspace member there is.
+    if (!client) return [];
+
+    const staff = await this.prisma.groupMember.findMany({
+      where: {
+        groupId: client.groupId,
+        status: GroupMemberStatus.ACTIVE,
+        user: { role: { in: [UserRole.PM, UserRole.ADMIN] } },
+      },
+      select: { userId: true },
+    });
+
+    const staffIds = staff.map((member) => member.userId);
+
+    // A TEAM thread on a client is the staff's own notes about the company. Contacts are not on it.
+    return visibility === CollaborationVisibility.CLIENT
+      ? [...staffIds, ...client.contacts.map((contact) => contact.profileId)]
+      : staffIds;
   }
 
   private async teamRecipientIds(projectId: string): Promise<string[]> {
@@ -697,8 +822,16 @@ export class CollaborationService {
     });
   }
 
+  /**
+   * Project timeline entry, when there is a project to put one on.
+   *
+   * Client-scoped threads write nothing here and that is deliberate, not a gap. The timeline is a
+   * record of what happened to one build; a relationship thread spans every build the company has
+   * ever commissioned, so the honest options were "log to none" or "log the same line to all of
+   * them". The client page's own activity list is where this belongs instead.
+   */
   private async recordTimelineEvent(
-    projectId: string,
+    scope: ConversationScope,
     user: AuthUser,
     input: {
       type: ProjectTimelineEventType;
@@ -708,9 +841,11 @@ export class CollaborationService {
       metadata?: Prisma.InputJsonValue;
     },
   ): Promise<void> {
+    if (scope.kind !== 'project') return;
+
     await this.prisma.projectTimelineEvent.create({
       data: {
-        projectId,
+        projectId: scope.projectId,
         actorId: user.id,
         type: input.type,
         visibility: input.visibility,

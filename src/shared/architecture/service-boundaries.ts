@@ -434,6 +434,8 @@ export const allowedCrossBoundaryPrismaModels: Partial<Record<ServiceBoundary, C
   ],
   collaboration: [
     crossBoundaryPrismaException('artifact', 'Collaboration document review resolves linked delivery artifacts.', 'Project delivery artifact read model.'),
+    crossBoundaryPrismaException('client', 'Client-scoped conversation access checks contact membership of the company, and message fanout resolves its workspace and contacts.', 'Project delivery client directory API.'),
+    crossBoundaryPrismaException('groupMember', 'Client conversation fanout resolves the staff of the workspace that owns the client relationship.', 'Project delivery workspace membership read model.'),
     crossBoundaryPrismaException('project', 'Collaboration access checks require project visibility.', 'Project delivery project access API.'),
     crossBoundaryPrismaException('projectMember', 'Collaboration access checks require membership state.', 'Identity membership read model.'),
     crossBoundaryPrismaException('projectTimelineEvent', 'Collaboration writes project activity timeline entries.', 'Project delivery timeline event API.'),

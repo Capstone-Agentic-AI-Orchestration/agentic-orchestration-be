@@ -238,9 +238,15 @@ export class IntakeRepository {
       },
     });
 
+    // Owned by the client, not the project this approval happens to have created.
+    //
+    // This is the opening exchange of a commercial relationship — "here is what we want", "here is
+    // what we propose" — and it stays relevant long after the discovery space it came from is
+    // delivered or abandoned. Filed under the project, the company's second engagement would open
+    // with an empty thread while its entire history sat in the first project's tab.
     const conversation = await tx.projectConversation.create({
       data: {
-        projectId: project.id,
+        clientId,
         title: 'Discovery',
         category: ConversationCategory.SUPPORT,
         visibility: CollaborationVisibility.CLIENT,
@@ -251,7 +257,6 @@ export class IntakeRepository {
 
     await tx.projectMessage.create({
       data: {
-        projectId: project.id,
         conversationId: conversation.id,
         authorId: actorId,
         body: [

@@ -32,6 +32,10 @@ import { SupabaseAuthGuard } from '../auth/supabase-auth.guard';
 /**
  * The client directory is a staff surface: it lists every company the agency works with, so it
  * is PM/ADMIN only. Clients reach their own data through the separate client application.
+ *
+ * One exception, `GET mine`, which answers "which company am I?" for the caller and is therefore
+ * open to CLIENT as well. It returns only companies the caller is a contact of, so it exposes
+ * nothing the directory itself would.
  */
 @Controller('clients')
 @UseGuards(SupabaseAuthGuard, RolesGuard)
@@ -87,6 +91,23 @@ export class ClientsController {
       HttpStatus.CREATED,
       () => this.clients.create(user, dto),
     );
+  }
+
+  /**
+   * The companies the caller is a contact of. The one client-facing route on this controller.
+   *
+   * A client needs its own company id before it can open /clients/:clientId/conversations, and it
+   * cannot get one from a project: a contact with no project at all is still someone the project
+   * manager is talking to, which is the reason those threads moved off projects in the first place.
+   *
+   * Declared above `@Get(':id')` deliberately. Nest matches routes in declaration order within a
+   * controller, so moving this below the wildcard would send every request for it into the staff-only
+   * findOne and answer a client with 403.
+   */
+  @Get('mine')
+  @Roles(UserRole.CLIENT, UserRole.PM, UserRole.ADMIN)
+  findMine(@CurrentUser() user: AuthUser) {
+    return this.clients.listForContact(user);
   }
 
   @Get(':id')

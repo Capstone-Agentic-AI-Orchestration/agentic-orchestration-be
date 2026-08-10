@@ -99,6 +99,29 @@ export class ClientsService {
     };
   }
 
+  /**
+   * The companies the caller belongs to, as the client application needs them.
+   *
+   * Contact membership only, never project membership. A company that has commissioned nothing yet
+   * still has a conversation with its project manager, and that is precisely the case a
+   * project-derived lookup would miss.
+   *
+   * Staff get an empty list rather than the whole directory: they reach companies through the PM
+   * console, and answering "every client there is" to "which company am I?" would be a lie that a
+   * caller could easily mistake for scoped data.
+   */
+  async listForContact(user: AuthUser) {
+    if (user.role !== UserRole.CLIENT) return { clients: [] };
+
+    const clients = await this.prisma.client.findMany({
+      where: { contacts: { some: { profileId: user.id } } },
+      orderBy: [{ status: 'asc' }, { name: 'asc' }],
+      select: { id: true, name: true, status: true },
+    });
+
+    return { clients };
+  }
+
   async findOne(id: string) {
     const client = await this.prisma.client.findUnique({
       where: { id },

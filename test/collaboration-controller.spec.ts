@@ -3,7 +3,7 @@ import { CollaborationDocumentStatus, UserRole } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthUser } from '../src/auth/auth.types';
 import { CollaborationController } from '../src/collaboration/collaboration.controller';
-import type { CollaborationService } from '../src/collaboration/collaboration.service';
+import { projectScope, type CollaborationService } from '../src/collaboration/collaboration.service';
 import type { IdempotencyService } from '../src/shared/idempotency/idempotency.service';
 
 const pmUser: AuthUser = {
@@ -76,7 +76,7 @@ describe('CollaborationController idempotency', () => {
       responseStatus: HttpStatus.CREATED,
       handler: expect.any(Function),
     }));
-    expect(collaboration.createConversation).toHaveBeenCalledWith('project-1', pmUser, dto);
+    expect(collaboration.createConversation).toHaveBeenCalledWith(projectScope('project-1'), pmUser, dto);
   });
 
   it('runs message creation through conversation-scoped idempotency when a key is provided', async () => {
@@ -95,7 +95,7 @@ describe('CollaborationController idempotency', () => {
       handler: expect.any(Function),
     }));
     expect(collaboration.addMessage).toHaveBeenCalledWith(
-      'project-1',
+      projectScope('project-1'),
       'conversation-1',
       pmUser,
       dto,
@@ -140,7 +140,7 @@ describe('CollaborationController idempotency', () => {
       handler: expect.any(Function),
     }));
     expect(collaboration.markConversationRead).toHaveBeenCalledWith(
-      'project-1',
+      projectScope('project-1'),
       'conversation-1',
       pmUser,
     );
@@ -205,7 +205,7 @@ describe('CollaborationController idempotency', () => {
 
     expect(idempotency.run).not.toHaveBeenCalled();
     expect(collaboration.addMessage).toHaveBeenCalledWith(
-      'project-1',
+      projectScope('project-1'),
       'conversation-1',
       pmUser,
       dto,

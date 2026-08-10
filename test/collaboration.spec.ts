@@ -7,7 +7,11 @@ import {
   NotificationType,
   UserRole,
 } from '@prisma/client';
-import { CollaborationService } from '../src/collaboration/collaboration.service';
+import {
+  CollaborationService,
+  clientScope,
+  projectScope,
+} from '../src/collaboration/collaboration.service';
 import { NotificationsService } from '../src/notifications/notifications.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { AuthUser } from '../src/auth/auth.types';
@@ -95,6 +99,16 @@ function makePrismaMock() {
     project: {
       findFirst: vi.fn().mockResolvedValue({ id: 'project-1' }),
     },
+    client: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'client-1' }),
+      findUnique: vi.fn().mockResolvedValue({
+        groupId: 'group-1',
+        contacts: [{ profileId: clientUser.id }],
+      }),
+    },
+    groupMember: {
+      findMany: vi.fn().mockResolvedValue([{ userId: pmUser.id }]),
+    },
     projectConversation: {
       findMany: vi.fn().mockResolvedValue([]),
       findFirst: vi.fn(),
@@ -152,11 +166,12 @@ describe('CollaborationService', () => {
   });
 
   it('scopes client conversations to client-visible threads', async () => {
-    await service.listConversations('project-1', clientUser);
+    await service.listConversations(projectScope('project-1'), clientUser);
 
     expect(prisma.projectConversation.findMany).toHaveBeenCalledWith({
       where: {
         projectId: 'project-1',
+        clientId: null,
         visibility: { in: [CollaborationVisibility.CLIENT] },
       },
       include: expect.any(Object),
@@ -171,7 +186,7 @@ describe('CollaborationService', () => {
       makeConversation({ id: 'conversation-3', updatedAt: new Date('2026-05-28T01:00:00.000Z') }),
     ]);
 
-    const page = await service.listConversations('project-1', clientUser, {
+    const page = await service.listConversations(projectScope('project-1'), clientUser, {
       limit: 2,
       cursor: 'conversation-cursor',
     });
@@ -179,6 +194,7 @@ describe('CollaborationService', () => {
     expect(prisma.projectConversation.findMany).toHaveBeenCalledWith({
       where: {
         projectId: 'project-1',
+        clientId: null,
         visibility: { in: [CollaborationVisibility.CLIENT] },
       },
       include: expect.any(Object),
@@ -196,9 +212,118 @@ describe('CollaborationService', () => {
     });
   });
 
+  it('scopes client-owned threads by clientId and leaves projectId null', async () => {
+    await service.listConversations(clientScope('client-1'), clientUser);
+
+    expect(prisma.projectConversation.findMany).toHaveBeenCalledWith({
+      where: {
+        projectId: null,
+        clientId: 'client-1',
+        visibility: { in: [CollaborationVisibility.CLIENT] },
+      },
+      include: expect.any(Object),
+      orderBy: [{ lastMessageAt: 'desc' }, { createdAt: 'desc' }],
+    });
+  });
+
+  // The reason these threads moved off the project: a contact who was never added to a project is
+  // still the person the project manager is talking to. Reaching their company's thread must not
+  // require project membership.
+  it('admits a client through contact membership, not project membership', async () => {
+    await service.listConversations(clientScope('client-1'), clientUser);
+
+    expect(prisma.client.findFirst).toHaveBeenCalledWith({
+      where: { id: 'client-1', contacts: { some: { profileId: clientUser.id } } },
+      select: { id: true },
+    });
+    expect(prisma.project.findFirst).not.toHaveBeenCalled();
+  });
+
+  // The id is in the URL, so this is the whole boundary between one company's thread and another's.
+  it('refuses a client who is not a contact of the company', async () => {
+    prisma.client.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.listConversations(clientScope('someone-elses-client'), clientUser),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.projectConversation.findMany).not.toHaveBeenCalled();
+  });
+
+  it('defaults a client-owned thread to CLIENT visibility even when staff start it', async () => {
+    prisma.projectConversation.create.mockResolvedValue(
+      makeConversation({ projectId: null, clientId: 'client-1' }),
+    );
+
+    await service.createConversation(clientScope('client-1'), pmUser, { title: 'Renewal terms' });
+
+    expect(prisma.projectConversation.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        projectId: null,
+        clientId: 'client-1',
+        visibility: CollaborationVisibility.CLIENT,
+      }),
+      include: expect.any(Object),
+    });
+  });
+
+  it('notifies workspace staff and client contacts on a client-owned thread', async () => {
+    prisma.projectConversation.findFirst.mockResolvedValue(
+      makeConversation({ projectId: null, clientId: 'client-1' }),
+    );
+    prisma.projectMessage.create.mockResolvedValue(makeMessage({ projectId: null }));
+
+    await service.addMessage(clientScope('client-1'), 'conversation-1', pmUser, {
+      body: 'Sending the revised quote.',
+    });
+
+    // Null projectId is what suppresses the project timeline entry inside notify(): a relationship
+    // thread spans every build, so there is no one project to log it against.
+    expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({
+      recipientIds: [pmUser.id, clientUser.id],
+      projectId: null,
+    }));
+    expect(prisma.projectTimelineEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps client contacts off a staff-only TEAM thread about their company', async () => {
+    prisma.projectConversation.findFirst.mockResolvedValue(
+      makeConversation({
+        projectId: null,
+        clientId: 'client-1',
+        visibility: CollaborationVisibility.TEAM,
+      }),
+    );
+    prisma.projectMessage.create.mockResolvedValue(makeMessage({ projectId: null }));
+
+    await service.addMessage(clientScope('client-1'), 'conversation-1', pmUser, {
+      body: 'Internal: they are slow to pay.',
+    });
+
+    expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({
+      recipientIds: [pmUser.id],
+    }));
+  });
+
+  // A findMany filtered on an undefined groupId matches every row, which would have broadcast one
+  // company's message to every workspace member in the system.
+  it('notifies nobody when the client vanished mid-request', async () => {
+    prisma.projectConversation.findFirst.mockResolvedValue(
+      makeConversation({ projectId: null, clientId: 'client-1' }),
+    );
+    prisma.projectMessage.create.mockResolvedValue(makeMessage({ projectId: null }));
+    prisma.client.findUnique.mockResolvedValue(null);
+
+    await service.addMessage(clientScope('client-1'), 'conversation-1', pmUser, {
+      body: 'Anyone there?',
+    });
+
+    expect(prisma.groupMember.findMany).not.toHaveBeenCalled();
+    expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({ recipientIds: [] }));
+  });
+
   it('prevents developers from creating client-visible conversations', async () => {
     await expect(
-      service.createConversation('project-1', devUser, {
+      service.createConversation(projectScope('project-1'), devUser, {
         title: 'Client topic',
         visibility: CollaborationVisibility.CLIENT,
       }),
@@ -217,7 +342,7 @@ describe('CollaborationService', () => {
       author: null,
     });
 
-    await service.addMessage('project-1', 'conversation-1', pmUser, {
+    await service.addMessage(projectScope('project-1'), 'conversation-1', pmUser, {
       body: 'Please review the launch notes.',
     });
 
@@ -245,13 +370,13 @@ describe('CollaborationService', () => {
       makeMessage({ id: 'message-3', createdAt: new Date('2026-05-28T00:02:00.000Z') }),
     ]);
 
-    const page = await service.listMessages('project-1', 'conversation-1', pmUser, {
+    const page = await service.listMessages(projectScope('project-1'), 'conversation-1', pmUser, {
       limit: 2,
       cursor: 'message-cursor',
     });
 
     expect(prisma.projectMessage.findMany).toHaveBeenCalledWith({
-      where: { projectId: 'project-1', conversationId: 'conversation-1' },
+      where: { conversationId: 'conversation-1' },
       include: expect.any(Object),
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       take: 3,

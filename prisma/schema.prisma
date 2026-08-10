@@ -55,6 +55,9 @@ model Client {
   projects            Project[]
   contacts            ClientContact[]
   inquiries           ClientInquiry[]
+  /// Relationship threads with this company. Cascades: deleting a client is already blocked while
+  /// it has projects, so this only ever fires for a company that never got past conversation.
+  conversations       ProjectConversation[]
 
   @@index([status, name])
   @@index([createdById])
@@ -1011,10 +1014,25 @@ enum ConversationCategory {
   @@schema("collaboration")
 }
 
+/// A thread. Owned by exactly one of a project or a client — never both, never neither.
+///
+/// It started out project-only, which put the project manager's conversation with a company
+/// inside whichever project happened to be open at the time. That is the wrong home for it: the
+/// relationship outlives any single build, so the second project the same company commissions
+/// started its history from nothing while the first project's tab held everything that had ever
+/// been said. Client-owned threads fix that; project-owned threads remain, because a developer
+/// discussing one build genuinely does belong to that build.
+///
+/// Prisma cannot express "exactly one of these two columns", so the invariant is a CHECK
+/// constraint — see 20260811000100_client_scoped_conversations.
 model ProjectConversation {
   id            String                  @id @default(cuid())
-  projectId     String
-  project       Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// Set on a delivery thread: developers and the project manager, about one build.
+  projectId     String?
+  project       Project?                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// Set on a relationship thread: the project manager and the client company.
+  clientId      String?
+  client        Client?                 @relation(fields: [clientId], references: [id], onDelete: Cascade)
   title         String
   category      ConversationCategory    @default(GENERAL)
   visibility    CollaborationVisibility @default(TEAM)
@@ -1027,6 +1045,7 @@ model ProjectConversation {
   reads         ConversationRead[]
 
   @@index([projectId, visibility, lastMessageAt])
+  @@index([clientId, visibility, lastMessageAt])
   @@index([createdById])
   @@map("project_conversations")
   @@schema("collaboration")
@@ -1034,7 +1053,12 @@ model ProjectConversation {
 
 model ProjectMessage {
   id             String              @id @default(cuid())
-  projectId      String
+  /// Mirrors the owning conversation's projectId, and is therefore null on a client thread.
+  ///
+  /// Denormalised for project-scoped reporting only. Never filter a message list on it — scope is
+  /// the conversation's business, and a query that also demands a projectId silently returns
+  /// nothing for client threads. Read paths key on conversationId.
+  projectId      String?
   conversationId String
   conversation   ProjectConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   authorId       String?             @db.Uuid
