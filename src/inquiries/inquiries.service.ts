@@ -140,19 +140,17 @@ export class InquiriesService {
       metadata: { inquiryId: result.inquiry.id, approvedProjectId: result.projectId },
     });
 
-    const accountInvitation = result.clientProfileId
-      ? {
-          status: 'EXISTING_ACCOUNT' as const,
-          email: result.inquiry.email,
-          message: 'The client already has an account and can sign in directly.',
-        }
-      : await this.accountInvitations.send({
-          email: result.inquiry.email,
-          contactName: result.inquiry.contactName,
-          companyName: result.inquiry.companyName,
-          inquiryId: result.inquiry.id,
-          projectId: result.projectId,
-        });
+    // Sent in every case. A client with an account already is told how to get back in, and one
+    // without gets an invitation — both end up on the same activation page choosing a password.
+    // Branching to "they can sign in directly" sent nothing and left the client waiting on an email
+    // that was never coming.
+    const accountInvitation = await this.accountInvitations.send({
+      email: result.inquiry.email,
+      contactName: result.inquiry.contactName,
+      companyName: result.inquiry.companyName,
+      inquiryId: result.inquiry.id,
+      projectId: result.projectId,
+    });
 
     return { ...result.inquiry, accountInvitation };
   }
@@ -163,11 +161,13 @@ export class InquiriesService {
       throw new BadRequestException(`Inquiry ${id} is not an approved client invitation`);
     }
 
+    // Accepted invitations are left alone. Resending here would email a password-reset link to a
+    // client who is already signed in and using the console, which reads as an account compromise.
     if (inquiry.clientInvite.status === 'ACCEPTED') {
       return {
         status: 'EXISTING_ACCOUNT',
         email: inquiry.email,
-        message: 'The client already accepted this account invitation.',
+        message: 'The client already accepted this invitation and can sign in.',
       };
     }
 
