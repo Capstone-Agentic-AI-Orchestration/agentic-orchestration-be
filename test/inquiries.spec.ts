@@ -107,7 +107,7 @@ function makePrismaMock() {
     clientInquiry: {
       create: vi.fn().mockResolvedValue(makeInquiry()),
       findMany: vi.fn().mockResolvedValue([makeInquiry()]),
-      findUnique: vi.fn().mockResolvedValue(makeInquiry()),
+      findFirst: vi.fn().mockResolvedValue(makeInquiry()),
       update: vi.fn().mockResolvedValue(makeInquiry({
         status: InquiryStatus.REJECTED,
         reviewedById: pmUser.id,
@@ -187,8 +187,37 @@ describe('InquiriesService', () => {
     await service.findAll(InquiryStatus.NEW);
 
     expect(prisma.clientInquiry.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { status: InquiryStatus.NEW },
+      where: { status: InquiryStatus.NEW, NOT: { status: InquiryStatus.DRAFT } },
       orderBy: { createdAt: 'desc' },
+    }));
+  });
+
+  // A request a client is still writing has not been sent to anybody. Before DRAFT existed, one
+  // appeared in this queue the moment they clicked "Request a project" and then changed under the
+  // project manager for the next ten minutes -- and every abandoned conversation stayed forever.
+  it('never returns a draft a client is still writing', async () => {
+    await service.findAll();
+
+    expect(prisma.clientInquiry.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { NOT: { status: InquiryStatus.DRAFT } },
+    }));
+  });
+
+  // Asking for drafts explicitly must not be a way around the queue filter.
+  it('returns nothing when asked for drafts by status', async () => {
+    await service.findAll(InquiryStatus.DRAFT);
+
+    expect(prisma.clientInquiry.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { status: InquiryStatus.DRAFT, NOT: { status: InquiryStatus.DRAFT } },
+    }));
+  });
+
+  // The list filter is worthless if a guessed id reaches the same row.
+  it('does not find a draft by id', async () => {
+    await service.findOne('inquiry-1');
+
+    expect(prisma.clientInquiry.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'inquiry-1', NOT: { status: InquiryStatus.DRAFT } },
     }));
   });
 
@@ -210,7 +239,7 @@ describe('InquiriesService', () => {
     });
 
     expect(prisma.clientInquiry.findMany).toHaveBeenCalledWith({
-      where: { status: InquiryStatus.NEW },
+      where: { status: InquiryStatus.NEW, NOT: { status: InquiryStatus.DRAFT } },
       include: expect.any(Object),
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 3,
@@ -235,12 +264,12 @@ describe('InquiriesService', () => {
     expect(prisma.tx.clientInquiry.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: InquiryStatus.IN_DISCOVERY }),
     }));
-    expect(prisma.tx.projectConversation.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({
-        title: 'Discovery',
-        category: ConversationCategory.SUPPORT,
-        visibility: CollaborationVisibility.CLIENT,
-      }),
+    // Approval seeds no conversation. Threads belong to the client now, and coupling a core flow to
+    // them meant approving a lead failed outright wherever that migration had not landed.
+    expect(prisma.tx.projectConversation.create).not.toHaveBeenCalled();
+    // The brief is not lost with it — it is still the project's brief and a client-visible document.
+    expect(prisma.tx.collaborationDocument.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ title: 'Initial requirements brief', clientVisible: true }),
     }));
     expect(prisma.tx.clientInvite.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
@@ -275,7 +304,12 @@ describe('InquiriesService', () => {
       type: NotificationType.INQUIRY_APPROVED,
       projectId: 'project-1',
     }));
-    expect(accountInvitations.send).not.toHaveBeenCalled();
+    // Emailed even though this client already has a profile. Skipping it was how a client ended up
+    // with a PENDING invite, no email, and no way in — the approval succeeded and they never knew.
+    expect(accountInvitations.send).toHaveBeenCalledWith(expect.objectContaining({
+      email: 'casey@example.com',
+      projectId: 'project-1',
+    }));
   });
 
   it('emails a new client account invitation after approval commits', async () => {
@@ -313,7 +347,7 @@ describe('InquiriesService', () => {
   });
 
   it('prevents reviewing the same inquiry twice', async () => {
-    prisma.clientInquiry.findUnique.mockResolvedValue(makeInquiry({ status: InquiryStatus.APPROVED }));
+    prisma.clientInquiry.findFirst.mockResolvedValue(makeInquiry({ status: InquiryStatus.APPROVED }));
 
     await expect(service.approve('inquiry-1', pmUser, {})).rejects.toBeInstanceOf(BadRequestException);
   });

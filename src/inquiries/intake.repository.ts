@@ -100,9 +100,16 @@ export class IntakeRepository {
     });
   }
 
+  /**
+   * The project manager's queue.
+   *
+   * Never returns DRAFT, and deliberately offers no way to ask for it: a request a client is still
+   * writing has not been sent to anybody. An explicit `status` filter cannot reach one either —
+   * the enum value exists, but asking for it here yields nothing rather than a private conversation.
+   */
   findInquiries(status?: InquiryStatus, page?: CursorPageInput): Promise<InquiryWithReviewer[]> {
     return this.prisma.clientInquiry.findMany({
-      where: status ? { status } : undefined,
+      where: { ...(status ? { status } : {}), NOT: { status: InquiryStatus.DRAFT } },
       include: reviewerInclude,
       orderBy: hasCursorPage(page)
         ? [{ createdAt: 'desc' }, { id: 'desc' }]
@@ -111,9 +118,10 @@ export class IntakeRepository {
     });
   }
 
+  /** One lead, by id. Excludes DRAFT for the same reason the list does — a guessed id is still a guess. */
   findInquiry(id: string): Promise<InquiryWithReviewer | null> {
-    return this.prisma.clientInquiry.findUnique({
-      where: { id },
+    return this.prisma.clientInquiry.findFirst({
+      where: { id, NOT: { status: InquiryStatus.DRAFT } },
       include: reviewerInclude,
     });
   }
@@ -238,35 +246,35 @@ export class IntakeRepository {
       },
     });
 
-    // Owned by the client, not the project this approval happens to have created.
+    // Approval no longer seeds a conversation, and that is deliberate.
     //
-    // This is the opening exchange of a commercial relationship — "here is what we want", "here is
-    // what we propose" — and it stays relevant long after the discovery space it came from is
-    // delivered or abandoned. Filed under the project, the company's second engagement would open
-    // with an empty thread while its entire history sat in the first project's tab.
-    const conversation = await tx.projectConversation.create({
-      data: {
-        clientId,
-        title: 'Discovery',
-        category: ConversationCategory.SUPPORT,
-        visibility: CollaborationVisibility.CLIENT,
-        createdById: actorId,
-        lastMessageAt: reviewedAt,
-      },
-    });
+    // It used to open a "Discovery" thread on the project. Those moved to the client, because a
+    // relationship outlives any one build — but seeding one here coupled a core flow to a feature
+    // mid-migration, and approving a lead started failing outright on databases where the client
+    // column had not landed yet. Approving a lead is not the place to find that out.
+    //
+    // Nothing is lost. The brief is on the project, and it is seeded below as a client-visible
+    // requirements document. The conversation is started from the client page when someone has
+    // something to say, which is also where it now lives.
 
-    await tx.projectMessage.create({
-      data: {
-        conversationId: conversation.id,
-        authorId: actorId,
-        body: [
-          `Initial inquiry from ${inquiry.contactName} (${inquiry.email}).`,
-          '',
-          inquiry.brief,
-        ].join('\n'),
-        createdAt: reviewedAt,
-      },
-    });
+    // Carries the client's own answers across into the project.
+    //
+    // The guided conversation happens on the lead now, before anyone approves it, so by this point
+    // the client has usually already described what they want. Copying it here is what makes that
+    // work survive approval — without it the project would open with an empty questionnaire and the
+    // client would be asked the same four questions a second time.
+    //
+    // Copied, not referenced: from here the brief is the project's, and a project manager editing it
+    // must not rewrite the record of what the client originally asked for.
+    if (inquiry.payload) {
+      await tx.projectIntake.create({
+        data: {
+          projectId: project.id,
+          payload: inquiry.payload as Prisma.InputJsonValue,
+          createdById: actorId,
+        },
+      });
+    }
 
     await tx.collaborationDocument.create({
       data: {

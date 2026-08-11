@@ -202,7 +202,10 @@ export const serviceBoundaries: ServiceBoundaryDefinition[] = [
       IntegrationEvents.inquiryRejected,
       IntegrationEvents.clientInviteAccepted,
     ],
-    dependsOn: ['identity', 'project-delivery', 'notifications', 'collaboration'],
+    // orchestration: intake drafts a requirements payload from the client's own documents, and
+    // reaches a model through AgentLlmRouter rather than standing up a second provider stack next
+    // to it. Model access only — intake neither starts nor observes runs.
+    dependsOn: ['identity', 'project-delivery', 'notifications', 'collaboration', 'orchestration'],
     extractionReadiness: 'contract-ready',
   },
   {
@@ -303,6 +306,16 @@ const defaultIgnoredMutationRouteFragments = ['orchestration'];
 const defaultIgnoredMutationSourcePathFragments = [
   'src/agent-repo/',
   'src/runtime-companion/runtime-companion.controller.ts',
+  // The client BFF's interview turn, reached with a service secret. Not a user command path: the
+  // browser's request terminates in alphaexplora-client-be, and an Idempotency-Key minted there
+  // would key a record in a store this backend cannot read.
+  //
+  // Worth naming what this gives up rather than implying it costs nothing. The console's own
+  // interview route IS keyed, because a double-click on a model call is a doubled bill. Here the
+  // only guard against that is the send button disabling itself. A retry is otherwise harmless —
+  // the payload is a set of answers, so re-merging the same reply produces the same brief — and
+  // the exposure is one duplicate model call, not a duplicate record.
+  'src/intake/client-bff.controller.ts',
 ];
 const allowedRawOffsetPaginationFiles = new Set([
   'src/shared/pagination/cursor-pagination.ts',

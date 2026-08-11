@@ -144,6 +144,13 @@ model Project {
 }
 
 enum InquiryStatus {
+  /// A signed-in client is still working through the guided interview. Not yet anyone else's.
+  ///
+  /// Without this, a request entered the project manager's queue the moment the client clicked
+  /// "Request a project" and then changed under them for the next ten minutes — and every
+  /// abandoned conversation stayed there forever as a lead that was never actually sent.
+  /// Every PM-facing read must exclude it.
+  DRAFT
   NEW
   /// Accepted and in conversation with the client, but delivery has not started.
   IN_DISCOVERY
@@ -161,6 +168,15 @@ model ClientInquiry {
   phone             String?
   role              String?
   brief             String        @db.Text
+  /// The structured brief, filled in by the guided agent before a project manager ever sees this.
+  ///
+  /// `brief` is what the client typed first; this is what the conversation turned it into — the
+  /// same shape as ClientIntakePayload, so approval hands it straight to the project's intake
+  /// rather than converting between two formats that would inevitably drift.
+  ///
+  /// Nullable because a lead can arrive from the marketing form with nothing but a sentence, and
+  /// because the column is younger than the rows already in this table.
+  payload           Json?
   stackKey          String        @default("nextjs-nestjs-supabase")
   budgetRange       String?
   timeline          String?
