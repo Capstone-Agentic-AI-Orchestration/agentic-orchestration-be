@@ -29,9 +29,12 @@ import {
   LockProjectIntakeDto,
   MarkIntakeReadyDto,
   RequestIntakeChangesDto,
+  IntakeInterviewTurnDto,
   SaveProjectIntakeDraftDto,
   UploadIntakeDocumentDto,
 } from './dto/intake.dto';
+import { IntakeDraftService } from './intake-draft.service';
+import { IntakeInterviewService } from './intake-interview.service';
 import { IntakeService } from './intake.service';
 
 const uploadIntakeFileInterceptor = FileInterceptor('file', { limits: { fileSize: 25 * 1024 * 1024, files: 1 } });
@@ -48,6 +51,8 @@ interface UploadedIntakeFile {
 export class IntakeController {
   constructor(
     private readonly intake: IntakeService,
+    private readonly intakeDraft: IntakeDraftService,
+    private readonly interview: IntakeInterviewService,
     private readonly idempotency: IdempotencyService,
   ) {}
 
@@ -88,6 +93,59 @@ export class IntakeController {
     response.setHeader('Content-Type', 'text/markdown; charset=utf-8');
     response.setHeader('Content-Disposition', 'attachment; filename="project-requirements-worksheet.md"');
     response.send(this.intake.templateMarkdown());
+  }
+
+  /**
+   * Drafts the requirements from what the client has already given us.
+   *
+   * Returns the draft rather than saving it. The client sees a proposal and decides — a draft that
+   * wrote itself into their intake would be something they have to undo, which is worse than the
+   * blank form it replaces.
+   *
+   * Idempotency-keyed even though it persists nothing: the work behind it is a model call, so a
+   * double-click is a doubled bill. A fresh draft after uploading another document is a new key.
+   */
+  /**
+   * One turn of the guided interview.
+   *
+   * Stateless across turns by design: the payload is the state, and it is already persisted through
+   * the normal draft save. Nothing about a half-finished conversation needs storing, so a client can
+   * close the tab and pick up from what the brief already says.
+   */
+  @Post('intake/interview')
+  @Roles(UserRole.CLIENT, UserRole.PM, UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  @UsePipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+  interviewTurn(
+    @Param('projectId') projectId: string,
+    @Body() dto: IntakeInterviewTurnDto,
+    @CurrentUser() user: AuthUser,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.runIdempotent(
+      idempotencyKey,
+      `user:${user.id}:POST:/projects/${projectId}/intake/interview`,
+      dto,
+      HttpStatus.OK,
+      () => this.interview.takeTurn(this.interview.forProjectIntake(projectId, user), dto),
+    );
+  }
+
+  @Post('intake/draft-from-sources')
+  @Roles(UserRole.CLIENT, UserRole.PM, UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK)
+  draftFromSources(
+    @Param('projectId') projectId: string,
+    @CurrentUser() user: AuthUser,
+    @Headers('idempotency-key') idempotencyKey?: string,
+  ) {
+    return this.runIdempotent(
+      idempotencyKey,
+      `user:${user.id}:POST:/projects/${projectId}/intake/draft-from-sources`,
+      { projectId },
+      HttpStatus.OK,
+      () => this.intakeDraft.draftFromSources(projectId, user),
+    );
   }
 
   @Post('intake/draft')

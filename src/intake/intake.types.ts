@@ -20,10 +20,25 @@ export const INTAKE_SECTION_IDS = [
 
 export type IntakeSectionId = (typeof INTAKE_SECTION_IDS)[number];
 
+/**
+ * How much a missing answer actually matters.
+ *
+ * `blocking` means the agents have nothing to build from — there is no scope without it.
+ * `advisory` means the brief is thinner than we would like, which is a judgement for the project
+ * manager at lock, not a wall in front of the client.
+ *
+ * The distinction exists because everything used to be blocking, including decision points and
+ * error cases. Those are analyst work, and demanding them from a client before they can submit is
+ * what left intakes sitting at "2 of 8 sections complete" indefinitely.
+ */
+export type IntakeBlockerSeverity = 'blocking' | 'advisory';
+
 /** A missing answer, tagged with the step that would fix it. */
 export interface IntakeSectionBlocker {
   section: IntakeSectionId;
   message: string;
+  /** Absent on older payloads; treat as 'blocking' so nothing silently loosens. */
+  severity?: IntakeBlockerSeverity;
 }
 
 export interface ClientIntakePayload {
@@ -73,6 +88,22 @@ export interface ClientIntakePayload {
     futurePhase: string[];
     documentsNotApplicable?: boolean;
   };
+  /**
+   * Replies the interview could not turn into structured answers, kept verbatim, keyed by topic.
+   *
+   * Two failures made this necessary, and both were silent. A reply the model could not parse was
+   * discarded outright — the client typed a paragraph and it vanished. Worse, since the agenda
+   * decides what to ask next by inspecting this payload, an unparsed topic never became "answered",
+   * so the interview asked the same question again on the next turn, and the next. A provider
+   * outage turned the conversation into a loop the client could not get out of.
+   *
+   * So an unparsed reply is recorded here instead. The agenda counts the topic as covered and moves
+   * on, and the project manager reads the client's own words rather than a blank section. Parsing
+   * the same topic successfully later clears the entry.
+   *
+   * Optional because every payload written before this existed lacks it.
+   */
+  unparsedReplies?: Partial<Record<IntakeInterviewTopicId, string>>;
 }
 
 export interface IntakeEvidence {
@@ -131,4 +162,50 @@ export function emptyClientIntakePayload(input: {
       documentsNotApplicable: false,
     },
   };
+}
+
+/** Where a drafted value came from. Absent entirely when nothing supported the value. */
+export type IntakeFieldOrigin = 'stated' | 'inferred';
+
+/**
+ * Provenance for a drafted payload, keyed by dotted field path (`overview.businessGoal`,
+ * `features.0.title`).
+ *
+ * The point of tracking this is that a draft and a client's own answer must never look alike. The
+ * locked package tells the agents it is authoritative and not to invent beyond it, so a guess the
+ * client scrolled past becomes something the build treats as fact. Showing "we inferred this"
+ * next to the value is what makes confirming it a decision rather than a formality.
+ */
+export type IntakeDraftProvenance = Record<
+  string,
+  { origin: IntakeFieldOrigin; documentId?: string }
+>;
+
+export interface IntakeDraftResult {
+  payload: ClientIntakePayload;
+  provenance: IntakeDraftProvenance;
+  /** Documents the draft actually read, for "based on: <these files>". */
+  sourceDocumentIds: string[];
+  usedBrief: boolean;
+}
+
+/**
+ * The interview agenda, in order. Four topics and no more.
+ *
+ * Deliberately short of the payload's full field set: acceptance criteria, business rules, decision
+ * points, error cases, permissions and data entities are never asked, because a client cannot write
+ * them. They are derived and marked assumed.
+ */
+export type IntakeInterviewTopicId = 'goal' | 'users' | 'musthaves' | 'boundaries';
+
+export interface IntakeInterviewTurn {
+  /** True once every topic is answered; `topicId` is then null and `message` is the sign-off. */
+  done: boolean;
+  topicId: IntakeInterviewTopicId | null;
+  /** What the agent says next. Always populated, including on the closing turn. */
+  message: string;
+  /** The brief as it now stands, so the client can watch it fill in as they talk. */
+  payload: ClientIntakePayload;
+  answeredCount: number;
+  totalCount: number;
 }

@@ -1,4 +1,4 @@
-import { IsArray, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsArray, IsIn, IsObject, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class SaveProjectIntakeDraftDto {
   @IsObject()
@@ -55,4 +55,23 @@ export class IntakeTemplateDto {
   @IsOptional()
   @IsArray()
   sections?: string[];
+}
+
+export class IntakeInterviewTurnDto {
+  /** What the client just said. Omitted on the opening turn. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  reply?: string;
+
+  /**
+   * Which topic the reply answers.
+   *
+   * Sent by the client rather than inferred from server state: a reply that arrives after the
+   * agenda has moved on must be absorbed into the topic it was actually answering, not whatever is
+   * current now.
+   */
+  @IsOptional()
+  @IsIn(['goal', 'users', 'musthaves', 'boundaries'])
+  topicId?: 'goal' | 'users' | 'musthaves' | 'boundaries';
 }

@@ -85,6 +85,10 @@ import { ModelCatalogService } from './models/model-catalog.service';
     ExecutionValidationService,
     ModelCatalogService,
   ],
-  exports: [OrchestrationService, OrchestrationEmitter, ModelCatalogService],
+  // AgentLlmRouter is exported so surfaces outside orchestration can reach a model through the
+  // same routed, invocation-tracked path the agent nodes use. Intake drafting is the first: it
+  // needs structured output, and reimplementing provider selection and cost accounting next to it
+  // would be a second, quietly diverging way to call an LLM.
+  exports: [OrchestrationService, OrchestrationEmitter, ModelCatalogService, AgentLlmRouter],
 })
 export class OrchestrationModule {}

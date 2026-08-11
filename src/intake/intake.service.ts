@@ -57,7 +57,11 @@ const MIME_BY_EXTENSION: Record<string, string> = {
   jpeg: 'image/jpeg',
 };
 
-const projectAccessWhere = (user: AuthUser, projectId: string): Prisma.ProjectWhereInput => {
+/**
+ * Who may read or write a project's intake. Exported so IntakeDraftService shares the exact rule
+ * rather than growing a second copy that can drift apart from this one.
+ */
+export const projectAccessWhere = (user: AuthUser, projectId: string): Prisma.ProjectWhereInput => {
   if (user.role === UserRole.ADMIN) return { id: projectId };
   return {
     id: projectId,
@@ -538,27 +542,45 @@ export class IntakeService {
     const uploaded = documents.filter((document) => Boolean(document.storageKey));
     const extracting = uploaded.filter((document) => document.extraction?.status === DocumentExtractionStatus.PENDING || document.extraction?.status === DocumentExtractionStatus.EXTRACTING);
     const failed = uploaded.filter((document) => document.extraction?.status === DocumentExtractionStatus.FAILED || !document.extraction);
-    if (extracting.length) tagged.push({ section: 'documents', message: `${extracting.length} uploaded document${extracting.length === 1 ? ' is' : 's are'} still being processed.` });
-    if (failed.length) tagged.push({ section: 'documents', message: `${failed.length} uploaded document${failed.length === 1 ? ' needs' : 's need'} a successful extraction or replacement.` });
+    // All advisory. A document that is still being read, or a client who genuinely has none, is not
+    // a reason to refuse a brief that already says what to build.
+    if (extracting.length) tagged.push({ section: 'documents', severity: 'advisory', message: `${extracting.length} uploaded document${extracting.length === 1 ? ' is' : 's are'} still being processed.` });
+    if (failed.length) tagged.push({ section: 'documents', severity: 'advisory', message: `${failed.length} uploaded document${failed.length === 1 ? ' needs' : 's need'} a successful extraction or replacement.` });
     if (!uploaded.length && !payload.experienceAndDelivery.documentsNotApplicable) {
-      tagged.push({ section: 'documents', message: 'Attach a supporting document, or tick that you have none.' });
+      tagged.push({ section: 'documents', severity: 'advisory', message: 'Attach a supporting document, or tick that you have none.' });
     }
 
     // `sections` carries one entry per worksheet step, INCLUDING the complete ones with an empty
     // list, so a client form can render its progress rail straight from this without inventing
     // the section order or re-deriving which steps are done.
+    const isBlocking = (blocker: IntakeSectionBlocker) => (blocker.severity ?? 'blocking') === 'blocking';
+    const blocking = tagged.filter(isBlocking);
+    const advisory = tagged.filter((blocker) => !isBlocking(blocker));
+
+    // A section is "complete" when nothing is BLOCKING it. Advisory gaps are reported separately so
+    // a form can still show what is worth adding without painting the step as unfinished.
     const sections = INTAKE_SECTION_IDS.map((section) => {
-      const missing = tagged.filter((blocker) => blocker.section === section).map((blocker) => blocker.message);
-      return { section, complete: missing.length === 0, missing };
+      const forSection = tagged.filter((blocker) => blocker.section === section);
+      return {
+        section,
+        complete: !forSection.some(isBlocking),
+        missing: forSection.map((blocker) => blocker.message),
+        blocking: forSection.filter(isBlocking).map((blocker) => blocker.message),
+        advisory: forSection.filter((blocker) => !isBlocking(blocker)).map((blocker) => blocker.message),
+      };
     });
 
     return {
-      // Kept as a flat string list so existing callers and the submit/lock error messages are
-      // unchanged; `sections` is the additive part.
-      blockers: tagged.map((blocker) => blocker.message),
+      // `blockers` keeps its old meaning — what actually stops submission — so submit/lock error
+      // messages stay truthful. It is a shorter list than it was, which is the point.
+      blockers: blocking.map((blocker) => blocker.message),
+      /** Worth adding, never a wall. New field; older clients ignore it. */
+      suggestions: advisory.map((blocker) => blocker.message),
       sections,
-      readyForSubmission: tagged.length === 0,
-      readyForLock: tagged.length === 0,
+      readyForSubmission: blocking.length === 0,
+      // Locking stays the project manager's judgement: they can lock over advisory gaps, which is
+      // what makes them advisory rather than a slower kind of blocking.
+      readyForLock: blocking.length === 0,
       counts: { uploaded: uploaded.length, extracting: extracting.length, failed: failed.length, ready: uploaded.length - extracting.length - failed.length },
     };
   }
@@ -576,28 +598,60 @@ export class IntakeService {
    */
   private payloadBlockers(payload: ClientIntakePayload): IntakeSectionBlocker[] {
     const blockers: IntakeSectionBlocker[] = [];
+    const block = (section: IntakeSectionBlocker['section'], message: string) =>
+      blockers.push({ section, message, severity: 'blocking' });
+    const advise = (section: IntakeSectionBlocker['section'], message: string) =>
+      blockers.push({ section, message, severity: 'advisory' });
+
+    // Blocking: without these there is no scope. The requirements agent is told the locked intake
+    // is authoritative and not to invent beyond it, so an empty goal or no must-have feature means
+    // it has nothing to build and nothing it is allowed to make up.
     const overview = payload.overview;
-    if (!overview.projectName.trim()) blockers.push({ section: 'overview', message: 'Add a project name.' });
-    if (!overview.businessGoal.trim()) blockers.push({ section: 'overview', message: 'Describe the business goal.' });
-    if (!overview.successMeasures.some((measure) => measure.trim())) blockers.push({ section: 'overview', message: 'Add at least one measurable success criterion.' });
-    if (!overview.primaryContact.trim()) blockers.push({ section: 'overview', message: 'Add a primary contact.' });
-    if (!overview.approver.trim()) blockers.push({ section: 'overview', message: 'Name the final approver.' });
-    if (!overview.targetLaunch.trim()) blockers.push({ section: 'overview', message: 'Provide a target launch period.' });
-    if (!payload.roles.some((role) => role.name.trim() && role.responsibilities.length && role.permissions.length)) blockers.push({ section: 'roles', message: 'Add at least one complete user role.' });
+    if (!overview.projectName.trim()) block('overview', 'Add a project name.');
+    if (!overview.businessGoal.trim()) block('overview', 'Describe the business goal.');
+
     const mustHave = payload.features.filter((feature) => feature.priority === 'MUST_HAVE');
-    if (!mustHave.length) blockers.push({ section: 'features', message: 'Add at least one Must-have feature.' });
-    if (mustHave.some((feature) => !feature.title.trim() || !feature.purpose.trim() || !feature.primaryRole.trim() || !feature.workflow.trim() || !feature.businessRules.some((item) => item.trim()) || !feature.acceptanceCriteria.some((item) => item.trim()))) {
-      blockers.push({ section: 'features', message: 'Every Must-have feature needs a purpose, user, workflow, business rules, and acceptance criteria.' });
+    if (!mustHave.length) block('features', 'Add at least one Must-have feature.');
+    if (mustHave.some((feature) => !feature.title.trim() || !feature.purpose.trim())) {
+      block('features', 'Every Must-have feature needs a title and a purpose.');
     }
-    if (!payload.workflows.some((workflow) => workflow.title.trim() && workflow.startCondition.trim() && workflow.actor.trim() && workflow.steps.some((step) => step.trim()) && workflow.decisionPoints.some((item) => item.trim()) && workflow.errorCases.some((item) => item.trim()) && workflow.outcome.trim())) {
-      blockers.push({ section: 'workflows', message: 'Add at least one complete workflow with steps, decisions, error cases, and an outcome.' });
+
+    // Advisory from here down. Each of these makes the build better and none of them stops it. They
+    // are the project manager's call at lock, which is a human checkpoint that already exists —
+    // rather than a gate the client has to satisfy before anyone has even read their brief.
+    if (!overview.successMeasures.some((measure) => measure.trim())) advise('overview', 'Add at least one measurable success criterion.');
+    if (!overview.primaryContact.trim()) advise('overview', 'Add a primary contact.');
+    if (!overview.approver.trim()) advise('overview', 'Name the final approver.');
+    if (!overview.targetLaunch.trim()) advise('overview', 'Provide a target launch period.');
+
+    if (!payload.roles.some((role) => role.name.trim())) {
+      advise('roles', 'Name at least one type of user.');
+    } else if (!payload.roles.some((role) => role.name.trim() && role.responsibilities.length && role.permissions.length)) {
+      // Permissions in particular: a client knows who uses the software, not what a permission
+      // model should look like. Worth having, never worth blocking on.
+      advise('roles', 'Add what each user does and what they are allowed to do.');
     }
+
+    if (mustHave.some((feature) => !feature.acceptanceCriteria.some((item) => item.trim()))) {
+      advise('features', 'Add how you will know each Must-have works.');
+    }
+    if (mustHave.some((feature) => !feature.businessRules.some((item) => item.trim()))) {
+      advise('features', 'Add any rules that must always hold for your Must-haves.');
+    }
+
+    if (!payload.workflows.some((workflow) => workflow.title.trim())) {
+      advise('workflows', 'Describe at least one process the software must support.');
+    } else if (!payload.workflows.some((workflow) => workflow.steps.some((step) => step.trim()) && workflow.outcome.trim())) {
+      advise('workflows', 'Add the steps and the end result for at least one process.');
+    }
+
     if (!payload.dataAndIntegrations.entities.length && !payload.dataAndIntegrations.dataNotApplicable) {
-      blockers.push({ section: 'data', message: 'List the information you keep track of, or tick that none applies.' });
+      advise('data', 'List the information you keep track of, or tick that none applies.');
     }
     if (!payload.dataAndIntegrations.integrations.length && !payload.dataAndIntegrations.integrationsNotApplicable) {
-      blockers.push({ section: 'data', message: 'List other systems this must work with, or tick that none applies.' });
+      advise('data', 'List other systems this must work with, or tick that none applies.');
     }
+
     return blockers;
   }
 
