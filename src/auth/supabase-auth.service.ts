@@ -1,4 +1,11 @@
-import { ForbiddenException, Injectable, Logger, OnModuleInit, UnauthorizedException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  Logger,
+  OnModuleInit,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createRemoteJWKSet, jwtVerify, JWTPayload } from 'jose';
 import { ProfileStatus, UserRole } from '@prisma/client';
@@ -87,10 +94,18 @@ export class SupabaseAuthService implements OnModuleInit {
     }
   }
 
+  /**
+   * Two failures, kept apart on purpose.
+   *
+   * Verifying the token can only fail because of the token, so anything unrecognised there is a
+   * 401. Everything after it has a valid token in hand, and the only way it fails is on our side —
+   * in practice the database. Those used to share one catch, so a Supabase pooler outage reached
+   * users as "your session is missing or expired": they were told to sign in again, and signing in
+   * again produced the same message, because nothing was wrong with their session.
+   */
   async verifyAccessToken(token: string): Promise<AuthUser> {
+    let payload: JWTPayload;
     try {
-      let payload: JWTPayload;
-
       if (this.jwks) {
         if (!this.jwksWarmed) {
           await this.warmJwks();
@@ -110,9 +125,19 @@ export class SupabaseAuthService implements OnModuleInit {
         }
         payload = this.parseUnverifiedPayload(token);
       }
+    } catch (error) {
+      if (error instanceof UnauthorizedException || error instanceof ForbiddenException) {
+        throw error;
+      }
+      throw new UnauthorizedException('Invalid or expired access token');
+    }
 
-      this.assertAllowedProvider(payload);
-      return this.syncProfile(payload);
+    this.assertAllowedProvider(payload);
+
+    try {
+      // Awaited, so a rejection here is actually caught. Returning the promise unawaited put every
+      // profile-sync failure outside the try entirely, which surfaced as an unhandled 500.
+      return await this.syncProfile(payload);
     } catch (error) {
       // Deliberate auth decisions pass through unchanged. The not-a-team-member refusal in
       // particular must keep its 403 + NOT_A_TEAM_MEMBER code, or the frontend cannot tell
@@ -120,7 +145,14 @@ export class SupabaseAuthService implements OnModuleInit {
       if (error instanceof UnauthorizedException || error instanceof ForbiddenException) {
         throw error;
       }
-      throw new UnauthorizedException('Invalid or expired access token');
+      // The token was good. Reporting this as an auth problem sends people to a sign-in page that
+      // cannot help them, and hides an outage behind a message about their own account.
+      this.logger.error(
+        `Profile sync failed for a valid token: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw new ServiceUnavailableException(
+        'We cannot reach our systems right now. This is not a problem with your account — please try again shortly.',
+      );
     }
   }
 
